@@ -40,7 +40,6 @@ pub const MANTLE_ELF: &[u8] = include_bytes!("../../../elf/mantle-elf");
 
 #[tokio::main]
 async fn main() {
-    println!("Hello, world!");
     utils::setup_logger();
 
     dotenv::dotenv().ok();
@@ -85,6 +84,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/request_span_proof", post(request_span_proof))
+        .route("/request_mantle_local", post(request_mantle_local))
         // .route("/request_agg_proof", post(request_agg_proof))
         .route("/status/:proof_id", get(get_proof_status))
         .route("/ping", get(|| async { "pong" }))
@@ -131,6 +131,24 @@ async fn validate_config(
     //         range_vkey_valid,
     //     }),
     // ))
+}
+
+async fn request_mantle_local(
+    Json(payload): Json<MantleSingleProofRequest>,
+) -> Result<(StatusCode, Json<ProofResponse>), AppError> {
+    let block_number = payload.block_number;
+    let sp1_stdin = get_mantle_proof_stdin(block_number).await.unwrap();
+
+    let client = ProverClient::new();
+    let (_, execution_report) = client.execute(MANTLE_ELF, sp1_stdin).run().unwrap();
+    // Print the total number of cycles executed and the full execution report with a breakdown of
+    // the RISC-V opcode and syscall counts.
+    println!(
+        "Executed program with {} cycles",
+        execution_report.total_instruction_count() + execution_report.total_syscall_count()
+    );
+    println!("Full execution report:\n{:?}", execution_report);
+    Ok((StatusCode::OK, Json(ProofResponse { proof_id: "".to_string() })))
 }
 
 /// Request a proof for a span of blocks.

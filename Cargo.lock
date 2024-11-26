@@ -3992,6 +3992,7 @@ version = "0.1.0"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
+ "alloy-primitives 0.8.12",
  "anyhow",
  "cfg-if",
  "kona-executor",
@@ -4002,6 +4003,7 @@ dependencies = [
  "op-alloy-rpc-types",
  "op-alloy-rpc-types-engine",
  "op-succinct-client-utils",
+ "serde_cbor",
  "serde_json",
  "sp1-zkvm",
  "tracing",

@@ -11,17 +11,27 @@
 extern crate alloc;
 
 use alloc::sync::Arc;
-
+// use std::io::Bytes;
 use alloy_consensus::{BlockBody, Header, Sealable, Sealed};
-// use cfg_if::cfg_if;
+use cfg_if::cfg_if;
 use kona_executor::StatelessL2BlockExecutor;
 use op_alloy_genesis::rollup::RollupConfig;
 use op_succinct_client_utils::{
     mantle_provider::OracleL2ChainProvider, precompiles::zkvm_handle_register,
     InMemoryOracle,
 };
+use alloy_primitives::Bytes;
 use op_succinct_client_utils::types::{MantleInputs, prepare_payload, MantleOutputs};
-sp1_zkvm::entrypoint!(main);
+
+cfg_if! {
+    if #[cfg(target_os = "zkvm")] {
+        sp1_zkvm::entrypoint!(main);
+        use serde_json;
+    } else {
+        // use kona_proof::CachingOracle;
+        // use op_succinct_client_utils::pipes::{ORACLE_READER, HINT_WRITER};
+    }
+}
 
 fn main() {
     #[cfg(feature = "tracing-subscriber")]
@@ -43,11 +53,12 @@ fn main() {
         ////////////////////////////////////////////////////////////////
 
         println!("cycle-tracker-start: boot-load");
-        let mantle_inputs = sp1_zkvm::io::read::<MantleInputs>();
-        let prev_block_header = mantle_inputs.prev_block_header;
-        let txs = mantle_inputs.txs;
+        let prev_block_header_string = sp1_zkvm::io::read::<String>();
+        let prev_block_header: Header = serde_json::from_str(&prev_block_header_string).unwrap();
+        
+        let txs_bytes = sp1_zkvm::io::read_vec();
+        let txs: Vec<Bytes> = serde_cbor::from_slice(&txs_bytes).unwrap();
         let attributes = prepare_payload(prev_block_header.clone(), txs);
-        // sp1_zkvm::io::commit(&attributes);
         sp1_zkvm::io::commit::<MantleOutputs>(&MantleOutputs {
             l2BlockNumber: prev_block_header.number + 1,
         });

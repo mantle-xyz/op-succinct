@@ -24,6 +24,7 @@ use alloy::{
     providers::{Provider, ProviderBuilder as MantleProviderBuilder},
     rpc::types::Header as RpcHeader,
 };
+use alloy_rlp::Encodable;
 // use alloy_primitives::Bytes;
 use op_alloy_network::Optimism;
 // use op_alloy_rpc_types_engine::OpPayloadAttributes;
@@ -103,11 +104,11 @@ pub async fn get_mantle_proof_stdin(block_number: u64) -> Result<SP1Stdin> {
     }
     // let attributes = prepare_payload(block.header.clone(), txs);
     // println!("attributes: {:?}", attributes);
-    // let string = serde_json::to_string(&attributes).unwrap();
-    stdin.write(&MantleInputs {
-        prev_block_header,
-        txs: txs.clone(),
-    });
+    let prev_block_header_string = serde_json::to_string(&prev_block_header).unwrap();
+    // println!("prev_block_header: {:?}", prev_block_header);
+    stdin.write(&prev_block_header_string);
+    stdin.write_vec(serde_cbor::to_vec(&txs).unwrap());
+    
     // ------ stdin attributes done -------
 
     let input = std::fs::read(format!("cache-{}.bin", block_number).as_str()).unwrap();

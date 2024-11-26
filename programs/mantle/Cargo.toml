@@ -36,5 +36,8 @@ op-succinct-client-utils.workspace = true
 # `tracing-subscriber` feature dependencies
 tracing-subscriber = { workspace = true, optional = true }
 
+alloy-primitives = { workspace = true }
+serde_cbor.workspace = true
+
 [features]
 tracing-subscriber = ["dep:tracing-subscriber"]
