@@ -23,6 +23,11 @@ pub struct SpanProofRequest {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
+pub struct MantleSingleProofRequest {
+    pub block_number: u64,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
 pub struct AggProofRequest {
     #[serde(deserialize_with = "deserialize_base64_vec")]
     pub subproofs: Vec<Vec<u8>>,
@@ -72,9 +77,9 @@ pub struct ProofStatus {
 /// to the contract's configuration.
 #[derive(Clone)]
 pub struct ContractConfig {
-    pub range_vk: SP1VerifyingKey,
+    pub mantle_vk: SP1VerifyingKey,
     pub agg_vkey_hash: B256,
-    pub range_vkey_commitment: B256,
+    pub mantle_vkey_commitment: B256,
     pub rollup_config_hash: B256,
 }
 

@@ -718,6 +718,7 @@ impl OPSuccinctDataFetcher {
                 .unwrap_or("0".to_string())
                 .parse()
                 .unwrap(),
+            ..Default::default()
         })
     }
 

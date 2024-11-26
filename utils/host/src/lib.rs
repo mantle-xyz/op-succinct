@@ -7,7 +7,7 @@ pub mod witnessgen;
 
 use alloy::sol;
 use alloy_consensus::Header;
-use alloy_primitives::B256;
+use alloy_primitives::{B256, Address, Bytes};
 use kona_host::{
     kv::{DiskKeyValueStore, MemoryKeyValueStore},
     HostCli,
@@ -15,12 +15,24 @@ use kona_host::{
 use op_alloy_genesis::RollupConfig;
 use op_succinct_client_utils::{
     boot::BootInfoStruct, types::AggregationInputs, BootInfoWithBytesConfig, InMemoryOracle,
+    types::MantleInputs,
 };
 use sp1_sdk::{HashableKey, SP1Proof, SP1Stdin};
 use std::{fs::File, io::Read};
+use alloy::{
+    eips::BlockNumberOrTag,
+    providers::{Provider, ProviderBuilder as MantleProviderBuilder},
+    rpc::types::Header as RpcHeader,
+};
+// use alloy_primitives::Bytes;
+use op_alloy_network::Optimism;
+// use op_alloy_rpc_types_engine::OpPayloadAttributes;
+// use alloy_rpc_types_engine::PayloadAttributes;
+
+// const SEQUENCER_FEE_VAULT_ADDRESS: Address = address!("4200000000000000000000000000000000000011");
 
 use anyhow::Result;
-
+// use op_alloy_network::Optimism;
 use rkyv::{
     ser::{
         serializers::{AlignedSerializer, CompositeSerializer, HeapScratch, SharedSerializeMap},
@@ -55,6 +67,54 @@ sol! {
         bytes32 l2_storage_hash;
         bytes32 l2_claim_hash;
     }
+}
+pub async fn get_mantle_proof_stdin(block_number: u64) -> Result<SP1Stdin> {
+    let mut stdin = SP1Stdin::new();
+    let url = "";
+    let client = MantleProviderBuilder::new()
+        .network::<Optimism>()
+        .on_http(url.parse().unwrap());
+    let prev_block = client
+        .get_block_by_number(BlockNumberOrTag::from(block_number - 1), false)
+        .await
+        .unwrap()
+        .ok_or(anyhow::anyhow!("Block not found"))
+        .unwrap();
+
+    let prev_block_header = convert_header(prev_block.header);
+
+    let block = client
+        .get_block_by_number(BlockNumberOrTag::from(block_number), true)
+        .await
+        .unwrap()
+        .ok_or(anyhow::anyhow!("Block not found"))
+        .unwrap();
+
+    let mut txs = Vec::with_capacity(block.transactions.len());
+    for tx in block.transactions.as_transactions().unwrap().iter() {
+        let tx_hash = tx.inner.hash;
+        let raw_tx = client
+            .client()
+            .request::<&[B256; 1], Bytes>("debug_getRawTransaction", &[tx_hash])
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to fetch raw transaction: {e}"))
+            .unwrap();
+        txs.push(raw_tx);
+    }
+    // let attributes = prepare_payload(block.header.clone(), txs);
+    // println!("attributes: {:?}", attributes);
+    // let string = serde_json::to_string(&attributes).unwrap();
+    stdin.write(&MantleInputs {
+        prev_block_header,
+        txs: txs.clone(),
+    });
+    // ------ stdin attributes done -------
+
+    let input = std::fs::read(format!("cache-{}.bin", block_number).as_str()).unwrap();
+    stdin.write_slice(&input);
+    // ------ stdin input done -------
+
+    Ok(stdin)
 }
 
 /// Get the stdin to generate a proof for the given L2 claim.
@@ -131,4 +191,31 @@ pub fn get_agg_proof_stdin(
     stdin.write_vec(headers_bytes);
 
     Ok(stdin)
+}
+
+
+fn convert_header(header: RpcHeader) -> Header {
+    Header {
+        parent_hash: header.parent_hash,
+        ommers_hash: header.uncles_hash,
+        beneficiary: header.miner,
+        state_root: header.state_root,
+        transactions_root: header.transactions_root,
+        receipts_root: header.receipts_root,
+        logs_bloom: header.logs_bloom,
+        difficulty: header.difficulty,
+        number: header.number,
+        gas_limit: header.gas_limit,
+        gas_used: header.gas_used,
+        timestamp: header.timestamp,
+        extra_data: header.extra_data,
+        mix_hash: header.mix_hash.unwrap_or_default(),
+        nonce: header.nonce.unwrap_or_default(),
+        base_fee_per_gas: header.base_fee_per_gas,
+        withdrawals_root: header.withdrawals_root,
+        blob_gas_used: header.blob_gas_used,
+        excess_blob_gas: header.excess_blob_gas,
+        parent_beacon_block_root: header.parent_beacon_block_root,
+        requests_root: header.requests_root,
+    }
 }

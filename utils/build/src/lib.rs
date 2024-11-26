@@ -52,7 +52,7 @@ fn build_native_host_runner() {
         panic!("Failed to build native_host_runner");
     }
 
-    println!("cargo:warning=native_host_runner built with release profile",);
+    println!("cargo:warning=native_host_runner built with release profile", );
 }
 
 /// Build a program for the zkVM.
@@ -75,7 +75,7 @@ fn build_zkvm_program(program: &str) {
 /// Build all the native programs and the native host runner. Optional flag to build the zkVM
 /// programs.
 pub fn build_all() {
-    let programs = vec!["fault-proof", "range"];
+    let programs = vec!["mantle"];
 
     for program in programs {
         // Note: Don't comment this out, because the Docker program depends on the native program

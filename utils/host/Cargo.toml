@@ -18,18 +18,20 @@ op-alloy-rpc-types.workspace = true
 op-alloy-network.workspace = true
 op-alloy-protocol.workspace = true
 op-alloy-consensus.workspace = true
+op-alloy-rpc-types-engine = { workspace = true, features = ["serde"] }
 
 # alloy
 alloy = { workspace = true }
 alloy-rlp.workspace = true
-alloy-primitives.workspace = true
-alloy-consensus.workspace = true
+alloy-primitives = { workspace = true, features = ["serde"] }
+alloy-consensus = { workspace = true, features = ["serde"] }
 alloy-sol-types.workspace = true
 alloy-eips.workspace = true
+alloy-rpc-types-engine = { workspace = true, features = ["serde"] }
 
 # kona
 kona-host.workspace = true
-kona-primitives.workspace = true
+#kona-primitives.workspace = true
 
 # general
 rkyv.workspace = true
