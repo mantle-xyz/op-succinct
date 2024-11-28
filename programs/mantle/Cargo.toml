@@ -23,6 +23,7 @@ op-alloy-genesis.workspace = true
 
 alloy-consensus.workspace = true
 alloy-eips.workspace = true
+# alloy-sol-types = { workspace = true }
 
 # sp1
 sp1-zkvm.workspace = true

@@ -40,3 +40,7 @@ artifact_*
 *.bin
 .idea
 *.log
+
+mantle-test/contracts/broadcast/
+mantle-test/contracts/cache/
+mantle-test/contracts/out/

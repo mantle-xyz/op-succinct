@@ -71,6 +71,7 @@ pub struct ProofStatus {
     pub status: i32,
     pub proof: Vec<u8>,
     pub unclaim_description: Option<UnclaimDescription>,
+    pub proof_type: String,
 }
 
 /// Configuration of the L2 Output Oracle contract. Created once at server start-up, monitors if there are any changes

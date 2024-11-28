@@ -21,6 +21,7 @@ use op_succinct_client_utils::{
     InMemoryOracle,
 };
 use alloy_primitives::Bytes;
+// use alloy_sol_types::SolValue;
 use op_succinct_client_utils::types::{MantleInputs, prepare_payload, MantleOutputs};
 
 cfg_if! {
@@ -55,13 +56,18 @@ fn main() {
         println!("cycle-tracker-start: boot-load");
         let prev_block_header_string = sp1_zkvm::io::read::<String>();
         let prev_block_header: Header = serde_json::from_str(&prev_block_header_string).unwrap();
-        
+
         let txs_bytes = sp1_zkvm::io::read_vec();
         let txs: Vec<Bytes> = serde_cbor::from_slice(&txs_bytes).unwrap();
         let attributes = prepare_payload(prev_block_header.clone(), txs);
+        let expected_block_number = prev_block_header.number + 1;
         sp1_zkvm::io::commit::<MantleOutputs>(&MantleOutputs {
-            l2BlockNumber: prev_block_header.number + 1,
+            l2BlockNumber: expected_block_number,
         });
+        // let output  = MantleOutputs {
+        //     l2BlockNumber: expected_block_number,
+        // };
+        // sp1_zkvm::io::commit_slice(&output.abi_encode());
         println!("cycle-tracker-end: boot-load");
 
         println!("cycle-tracker-start: oracle-load");
@@ -92,7 +98,9 @@ fn main() {
 
         println!("cycle-tracker-report-start: block-execution");
         let new_block_header = executor.execute_payload(attributes.clone()).unwrap();
-        println!("new block header: {:?}", new_block_header);
+        // println!("new block header: {:?}", new_block_header);
+        let new_block_number = new_block_header.number;
+        assert_eq!(new_block_number, expected_block_number);
         println!("cycle-tracker-report-end: block-execution");
 
         // println!("cycle-tracker-start: output-root");

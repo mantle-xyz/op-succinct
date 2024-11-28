@@ -33,6 +33,7 @@ use std::{env, str::FromStr, time::Duration};
 use tower_http::limit::RequestBodyLimitLayer;
 
 
+
 // pub const MULTI_BLOCK_ELF: &[u8] = include_bytes!("../../../elf/range-elf");
 pub const AGG_ELF: &[u8] = include_bytes!("../../../elf/aggregation-elf");
 
@@ -140,7 +141,7 @@ async fn request_mantle_local(
     let sp1_stdin = get_mantle_proof_stdin(block_number).await.unwrap();
 
     let client = ProverClient::new();
-    let (_, execution_report) = client.execute(MANTLE_ELF, sp1_stdin).run().unwrap();
+    let (mut public_values, execution_report) = client.execute(MANTLE_ELF, sp1_stdin).run().unwrap();
     // Print the total number of cycles executed and the full execution report with a breakdown of
     // the RISC-V opcode and syscall counts.
     println!(
@@ -148,6 +149,7 @@ async fn request_mantle_local(
         execution_report.total_instruction_count() + execution_report.total_syscall_count()
     );
     println!("Full execution report:\n{:?}", execution_report);
+    println!("public values: {:#?}", public_values.raw());
     Ok((StatusCode::OK, Json(ProofResponse { proof_id: "".to_string() })))
 }
 
@@ -161,7 +163,7 @@ async fn request_span_proof(
     
     let prover = NetworkProverV1::new();
     let res = prover
-        .request_proof(MANTLE_ELF, sp1_stdin, ProofMode::Compressed)
+        .request_proof(MANTLE_ELF, sp1_stdin, ProofMode::Groth16)
         .await;
 
     // Check if error, otherwise get proof ID.
@@ -249,6 +251,7 @@ async fn get_proof_status(
                         status: SP1ProofStatus::ProofUnspecifiedStatus.into(),
                         proof: vec![],
                         unclaim_description: None,
+                        proof_type: "".to_string(),
                     }),
                 ));
             }
@@ -259,6 +262,7 @@ async fn get_proof_status(
                         status: SP1ProofStatus::ProofUnspecifiedStatus.into(),
                         proof: vec![],
                         unclaim_description: None,
+                        proof_type: "".to_string(),
                     }),
                 ));
             }
@@ -284,18 +288,22 @@ async fn get_proof_status(
                         status: status.into(),
                         proof: proof_bytes,
                         unclaim_description: None,
+                        proof_type: "compressed".to_string(),
                     }),
                 ));
             }
             SP1Proof::Groth16(_) => {
                 // If it's a groth16 proof, we need to get the proof bytes that we put on-chain.
                 let proof_bytes = proof.bytes();
+                let proof_string = hex::encode(proof.bytes());
+                println!("Proof bytes: {}", proof_string);
                 return Ok((
                     StatusCode::OK,
                     Json(ProofStatus {
                         status: status.into(),
                         proof: proof_bytes,
                         unclaim_description: None,
+                        proof_type: "groth16".to_string(),
                     }),
                 ));
             }
@@ -308,6 +316,7 @@ async fn get_proof_status(
                         status: status.into(),
                         proof: proof_bytes,
                         unclaim_description: None,
+                        proof_type: "plonk".to_string(),
                     }),
                 ));
             }
@@ -320,6 +329,7 @@ async fn get_proof_status(
                 status: status.into(),
                 proof: vec![],
                 unclaim_description: Some(unclaim_description_enum),
+                proof_type: "".to_string(),
             }),
         ));
     }
@@ -329,6 +339,7 @@ async fn get_proof_status(
             status: status.into(),
             proof: vec![],
             unclaim_description: None,
+            proof_type: "".to_string(),
         }),
     ))
 }
@@ -349,4 +360,3 @@ where
         Self(err.into())
     }
 }
-
