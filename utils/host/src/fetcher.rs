@@ -2,9 +2,12 @@ use alloy::{
     eips::{BlockId, BlockNumberOrTag},
     primitives::{Address, B256},
     providers::{Provider, ProviderBuilder, RootProvider},
-    transports::http::{reqwest::Url, Client, Http},
+    transports::{
+        http::{reqwest::Url, Client, Http},
+        Transport,
+    },
 };
-use alloy_consensus::Header;
+use alloy_consensus::{BlockHeader, Header};
 use alloy_rlp::Decodable;
 use alloy_sol_types::SolValue;
 use anyhow::anyhow;
@@ -15,18 +18,17 @@ use kona_host::HostCli;
 use op_alloy_consensus::OpBlock;
 use op_alloy_genesis::RollupConfig;
 use op_alloy_network::{
-    primitives::{BlockTransactions, BlockTransactionsKind},
-    Optimism,
+    primitives::{BlockTransactions, BlockTransactionsKind, HeaderResponse},
+    BlockResponse, Network, Optimism,
 };
 use op_alloy_protocol::calculate_tx_l1_cost_fjord;
 use op_alloy_protocol::L2BlockInfo;
-use op_alloy_rpc_types::{
-    output::OutputResponse, safe_head::SafeHeadResponse, OpTransactionReceipt,
-};
+use op_alloy_rpc_types::{OpTransactionReceipt};
 use op_succinct_client_utils::boot::BootInfoStruct;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{cmp::Ordering, collections::HashMap, env, fs, path::Path, str::FromStr, sync::Arc};
+use std::time::Duration;
 
 use alloy_primitives::{keccak256, Bytes, U256, U64};
 
@@ -38,8 +40,7 @@ use crate::{
 #[derive(Clone)]
 /// The OPSuccinctDataFetcher struct is used to fetch the L2 output data and L2 claim data for a
 /// given block number. It is used to generate the boot info for the native host program.
-/// TODO: Add retries for all requests (3 retries).
-/// TODO: We can generify some of these methods based on the Network (Ethereum, Optimism, etc.) types.
+/// FIXME: Add retries for all requests (3 retries).
 pub struct OPSuccinctDataFetcher {
     pub rpc_config: RPCConfig,
     pub l1_provider: Arc<RootProvider<Http<Client>>>,
@@ -53,12 +54,12 @@ impl Default for OPSuccinctDataFetcher {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RPCConfig {
-    pub l1_rpc: String,
-    pub l1_beacon_rpc: String,
-    pub l2_rpc: String,
-    pub l2_node_rpc: String,
+    pub l1_rpc: Url,
+    pub l1_beacon_rpc: Url,
+    pub l2_rpc: Url,
+    pub l2_node_rpc: Url,
 }
 
 /// The mode corresponding to the chain we are fetching data for.
@@ -78,13 +79,16 @@ pub enum CacheMode {
 }
 
 fn get_rpcs() -> RPCConfig {
+    let l1_rpc = env::var("L1_RPC").expect("L1_RPC must be set");
+    let l1_beacon_rpc = env::var("L1_BEACON_RPC").expect("L1_BEACON_RPC must be set");
+    let l2_rpc = env::var("L2_RPC").expect("L2_RPC must be set");
+    let l2_node_rpc = env::var("L2_NODE_RPC").expect("L2_NODE_RPC must be set");
+
     RPCConfig {
-        l1_rpc: env::var("L1_RPC").unwrap_or_else(|_| "http://localhost:8545".to_string()),
-        l1_beacon_rpc: env::var("L1_BEACON_RPC")
-            .unwrap_or_else(|_| "http://localhost:5052".to_string()),
-        l2_rpc: env::var("L2_RPC").unwrap_or_else(|_| "http://localhost:9545".to_string()),
-        l2_node_rpc: env::var("L2_NODE_RPC")
-            .unwrap_or_else(|_| "http://localhost:5058".to_string()),
+        l1_rpc: Url::parse(&l1_rpc).expect("L1_RPC must be a valid URL"),
+        l1_beacon_rpc: Url::parse(&l1_beacon_rpc).expect("L1_BEACON_RPC must be a valid URL"),
+        l2_rpc: Url::parse(&l2_rpc).expect("L2_RPC must be a valid URL"),
+        l2_node_rpc: Url::parse(&l2_node_rpc).expect("L2_NODE_RPC must be a valid URL"),
     }
 }
 
@@ -112,12 +116,8 @@ impl OPSuccinctDataFetcher {
     pub fn new() -> Self {
         let rpc_config = get_rpcs();
 
-        let l1_provider = Arc::new(
-            ProviderBuilder::default().on_http(Url::from_str(&rpc_config.l1_rpc).unwrap()),
-        );
-        let l2_provider = Arc::new(
-            ProviderBuilder::default().on_http(Url::from_str(&rpc_config.l2_rpc).unwrap()),
-        );
+        let l1_provider = Arc::new(ProviderBuilder::default().on_http(rpc_config.l1_rpc.clone()));
+        let l2_provider = Arc::new(ProviderBuilder::default().on_http(rpc_config.l2_rpc.clone()));
 
         OPSuccinctDataFetcher {
             rpc_config,
@@ -131,12 +131,8 @@ impl OPSuccinctDataFetcher {
     pub async fn new_with_rollup_config() -> Result<Self> {
         let rpc_config = get_rpcs();
 
-        let l1_provider = Arc::new(
-            ProviderBuilder::default().on_http(Url::from_str(&rpc_config.l1_rpc).unwrap()),
-        );
-        let l2_provider = Arc::new(
-            ProviderBuilder::default().on_http(Url::from_str(&rpc_config.l2_rpc).unwrap()),
-        );
+        let l1_provider = Arc::new(ProviderBuilder::default().on_http(rpc_config.l1_rpc.clone()));
+        let l2_provider = Arc::new(ProviderBuilder::default().on_http(rpc_config.l2_rpc.clone()));
 
         let rollup_config = Self::fetch_and_save_rollup_config(&rpc_config).await?;
 
@@ -154,24 +150,22 @@ impl OPSuccinctDataFetcher {
 
     pub async fn get_l2_head(&self) -> Header {
         self.l2_provider
-            .get_block_by_number(BlockNumberOrTag::Latest, false)
+            .get_block_by_number(BlockNumberOrTag::Latest, BlockTransactionsKind::Hashes)
             .await
             .unwrap()
             .unwrap()
             .header
-            .try_into()
-            .unwrap()
+            .inner
     }
 
     pub async fn get_l2_header_by_number(&self, block_number: u64) -> Header {
         self.l2_provider
-            .get_block_by_number(block_number.into(), false)
+            .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
             .await
             .unwrap()
             .unwrap()
             .header
-            .try_into()
-            .unwrap()
+            .inner
     }
 
     /// Manually calculate the L1 fee data for a range of blocks. Allows for modifying the L1 fee scalar.
@@ -334,7 +328,7 @@ impl OPSuccinctDataFetcher {
             .map(|block_number| async move {
                 let block = self
                     .l2_provider
-                    .get_block_by_number(block_number.into(), false)
+                    .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
                     .await?
                     .unwrap();
                 let receipts = self
@@ -378,8 +372,7 @@ impl OPSuccinctDataFetcher {
             .await?
             .unwrap()
             .header
-            .try_into()
-            .unwrap())
+            .inner)
     }
 
     pub async fn get_l2_header(&self, block_number: BlockId) -> Result<Header> {
@@ -389,31 +382,50 @@ impl OPSuccinctDataFetcher {
             .await?
             .unwrap()
             .header
-            .try_into()
-            .unwrap())
+            .inner)
     }
 
+    /// Finds the L1 block at the provided timestamp.
     pub async fn find_l1_block_by_timestamp(&self, target_timestamp: u64) -> Result<(B256, u64)> {
-        let latest_block = self
-            .l1_provider
+        self.find_block_by_timestamp(&self.l1_provider, target_timestamp)
+            .await
+    }
+
+    /// Finds the L2 block at the provided timestamp.
+    pub async fn find_l2_block_by_timestamp(&self, target_timestamp: u64) -> Result<(B256, u64)> {
+        self.find_block_by_timestamp(&self.l2_provider, target_timestamp)
+            .await
+    }
+
+    /// Finds the block at the provided timestamp, using the provided provider.
+    async fn find_block_by_timestamp<P, T, N>(
+        &self,
+        provider: &P,
+        target_timestamp: u64,
+    ) -> Result<(B256, u64)>
+    where
+        P: Provider<T, N>,
+        T: Transport + Clone,
+        N: Network,
+    {
+        let latest_block = provider
             .get_block(BlockId::latest(), BlockTransactionsKind::Hashes)
             .await?
             .unwrap();
         let mut low = 0;
-        let mut high = latest_block.header.number;
+        let mut high = latest_block.header().number();
 
         while low <= high {
             let mid = (low + high) / 2;
-            let block = self
-                .l1_provider
+            let block = provider
                 .get_block(mid.into(), BlockTransactionsKind::Hashes)
                 .await?
                 .unwrap();
-            let block_timestamp = block.header.timestamp;
+            let block_timestamp = block.header().timestamp();
 
             match block_timestamp.cmp(&target_timestamp) {
                 Ordering::Equal => {
-                    return Ok((block.header.hash.0.into(), block.header.number));
+                    return Ok((block.header().hash().0.into(), block.header().number()));
                 }
                 Ordering::Less => low = mid + 1,
                 Ordering::Greater => high = mid - 1,
@@ -421,21 +433,20 @@ impl OPSuccinctDataFetcher {
         }
 
         // Return the block hash of the closest block after the target timestamp
-        let block = self
-            .l1_provider
+        let block = provider
             .get_block((low - 10).into(), BlockTransactionsKind::Hashes)
             .await?
             .unwrap();
-        Ok((block.header.hash.0.into(), block.header.number))
+        Ok((block.header().hash().0.into(), block.header().number()))
     }
 
     /// Get the RPC URL for the given RPC mode.
-    pub fn get_rpc_url(&self, rpc_mode: RPCMode) -> String {
+    pub fn get_rpc_url(&self, rpc_mode: RPCMode) -> &Url {
         match rpc_mode {
-            RPCMode::L1 => self.rpc_config.l1_rpc.clone(),
-            RPCMode::L2 => self.rpc_config.l2_rpc.clone(),
-            RPCMode::L1Beacon => self.rpc_config.l1_beacon_rpc.clone(),
-            RPCMode::L2Node => self.rpc_config.l2_node_rpc.clone(),
+            RPCMode::L1 => &self.rpc_config.l1_rpc,
+            RPCMode::L2 => &self.rpc_config.l2_rpc,
+            RPCMode::L1Beacon => &self.rpc_config.l1_beacon_rpc,
+            RPCMode::L2Node => &self.rpc_config.l2_node_rpc,
         }
     }
 
@@ -465,13 +476,13 @@ impl OPSuccinctDataFetcher {
         Ok(rollup_config)
     }
 
-    async fn fetch_rpc_data<T>(url: &str, method: &str, params: Vec<Value>) -> Result<T>
+    async fn fetch_rpc_data<T>(url: &Url, method: &str, params: Vec<Value>) -> Result<T>
     where
         T: serde::de::DeserializeOwned,
     {
         let client = reqwest::Client::new();
         let response = client
-            .post(url)
+            .post(url.clone())
             .json(&json!({
                 "jsonrpc": "2.0",
                 "method": method,
@@ -503,7 +514,7 @@ impl OPSuccinctDataFetcher {
         T: serde::de::DeserializeOwned,
     {
         let url = self.get_rpc_url(rpc_mode);
-        Self::fetch_rpc_data(&url, method, params).await
+        Self::fetch_rpc_data(url, method, params).await
     }
 
     /// Get the earliest L1 header in a batch of boot infos.
@@ -605,7 +616,7 @@ impl OPSuccinctDataFetcher {
 
         // Get L2 output data.
         let l2_output_block = l2_provider
-            .get_block_by_number(l2_start_block.into(), false)
+            .get_block_by_number(l2_start_block.into(), BlockTransactionsKind::Hashes)
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!("Block not found for block number {}", l2_start_block)
@@ -631,7 +642,7 @@ impl OPSuccinctDataFetcher {
 
         // Get L2 claim data.
         let l2_claim_block = l2_provider
-            .get_block_by_number(l2_end_block.into(), false)
+            .get_block_by_number(l2_end_block.into(), BlockTransactionsKind::Hashes)
             .await?
             .unwrap();
         let l2_claim_state_root = l2_claim_block.header.state_root;
@@ -653,7 +664,12 @@ impl OPSuccinctDataFetcher {
         };
         let claimed_l2_output_root = keccak256(l2_claim_encoded.abi_encode());
 
-        let (l1_head_hash, _l1_head_number) = self.get_l1_head(l2_end_block).await?;
+        let (_, l1_head_number) = self.get_l1_head(l2_end_block).await?;
+
+        // FIXME: Investigate requirement for L1 head offset beyond batch posting block with safe head > L2 end block
+        let l1_head_number = l1_head_number + 7;
+        let header = self.get_l1_header(l1_head_number.into()).await?;
+        let l1_head_hash = header.hash_slow();
 
         // Get the workspace root, which is where the data directory is.
         let metadata = MetadataCommand::new().exec().unwrap();
@@ -707,9 +723,28 @@ impl OPSuccinctDataFetcher {
             claimed_l2_output_root,
             claimed_l2_block_number: l2_end_block,
             l2_chain_id: None,
-            l2_node_address: Some(self.rpc_config.l2_rpc.clone()),
-            l1_node_address: Some(self.rpc_config.l1_rpc.clone()),
-            l1_beacon_address: Some(self.rpc_config.l1_beacon_rpc.clone()),
+            // Trim the trailing slash to avoid double slashes in the URL.
+            l2_node_address: Some(
+                self.rpc_config
+                    .l2_rpc
+                    .as_str()
+                    .trim_end_matches('/')
+                    .to_string(),
+            ),
+            l1_node_address: Some(
+                self.rpc_config
+                    .l1_rpc
+                    .as_str()
+                    .trim_end_matches('/')
+                    .to_string(),
+            ),
+            l1_beacon_address: Some(
+                self.rpc_config
+                    .l1_beacon_rpc
+                    .as_str()
+                    .trim_end_matches('/')
+                    .to_string(),
+            ),
             data_dir: Some(data_directory.into()),
             exec: Some(exec_directory),
             server: false,
@@ -718,7 +753,11 @@ impl OPSuccinctDataFetcher {
                 .unwrap_or("0".to_string())
                 .parse()
                 .unwrap(),
-            ..Default::default()
+            mantle_da_indexer_url: None,
+            proxy_url: None,
+            disperse_url: None,
+            disperse_timeout: Duration::from_micros(0),
+            retrieve_timeout: Duration::from_micros(0),
         })
     }
 
@@ -731,51 +770,61 @@ impl OPSuccinctDataFetcher {
         Ok(l1_head.timestamp - l1_block_minus_1.timestamp)
     }
 
+    /// Get the L2 block time in seconds.
+    pub async fn get_l2_block_time(&self) -> Result<u64> {
+        let l2_head = self.get_l2_header(BlockId::latest()).await?;
+
+        let l2_head_minus_1 = l2_head.number - 1;
+        let l2_block_minus_1 = self.get_l2_header(l2_head_minus_1.into()).await?;
+        Ok(l2_head.timestamp - l2_block_minus_1.timestamp)
+    }
+
     /// Get the L1 block from which the `l2_end_block` can be derived.
     async fn get_l1_head_with_safe_head(&self, l2_end_block: u64) -> Result<(B256, u64)> {
-        let l1_block_time_secs = self.get_l1_block_time().await?;
-
-        let latest_l1_header = self.get_l1_header(BlockId::latest()).await?;
-
-        // Get the l1 origin of the l2 end block.
-        let l2_end_block_hex = format!("0x{:x}", l2_end_block);
-        let optimism_output_data: OutputResponse = self
-            .fetch_rpc_data_with_mode(
-                RPCMode::L2Node,
-                "optimism_outputAtBlock",
-                vec![l2_end_block_hex.into()],
-            )
-            .await?;
-
-        let l1_origin = optimism_output_data.block_ref.l1_origin;
-
-        // Search forward from the l1Origin, skipping forward in 5 minute increments until an L1 block with an L2 safe head greater than the l2_end_block is found.
-        let mut current_l1_block_number = l1_origin.number;
-        loop {
-            // If the current L1 block number is greater than the latest L1 header number, then return an error.
-            if current_l1_block_number > latest_l1_header.number {
-                return Err(anyhow::anyhow!(
-                    "Could not find an L1 block with an L2 safe head greater than the L2 end block."
-                ));
-            }
-
-            let l1_block_number_hex = format!("0x{:x}", current_l1_block_number);
-            let result: SafeHeadResponse = self
-                .fetch_rpc_data_with_mode(
-                    RPCMode::L2Node,
-                    "optimism_safeHeadAtL1Block",
-                    vec![l1_block_number_hex.into()],
-                )
-                .await?;
-            let l2_safe_head = result.safe_head.number;
-            if l2_safe_head > l2_end_block {
-                return Ok((result.l1_block.hash, result.l1_block.number));
-            }
-
-            // Move forward in 5 minute increments.
-            const SKIP_MINS: u64 = 5;
-            current_l1_block_number += SKIP_MINS * (60 / l1_block_time_secs);
-        }
+        // let l1_block_time_secs = self.get_l1_block_time().await?;
+        // 
+        // let latest_l1_header = self.get_l1_header(BlockId::latest()).await?;
+        // 
+        // // Get the l1 origin of the l2 end block.
+        // let l2_end_block_hex = format!("0x{:x}", l2_end_block);
+        // let optimism_output_data: OutputResponse = self
+        //     .fetch_rpc_data_with_mode(
+        //         RPCMode::L2Node,
+        //         "optimism_outputAtBlock",
+        //         vec![l2_end_block_hex.into()],
+        //     )
+        //     .await?;
+        // 
+        // let l1_origin = optimism_output_data.block_ref.l1_origin;
+        // 
+        // // Search forward from the l1Origin, skipping forward in 5 minute increments until an L1 block with an L2 safe head greater than the l2_end_block is found.
+        // let mut current_l1_block_number = l1_origin.number;
+        // loop {
+        //     // If the current L1 block number is greater than the latest L1 header number, then return an error.
+        //     if current_l1_block_number > latest_l1_header.number {
+        //         return Err(anyhow::anyhow!(
+        //             "Could not find an L1 block with an L2 safe head greater than the L2 end block."
+        //         ));
+        //     }
+        // 
+        //     let l1_block_number_hex = format!("0x{:x}", current_l1_block_number);
+        //     let result: SafeHeadResponse = self
+        //         .fetch_rpc_data_with_mode(
+        //             RPCMode::L2Node,
+        //             "optimism_safeHeadAtL1Block",
+        //             vec![l1_block_number_hex.into()],
+        //         )
+        //         .await?;
+        //     let l2_safe_head = result.safe_head.number;
+        //     if l2_safe_head > l2_end_block {
+        //         return Ok((result.l1_block.hash, result.l1_block.number));
+        //     }
+        // 
+        //     // Move forward in 5 minute increments.
+        //     const SKIP_MINS: u64 = 5;
+        //     current_l1_block_number += SKIP_MINS * (60 / l1_block_time_secs);
+        // }
+        unimplemented!()
     }
 
     /// For OP Sepolia, OP Mainnet and Base, the batcher posts at least every 10 minutes. Otherwise,
@@ -832,17 +881,18 @@ impl OPSuccinctDataFetcher {
         Ok(L2BlockInfo::from_block_and_genesis(&block, &genesis)?)
     }
 
-    /// Get the L2 safe head corresponding to the L1 block number using optimism_safeHeadAtBlock.
+    /// Get the L2 safe head corresponding to the L1 block number using optimism_safeHeadAtL1Block.
     pub async fn get_l2_safe_head_from_l1_block_number(&self, l1_block_number: u64) -> Result<u64> {
-        let l1_block_number_hex = format!("0x{:x}", l1_block_number);
-        let result: SafeHeadResponse = self
-            .fetch_rpc_data_with_mode(
-                RPCMode::L2Node,
-                "optimism_safeHeadAtL1Block",
-                vec![l1_block_number_hex.into()],
-            )
-            .await?;
-        Ok(result.safe_head.number)
+        // let l1_block_number_hex = format!("0x{:x}", l1_block_number);
+        // let result: SafeHeadResponse = self
+        //     .fetch_rpc_data_with_mode(
+        //         RPCMode::L2Node,
+        //         "optimism_safeHeadAtL1Block",
+        //         vec![l1_block_number_hex.into()],
+        //     )
+        //     .await?;
+        // Ok(result.safe_head.number)
+        unimplemented!()
     }
 
     /// Get the l2_end_block number given the l2_start_block number and the ideal block interval.
@@ -859,82 +909,12 @@ impl OPSuccinctDataFetcher {
             .get_l2_safe_head_from_l1_block_number(l2_end_block_info.l1_origin.number)
             .await?;
 
-        // TODO: This code will need to be replicated in the proposer to fetch the block range.
         // If blocks are in same batch or if derivable end is past ideal end, use ideal end block, as it will just pull in one batch.
         if l2_derivable_block_end < l2_start_block || l2_derivable_block_end > ideal_l2_block_end {
             Ok(ideal_l2_block_end)
         } else {
             // Otherwise use derivable end to avoid pulling in multiple batches.
             Ok(l2_derivable_block_end)
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::fetcher::OPSuccinctDataFetcher;
-
-    #[tokio::test]
-    #[cfg(test)]
-    async fn test_get_l1_head() {
-        use alloy::eips::BlockId;
-
-        dotenv::dotenv().ok();
-        let fetcher = OPSuccinctDataFetcher::new_with_rollup_config()
-            .await
-            .unwrap();
-        let latest_l2_block = fetcher.get_l2_header(BlockId::latest()).await.unwrap();
-
-        // Get the L2 block number from 1 hour ago.
-        let l2_end_block = latest_l2_block.number
-            - ((60 * 60) / fetcher.rollup_config.as_ref().unwrap().block_time);
-
-        let _ = fetcher.get_l1_head(l2_end_block).await.unwrap();
-    }
-
-    #[tokio::test]
-    #[cfg(test)]
-    async fn test_l2_safe_head_progression() {
-        use alloy::eips::BlockId;
-        use futures::StreamExt;
-        use op_alloy_rpc_types::safe_head::SafeHeadResponse;
-
-        use crate::fetcher::RPCMode;
-
-        dotenv::dotenv().ok();
-        let fetcher = OPSuccinctDataFetcher::new();
-        let mut l2_safe_heads = Vec::new();
-
-        let latest_l1_block = fetcher.get_l1_header(BlockId::latest()).await.unwrap();
-        let latest_l1_block_number = latest_l1_block.number;
-        let l1_block_number_hex = format!("0x{:x}", latest_l1_block_number);
-        let _ = fetcher
-            .fetch_rpc_data_with_mode::<SafeHeadResponse>(
-                RPCMode::L2Node,
-                "optimism_safeHeadAtL1Block",
-                vec![l1_block_number_hex.into()],
-            )
-            .await
-            .unwrap();
-
-        let latest_l2_block = fetcher.get_l2_header(BlockId::latest()).await.unwrap();
-
-        let safe_heads =
-            futures::stream::iter(latest_l2_block.number - 500..=latest_l2_block.number)
-                .map(|block_num| {
-                    let l1_block_number_hex = format!("0x{:x}", block_num);
-                    fetcher.fetch_rpc_data_with_mode::<SafeHeadResponse>(
-                        RPCMode::L2Node,
-                        "optimism_safeHeadAtL1Block",
-                        vec![l1_block_number_hex.into()],
-                    )
-                })
-                .buffered(100)
-                .collect::<Vec<_>>()
-                .await;
-
-        for result in safe_heads.into_iter().flatten() {
-            l2_safe_heads.push(result.safe_head.number);
         }
     }
 }

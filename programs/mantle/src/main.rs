@@ -14,15 +14,29 @@ use alloc::sync::Arc;
 // use std::io::Bytes;
 use alloy_consensus::{BlockBody, Header, Sealable, Sealed};
 use cfg_if::cfg_if;
-use kona_executor::StatelessL2BlockExecutor;
+// use kona_executor::StatelessL2BlockExecutor;
 use op_alloy_genesis::rollup::RollupConfig;
-use op_succinct_client_utils::{
-    mantle_provider::OracleL2ChainProvider, precompiles::zkvm_handle_register,
-    InMemoryOracle,
+
+use kona_proof::{
+    executor::KonaExecutorConstructor,
 };
+
 use alloy_primitives::Bytes;
 // use alloy_sol_types::SolValue;
-use op_succinct_client_utils::types::{MantleInputs, prepare_payload, MantleOutputs};
+use op_succinct_client_utils::{
+    mantle_provider::OracleL2ChainProvider,
+    InMemoryOracle,
+    precompiles::zkvm_handle_register,
+    types::{
+        MantleInputs,
+        prepare_payload,
+        MantleOutputs,
+    },
+};
+
+use kona_driver::{
+    Executor, ExecutorConstructor,
+};
 
 cfg_if! {
     if #[cfg(target_os = "zkvm")] {
@@ -84,18 +98,25 @@ fn main() {
         ////////////////////////////////////////////////////////////////
         //                   DERIVATION & EXECUTION                   //
         ////////////////////////////////////////////////////////////////
+        let binding = Arc::new(config);
+        let executor_constructor = KonaExecutorConstructor::new(
+            &binding,
+            mantle_provider.clone(),
+            mantle_provider.clone(),
+            Some(zkvm_handle_register),
+        );
 
-        println!("cycle-tracker-start: execution-instantiation");
-        let mut executor = StatelessL2BlockExecutor::builder(
-            &config,
-            mantle_provider.clone(),
-            mantle_provider.clone(),
-        )
-            .with_parent_header(prev_block_header.seal_slow())
-            .with_handle_register(zkvm_handle_register)
-            .build();
+        // println!("cycle-tracker-start: execution-instantiation");
+        // let mut executor = StatelessL2BlockExecutor::builder(
+        //     &config,
+        //     mantle_provider.clone(),
+        //     mantle_provider.clone(),
+        // )
+        //     .with_parent_header(prev_block_header.seal_slow())
+        //     .with_handle_register(zkvm_handle_register)
+        //     .build();
         println!("cycle-tracker-end: execution-instantiation");
-
+        let mut executor = executor_constructor.new_executor(prev_block_header.seal_slow());
         println!("cycle-tracker-report-start: block-execution");
         let new_block_header = executor.execute_payload(attributes.clone()).unwrap();
         // println!("new block header: {:?}", new_block_header);

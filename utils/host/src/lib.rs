@@ -24,15 +24,14 @@ use alloy::{
     providers::{Provider, ProviderBuilder as MantleProviderBuilder},
     rpc::types::Header as RpcHeader,
 };
+use alloy::network::primitives::{BlockTransactionsKind, BlockTransactions};
+use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
-// use alloy_primitives::Bytes;
+use alloy_rpc_types::Block;
 use op_alloy_network::Optimism;
-// use op_alloy_rpc_types_engine::OpPayloadAttributes;
-// use alloy_rpc_types_engine::PayloadAttributes;
 
-// const SEQUENCER_FEE_VAULT_ADDRESS: Address = address!("4200000000000000000000000000000000000011");
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 // use op_alloy_network::Optimism;
 use rkyv::{
     ser::{
@@ -76,7 +75,7 @@ pub async fn get_mantle_proof_stdin(block_number: u64) -> Result<SP1Stdin> {
         .network::<Optimism>()
         .on_http(url.parse().unwrap());
     let prev_block = client
-        .get_block_by_number(BlockNumberOrTag::from(block_number - 1), false)
+        .get_block_by_number(BlockNumberOrTag::from(block_number - 1), BlockTransactionsKind::Hashes)
         .await
         .unwrap()
         .ok_or(anyhow::anyhow!("Block not found"))
@@ -84,31 +83,33 @@ pub async fn get_mantle_proof_stdin(block_number: u64) -> Result<SP1Stdin> {
 
     let prev_block_header = convert_header(prev_block.header);
 
-    let block = client
-        .get_block_by_number(BlockNumberOrTag::from(block_number), true)
+    let Block { transactions, .. } = client
+        .get_block_by_number(BlockNumberOrTag::from(block_number), BlockTransactionsKind::Hashes)
         .await
-        .unwrap()
-        .ok_or(anyhow::anyhow!("Block not found"))
-        .unwrap();
+        .map_err(|e| anyhow::anyhow!("Failed to fetch block: {e}"))?
+        .ok_or(anyhow::anyhow!("Block not found."))?;
 
-    let mut txs = Vec::with_capacity(block.transactions.len());
-    for tx in block.transactions.as_transactions().unwrap().iter() {
-        let tx_hash = tx.inner.hash;
-        let raw_tx = client
-            .client()
-            .request::<&[B256; 1], Bytes>("debug_getRawTransaction", &[tx_hash])
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to fetch raw transaction: {e}"))
-            .unwrap();
-        txs.push(raw_tx);
-    }
-    // let attributes = prepare_payload(block.header.clone(), txs);
-    // println!("attributes: {:?}", attributes);
+    let txs = match transactions {
+        BlockTransactions::Hashes(transactions) => {
+            let mut encoded_transactions = Vec::with_capacity(transactions.len());
+            for tx_hash in transactions {
+                let tx = client
+                    .client()
+                    .request::<&[B256; 1], Bytes>("debug_getRawTransaction", &[tx_hash])
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Error fetching transaction: {e}"))?;
+                encoded_transactions.push(tx);
+            }
+            encoded_transactions
+        }
+        _ => anyhow::bail!("Only BlockTransactions::Hashes are supported."),
+    };
+
     let prev_block_header_string = serde_json::to_string(&prev_block_header).unwrap();
     // println!("prev_block_header: {:?}", prev_block_header);
     stdin.write(&prev_block_header_string);
     stdin.write_vec(serde_cbor::to_vec(&txs).unwrap());
-    
+
     // ------ stdin attributes done -------
 
     let input = std::fs::read(format!("cache-{}.bin", block_number).as_str()).unwrap();
@@ -198,8 +199,8 @@ pub fn get_agg_proof_stdin(
 fn convert_header(header: RpcHeader) -> Header {
     Header {
         parent_hash: header.parent_hash,
-        ommers_hash: header.uncles_hash,
-        beneficiary: header.miner,
+        ommers_hash: header.ommers_hash,
+        beneficiary: header.beneficiary,
         state_root: header.state_root,
         transactions_root: header.transactions_root,
         receipts_root: header.receipts_root,
@@ -209,14 +210,14 @@ fn convert_header(header: RpcHeader) -> Header {
         gas_limit: header.gas_limit,
         gas_used: header.gas_used,
         timestamp: header.timestamp,
-        extra_data: header.extra_data,
-        mix_hash: header.mix_hash.unwrap_or_default(),
-        nonce: header.nonce.unwrap_or_default(),
+        extra_data: header.extra_data.clone(),
+        mix_hash: header.mix_hash,
+        nonce: header.nonce,
         base_fee_per_gas: header.base_fee_per_gas,
         withdrawals_root: header.withdrawals_root,
         blob_gas_used: header.blob_gas_used,
         excess_blob_gas: header.excess_blob_gas,
         parent_beacon_block_root: header.parent_beacon_block_root,
-        requests_root: header.requests_root,
+        requests_hash: header.requests_hash,
     }
 }

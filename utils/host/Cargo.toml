@@ -28,6 +28,7 @@ alloy-consensus = { workspace = true, features = ["serde"] }
 alloy-sol-types.workspace = true
 alloy-eips.workspace = true
 alloy-rpc-types-engine = { workspace = true, features = ["serde"] }
+alloy-rpc-types = { workspace = true, features = ["eth"] }
 
 # kona
 kona-host.workspace = true

@@ -39,6 +39,7 @@ pub fn prepare_payload(header: Header, txs: Vec<Bytes>) -> OpPayloadAttributes {
     }
 }
 
+
 sol! {
     #[derive(Debug, Serialize, Deserialize)]
     struct AggregationOutputs {

@@ -1,13 +1,16 @@
 //! Contains the concrete implementation of the [L2ChainProvider] trait for the client program.
 use crate::block_on;
-use anyhow::{anyhow, Result};
-use kona_client::HintType;
+use anyhow::{Result};
 use alloc::sync::Arc;
-use alloy_consensus::Header;
 use alloy_primitives::{Address, Bytes, B256};
 use alloy_rlp::Decodable;
-use kona_mpt::{TrieHinter, TrieProvider};
+use kona_proof::{
+    errors::OracleProviderError, HintType,
+};
+use kona_mpt::{TrieHinter, TrieProvider, TrieNode};
 use kona_preimage::{CommsClient, PreimageKey, PreimageKeyType};
+use kona_executor::TrieDBProvider;
+use alloy_consensus::{BlockBody, Header, Sealed};
 
 /// The oracle-backed L2 chain provider for the client program.
 #[derive(Debug, Clone)]
@@ -24,48 +27,21 @@ impl<T: CommsClient> OracleL2ChainProvider<T> {
 }
 
 impl<T: CommsClient> TrieProvider for OracleL2ChainProvider<T> {
-    type Error = anyhow::Error;
+    type Error = OracleProviderError;
 
-    fn trie_node_preimage(&self, key: B256) -> Result<Bytes> {
+    fn trie_node_by_hash(&self, key: B256) -> std::result::Result<kona_mpt::TrieNode, Self::Error> {
         // On L2, trie node preimages are stored as keccak preimage types in the oracle. We assume
         // that a hint for these preimages has already been sent, prior to this call.
-        block_on(async move {
-            Ok(self
-                .oracle
-                .get(PreimageKey::new(*key, PreimageKeyType::Keccak256))
-                .await?
-                .into())
-        })
-    }
-
-    fn bytecode_by_hash(&self, hash: B256) -> Result<Bytes> {
-        // Fetch the bytecode preimage from the caching oracle.
-        block_on(async move {
-            self.oracle
-                .write(&HintType::L2Code.encode_with(&[hash.as_ref()]))
-                .await?;
-
-            Ok(self
-                .oracle
-                .get(PreimageKey::new(*hash, PreimageKeyType::Keccak256))
-                .await?
-                .into())
-        })
-    }
-
-    fn header_by_hash(&self, hash: B256) -> Result<Header> {
-        // Fetch the header from the caching oracle.
-        block_on(async move {
-            self.oracle
-                .write(&HintType::L2BlockHeader.encode_with(&[hash.as_ref()]))
-                .await?;
-
-            let header_bytes = self
-                .oracle
-                .get(PreimageKey::new(*hash, PreimageKeyType::Keccak256))
-                .await?;
-            Header::decode(&mut header_bytes.as_slice())
-                .map_err(|e| anyhow!("Failed to RLP decode Header: {e}"))
+        crate::block_on(async move {
+            TrieNode::decode(
+                &mut self
+                    .oracle
+                    .get(PreimageKey::new(*key, PreimageKeyType::Keccak256))
+                    .await
+                    .map_err(OracleProviderError::Preimage)?
+                    .as_ref(),
+            )
+                .map_err(OracleProviderError::Rlp)
         })
     }
 }
@@ -113,3 +89,37 @@ impl<T: CommsClient> TrieHinter for OracleL2ChainProvider<T> {
     }
 }
 
+impl<T: CommsClient> TrieDBProvider for OracleL2ChainProvider<T> {
+    fn bytecode_by_hash(&self, hash: B256) -> Result<Bytes, OracleProviderError> {
+        // Fetch the bytecode preimage from the caching oracle.
+        block_on(async move {
+            self.oracle
+                .write(&HintType::L2Code.encode_with(&[hash.as_ref()]))
+                .await
+                .map_err(OracleProviderError::Preimage)?;
+
+            self.oracle
+                .get(PreimageKey::new(*hash, PreimageKeyType::Keccak256))
+                .await
+                .map(Into::into)
+                .map_err(OracleProviderError::Preimage)
+        })
+    }
+
+    fn header_by_hash(&self, hash: B256) -> Result<Header, OracleProviderError> {
+        // Fetch the header from the caching oracle.
+        block_on(async move {
+            self.oracle
+                .write(&HintType::L2BlockHeader.encode_with(&[hash.as_ref()]))
+                .await
+                .map_err(OracleProviderError::Preimage)?;
+
+            let header_bytes = self
+                .oracle
+                .get(PreimageKey::new(*hash, PreimageKeyType::Keccak256))
+                .await
+                .map_err(OracleProviderError::Preimage)?;
+            Header::decode(&mut header_bytes.as_slice()).map_err(OracleProviderError::Rlp)
+        })
+    }
+}
