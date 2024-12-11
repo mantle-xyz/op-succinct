@@ -14,5 +14,6 @@
   - [Block Data CLI Tool](./advanced/block-data.md)
   - [OP Succinct L2OutputOracle](./advanced/l2-output-oracle.md)
   - [Proposer](./advanced/proposer.md)
+  - [Kurtosis](./advanced/kurtosis.md)
   - [Upgrade to a new `op-succinct` version](./advanced/upgrade.md)
 - [FAQ](./faq.md)
