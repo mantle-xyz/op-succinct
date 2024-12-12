@@ -34,6 +34,23 @@ struct L2OOConfig {
     range_vkey_commitment: String,
 }
 
+/// If the environment variable is set for the address, return it. Otherwise, return the address associated with the private key. If the private key is not set, return the zero address.
+fn get_address(env_var: &str) -> String {
+    let private_key = env::var("PRIVATE_KEY").unwrap_or_else(|_| B256::ZERO.to_string());
+
+    env::var(env_var).map_or_else(
+        |_| {
+            if private_key == B256::ZERO.to_string() {
+                Address::ZERO.to_string()
+            } else {
+                let signer: PrivateKeySigner = private_key.parse().unwrap();
+                signer.address().to_string()
+            }
+        },
+        |addr| addr,
+    )
+}
+
 /// Update the L2OO config with the rollup config hash and other relevant data before the contract is deployed.
 ///
 /// Specifically, updates the following fields in `opsuccinctl2ooconfig.json`:
