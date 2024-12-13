@@ -100,28 +100,13 @@ func (l *L2OutputSubmitter) RetryRequest(req *ent.ProofRequest, status ProofStat
 		return err
 	}
 
-	// If the proof was unclaimed due to a program execution error, we should split the proof into two.
-	if status.UnclaimDescription == ProgramExecutionError {
-		mid := (req.StartBlock + req.EndBlock) / 2
-		// Create two new proof requests, one from [start, mid] and one from [mid, end]. The requests
-		// are consecutive and overlapping.
-		err = l.db.NewEntry(req.Type, req.StartBlock, mid)
-		if err != nil {
-			l.Log.Error("failed to add first proof request", "err", err)
-			return err
-		}
-		err = l.db.NewEntry(req.Type, mid, req.EndBlock)
-		if err != nil {
-			l.Log.Error("failed to add second proof request", "err", err)
-			return err
-		}
-	} else {
-		// If the proof was unclaimed for any other reason, retry with the same range.
-		err = l.db.NewEntry(req.Type, req.StartBlock, req.EndBlock)
-		if err != nil {
-			l.Log.Error("failed to add proof request", "err", err)
-			return err
-		}
+	// TODO: Once execution errors are added, update this to split the range only when there's an execution error returned on
+	// a SPAN proof.
+	// Retry same request.
+	err = l.db.NewEntry(req.Type, req.StartBlock, req.EndBlock)
+	if err != nil {
+		l.Log.Error("failed to retry proof request", "err", err)
+		return err
 	}
 
 	return nil
@@ -305,7 +290,9 @@ func (l *L2OutputSubmitter) requestRealProof(proofType proofrequest.Type, jsonBo
 	if err := json.Unmarshal(resp, &response); err != nil {
 		return "", fmt.Errorf("error decoding JSON response: %w", err)
 	}
-	l.Log.Info("successfully submitted proof", "proofID", response.ProofID)
+	// Format the proof ID as a hex string.
+	proofIdHex := fmt.Sprintf("%x", response.ProofID)
+	l.Log.Info("successfully submitted proof", "proofID", proofIdHex)
 	return response.ProofID, nil
 }
 
