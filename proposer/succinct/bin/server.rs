@@ -139,8 +139,7 @@ async fn request_span_proof(
     let mut witnessgen_executor = WitnessGenExecutor::default();
     witnessgen_executor.spawn_witnessgen(&host_cli).await?;
     // Log any errors from running the witness generation process.
-    let res = witnessgen_executor.flush().await;
-    if let Err(e) = res {
+    if let Err(e) = witnessgen_executor.flush().await {
         log::error!("Failed to generate witness: {}", e);
         return Err(AppError(anyhow::anyhow!(
             "Failed to generate witness: {}",
@@ -149,7 +148,16 @@ async fn request_span_proof(
     }
     info!("Witnessgen complete");
 
-    let sp1_stdin = get_proof_stdin(&host_cli)?;
+    let sp1_stdin = match get_proof_stdin(&host_cli) {
+        Ok(stdin) => stdin,
+        Err(e) => {
+            log::error!("Failed to get proof stdin: {}", e);
+            return Err(AppError(anyhow::anyhow!(
+                "Failed to get proof stdin: {}",
+                e
+            )));
+        }
+    };
 
     // let prover = NetworkProverV1::new();
     //
