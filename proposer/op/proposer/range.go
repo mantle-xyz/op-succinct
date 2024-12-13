@@ -185,7 +185,25 @@ func (l *L2OutputSubmitter) GetRangeProofBoundaries(ctx context.Context) error {
 	// Note: Originally, this used the L1 finalized block. However, to satisfy the new API, we now use the L2 finalized block.
 	newL2EndBlock := status.FinalizedL2.Number
 
-	spans := l.SplitRangeBasic(newL2StartBlock, newL2EndBlock)
+	// Check if the safeDB is activated on the L2 node. If it is, we use the safeHead based range
+	// splitting algorithm. Otherwise, we use the simple range splitting algorithm.
+	safeDBActivated, err := l.isSafeDBActivated(ctx, rollupClient)
+	if err != nil {
+		l.Log.Warn("safeDB is not activated. Using simple range splitting algorithm.", "err", err)
+	}
+
+	var spans []Span
+	// If the safeDB is activated, we use the safeHead based range splitting algorithm.
+	// Otherwise, we use the simple range splitting algorithm.
+	spans = l.SplitRangeBasic(newL2StartBlock, newL2EndBlock)
+	if safeDBActivated {
+		safeHeadSpans, err := l.SplitRangeBasedOnSafeHeads(ctx, newL2StartBlock, newL2EndBlock)
+		if err == nil {
+			spans = safeHeadSpans
+		} else {
+			l.Log.Warn("failed to split range based on safe heads, using basic range splitting", "err", err)
+		}
+	}
 
 	// // Check if the safeDB is activated on the L2 node. If it is, we use the safeHead based range
 	// // splitting algorithm. Otherwise, we use the simple range splitting algorithm.
