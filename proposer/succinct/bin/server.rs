@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use log::info;
+use log::{error, info};
 use op_succinct_client_utils::{
     boot::{hash_rollup_config, BootInfoStruct},
     types::u32_to_u8,
@@ -151,7 +151,6 @@ async fn request_span_proof(
 
     let sp1_stdin = get_proof_stdin(&host_cli)?;
 
-<<<<<<< HEAD
     // let prover = NetworkProverV1::new();
     //
     // // Set simulation to false on range proofs as they're large.
@@ -182,63 +181,6 @@ async fn request_span_proof(
     println!("Full execution report:\n{:?}", execution_report);
     println!("public values: {:#?}", public_values.raw());
     Ok((StatusCode::OK, Json(ProofResponse { proof_id: "".to_string() })))
-=======
-    let private_key = match env::var("SP1_PRIVATE_KEY") {
-        Ok(private_key) => private_key,
-        Err(e) => {
-            error!("Failed to get SP1 private key: {}", e);
-            return Err(AppError(anyhow::anyhow!(
-                "Failed to get SP1 private key: {}",
-                e
-            )));
-        }
-    };
-    let rpc_url = match env::var("PROVER_NETWORK_RPC") {
-        Ok(rpc_url) => rpc_url,
-        Err(e) => {
-            error!("Failed to get PROVER_NETWORK_RPC: {}", e);
-            return Err(AppError(anyhow::anyhow!(
-                "Failed to get PROVER_NETWORK_RPC: {}",
-                e
-            )));
-        }
-    };
-    let mut prover = NetworkProverV2::new(&private_key, Some(rpc_url.to_string()), false);
-    // Use the reserved strategy to route to a specific cluster.
-    prover.with_strategy(FulfillmentStrategy::Reserved);
-
-    // Set simulation to false on range proofs as they're large.
-    env::set_var("SKIP_SIMULATION", "true");
-    let vk_hash = match prover.register_program(&state.range_vk, RANGE_ELF).await {
-        Ok(vk_hash) => vk_hash,
-        Err(e) => {
-            error!("Failed to register program: {}", e);
-            return Err(AppError(anyhow::anyhow!(
-                "Failed to register program: {}",
-                e
-            )));
-        }
-    };
-    let proof_id = match prover
-        .request_proof(
-            &vk_hash,
-            &sp1_stdin,
-            ProofMode::Compressed,
-            1_000_000_000_000,
-            None,
-        )
-        .await
-    {
-        Ok(proof_id) => proof_id,
-        Err(e) => {
-            error!("Failed to request proof: {}", e);
-            return Err(AppError(anyhow::anyhow!("Failed to request proof: {}", e)));
-        }
-    };
-    env::set_var("SKIP_SIMULATION", "false");
-
-    Ok((StatusCode::OK, Json(ProofResponse { proof_id })))
->>>>>>> ea89646 (feat: dummy range program (#283))
 }
 
 /// Request an aggregation proof for a set of subproofs.
@@ -300,14 +242,21 @@ async fn request_mock_span_proof(
         .await
         .unwrap();
 
-    let host_cli = fetcher
+    let host_cli = match fetcher
         .get_host_cli_args(
             payload.start,
             payload.end,
             ProgramType::Multi,
             CacheMode::DeleteCache,
         )
-        .await?;
+        .await
+    {
+        Ok(cli) => cli,
+        Err(e) => {
+            error!("Failed to get host CLI args: {}", e);
+            return Err(AppError(e));
+        }
+    };
 
     // Start the server and native client with a timeout.
     // Note: Ideally, the server should call out to a separate process that executes the native
@@ -315,16 +264,21 @@ async fn request_mock_span_proof(
     let mut witnessgen_executor = WitnessGenExecutor::default();
     witnessgen_executor.spawn_witnessgen(&host_cli).await?;
     // Log any errors from running the witness generation process.
-    let res = witnessgen_executor.flush().await;
-    if let Err(e) = res {
-        log::error!("Failed to generate witness: {}", e);
+    if let Err(e) = witnessgen_executor.flush().await {
+        error!("Failed to generate witness: {}", e);
         return Err(AppError(anyhow::anyhow!(
             "Failed to generate witness: {}",
             e
         )));
     }
 
-    let sp1_stdin = get_proof_stdin(&host_cli)?;
+    let sp1_stdin = match get_proof_stdin(&host_cli) {
+        Ok(stdin) => stdin,
+        Err(e) => {
+            error!("Failed to get proof stdin: {}", e);
+            return Err(AppError(e));
+        }
+    };
 
     let prover = ProverClient::mock();
     let proof = prover
@@ -368,12 +322,18 @@ async fn request_mock_agg_proof(
         .map(|proof| proof.proof.clone())
         .collect();
 
-    let l1_head_bytes = hex::decode(
+    let l1_head_bytes = match hex::decode(
         payload
             .head
             .strip_prefix("0x")
             .expect("Invalid L1 head, no 0x prefix."),
-    )?;
+    ) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            error!("Failed to decode L1 head: {}", e);
+            return Err(AppError(anyhow::anyhow!("Failed to decode L1 head: {}", e)));
+        }
+    };
     let l1_head: [u8; 32] = l1_head_bytes.try_into().unwrap();
 
     let fetcher = OPSuccinctDataFetcher::new_with_rollup_config()
@@ -381,19 +341,39 @@ async fn request_mock_agg_proof(
         .unwrap();
     let headers = fetcher
         .get_header_preimages(&boot_infos, l1_head.into())
-        .await?;
+        .await
+    {
+        Ok(h) => h,
+        Err(e) => {
+            error!("Failed to get header preimages: {}", e);
+            return Err(AppError(e));
+        }
+    };
 
     let prover = ProverClient::mock();
 
     let stdin =
-        get_agg_proof_stdin(proofs, boot_infos, headers, &state.range_vk, l1_head.into()).unwrap();
+        match get_agg_proof_stdin(proofs, boot_infos, headers, &state.range_vk, l1_head.into()) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to get aggregation proof stdin: {}", e);
+                return Err(AppError(e));
+            }
+        };
 
     // Simulate the mock proof. proof.bytes() returns an empty byte array for mock proofs.
-    let proof = prover
+    let proof = match prover
         .prove(&state.agg_pk, stdin)
         .set_skip_deferred_proof_verification(true)
         .groth16()
-        .run()?;
+        .run()
+    {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Failed to generate proof: {}", e);
+            return Err(AppError(e));
+        }
+    };
 
     Ok((
         StatusCode::OK,
