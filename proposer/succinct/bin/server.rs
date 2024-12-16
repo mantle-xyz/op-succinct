@@ -31,7 +31,7 @@ use sp1_sdk::{
 use std::{env, str::FromStr, time::Duration};
 use tower_http::limit::RequestBodyLimitLayer;
 
-pub const MULTI_BLOCK_ELF: &[u8] = include_bytes!("../../../elf/range-elf");
+pub const RANGE_ELF: &[u8] = include_bytes!("../../../elf/range-elf");
 pub const AGG_ELF: &[u8] = include_bytes!("../../../elf/aggregation-elf");
 
 #[tokio::main]
@@ -41,7 +41,7 @@ async fn main() {
     dotenv::dotenv().ok();
 
     let prover = ProverClient::new();
-    let (range_pk, range_vk) = prover.setup(MULTI_BLOCK_ELF);
+    let (range_pk, range_vk) = prover.setup(RANGE_ELF);
     let (agg_pk, agg_vk) = prover.setup(AGG_ELF);
     let multi_block_vkey_u8 = u32_to_u8(range_vk.vk.hash_u32());
     let range_vkey_commitment = B256::from(multi_block_vkey_u8);
@@ -151,6 +151,7 @@ async fn request_span_proof(
 
     let sp1_stdin = get_proof_stdin(&host_cli)?;
 
+<<<<<<< HEAD
     // let prover = NetworkProverV1::new();
     //
     // // Set simulation to false on range proofs as they're large.
@@ -181,6 +182,63 @@ async fn request_span_proof(
     println!("Full execution report:\n{:?}", execution_report);
     println!("public values: {:#?}", public_values.raw());
     Ok((StatusCode::OK, Json(ProofResponse { proof_id: "".to_string() })))
+=======
+    let private_key = match env::var("SP1_PRIVATE_KEY") {
+        Ok(private_key) => private_key,
+        Err(e) => {
+            error!("Failed to get SP1 private key: {}", e);
+            return Err(AppError(anyhow::anyhow!(
+                "Failed to get SP1 private key: {}",
+                e
+            )));
+        }
+    };
+    let rpc_url = match env::var("PROVER_NETWORK_RPC") {
+        Ok(rpc_url) => rpc_url,
+        Err(e) => {
+            error!("Failed to get PROVER_NETWORK_RPC: {}", e);
+            return Err(AppError(anyhow::anyhow!(
+                "Failed to get PROVER_NETWORK_RPC: {}",
+                e
+            )));
+        }
+    };
+    let mut prover = NetworkProverV2::new(&private_key, Some(rpc_url.to_string()), false);
+    // Use the reserved strategy to route to a specific cluster.
+    prover.with_strategy(FulfillmentStrategy::Reserved);
+
+    // Set simulation to false on range proofs as they're large.
+    env::set_var("SKIP_SIMULATION", "true");
+    let vk_hash = match prover.register_program(&state.range_vk, RANGE_ELF).await {
+        Ok(vk_hash) => vk_hash,
+        Err(e) => {
+            error!("Failed to register program: {}", e);
+            return Err(AppError(anyhow::anyhow!(
+                "Failed to register program: {}",
+                e
+            )));
+        }
+    };
+    let proof_id = match prover
+        .request_proof(
+            &vk_hash,
+            &sp1_stdin,
+            ProofMode::Compressed,
+            1_000_000_000_000,
+            None,
+        )
+        .await
+    {
+        Ok(proof_id) => proof_id,
+        Err(e) => {
+            error!("Failed to request proof: {}", e);
+            return Err(AppError(anyhow::anyhow!("Failed to request proof: {}", e)));
+        }
+    };
+    env::set_var("SKIP_SIMULATION", "false");
+
+    Ok((StatusCode::OK, Json(ProofResponse { proof_id })))
+>>>>>>> ea89646 (feat: dummy range program (#283))
 }
 
 /// Request an aggregation proof for a set of subproofs.
