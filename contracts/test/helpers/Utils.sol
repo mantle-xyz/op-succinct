@@ -44,6 +44,9 @@ contract Utils is Test, JSONDecoder {
         bytes memory initializationParams =
             abi.encodeWithSelector(OPSuccinctL2OutputOracle.initialize.selector, initParams);
 
+        console.log("The impl are:", impl);
+        console.log("msg.sender:", msg.sender);
+
         if (executeUpgradeCall) {
             Proxy existingProxy = Proxy(payable(l2OutputOracleProxy));
             existingProxy.upgradeToAndCall(impl, initializationParams);
@@ -61,7 +64,7 @@ contract Utils is Test, JSONDecoder {
         string memory root = vm.projectRoot();
         string memory path = string.concat(root, "/", filepath);
         string memory json = vm.readFile(path);
-        bytes memory data = vm.parseJson(json);
+        bytes memory data = vm.parseJson(json, ".config");
         return abi.decode(data, (Config));
     }
 }
