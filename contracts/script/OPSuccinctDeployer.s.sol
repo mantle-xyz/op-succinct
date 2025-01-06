@@ -11,7 +11,7 @@ contract OPSuccinctDeployer is Script, Utils {
     function run() public returns (address) {
         vm.startBroadcast();
 
-        Config memory config = readJson("opsuccinctl2ooconfig.json");
+        Config memory config = readJson(string.concat("deploy-config/", vm.envString("NETWORK"), "/default.json"));
 
         // This initializes the proxy
         OPSuccinctL2OutputOracle oracleImpl = new OPSuccinctL2OutputOracle();
