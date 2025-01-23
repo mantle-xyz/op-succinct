@@ -18,6 +18,8 @@ use rkyv::{
 use sha2::{Digest, Sha256};
 use spin::mutex::Mutex;
 use std::{collections::HashMap, sync::Arc};
+use kzg_rs_bn254::EigenDABlobWitness;
+use alloy_primitives::Bytes;
 
 type LockableMap = Arc<Mutex<HashMap<[u8; 32], Vec<u8>, BytesHasherBuilder>>>;
 
@@ -103,11 +105,22 @@ struct Blob {
     kzg_proof: FixedBytes<48>,
 }
 
+/// A data structure representing a eigenda blob. This data is held in memory for future verification.
+/// This is used so that we can aggregate all separate blob elements into a single blob
+/// and verify it once, rather than verifying each of the 4096 elements separately.
+#[derive(Default)]
+struct EigenDaBlob {
+    commitment: Vec<u8>,
+    data: Vec<u8>,
+    kzg_proof: Vec<u8>,
+}
+
 impl InMemoryOracle {
     /// Verifies all data in the oracle. Once the function has been called, all data in the
     /// oracle can be trusted for the remainder of execution.
     pub fn verify(&self) -> AnyhowResult<()> {
         let mut blobs: HashMap<FixedBytes<48>, Blob> = HashMap::new();
+        let mut eigenda_blobs: HashMap<[u8; 64], EigenDaBlob> = HashMap::new();
         let cache = self.cache.lock();
 
         for (key, value) in cache.iter() {
@@ -120,7 +133,44 @@ impl InMemoryOracle {
                     assert_eq!(key, derived_key, "zkvm keccak constraint failed!");
                 }
                 PreimageKeyType::GlobalGeneric => {
-                    // TODO
+                    let blob_key_key: [u8; 32] =
+                        PreimageKey::new(key.into(), PreimageKeyType::Keccak256).into();
+                    if let Some(blob_key_data) = cache.get(&blob_key_key) {
+                        let commitment = blob_key_data[..64].try_into().unwrap();
+                        if blob_key_data.len() == 64 {
+                            eigenda_blobs
+                                .entry(commitment)
+                                .or_default()
+                                .kzg_proof
+                                .copy_from_slice(value);
+                            eigenda_blobs
+                                .entry(commitment)
+                                .or_default()
+                                .commitment
+                                .copy_from_slice(&commitment);
+                        } else {
+                            let element_idx_bytes: [u8; 8] = blob_key_data[64..].try_into().unwrap();
+                            let element_idx: u64 = u64::from_be_bytes(element_idx_bytes);
+                            // Add the 32 bytes of blob data into the correct spot in the blob.
+                            eigenda_blobs
+                                .entry(commitment)
+                                .or_default()
+                                .data
+                                .get_mut((element_idx as usize) << 5..(element_idx as usize + 1) << 5)
+                                .map(|slice| {
+                                    if slice.iter().all(|&byte| byte == 0) {
+                                        slice.copy_from_slice(value);
+                                        Ok(())
+                                    } else {
+                                        Err(anyhow!("trying to overwrite existing blob data"))
+                                    }
+                                });
+                        }
+                    } else {
+                        return Err(anyhow!("eigenda blob data not found"));
+                    }
+
+
                 }
                 PreimageKeyType::Sha256 => {
                     let derived_key: [u8; 32] = Sha256::digest(value).into();
@@ -195,6 +245,24 @@ impl InMemoryOracle {
         )
         .map_err(|e| anyhow!("blob verification failed for batch: {:?}", e))?;
         println!("cycle-tracker-report-end: blob-verification");
+
+        println!("cycle-tracker-report-start: eigen-da-blob-verification");
+        println!("Verifying {} blobs", eigenda_blobs.len());
+        for (_, value) in eigenda_blobs {
+            let mut witness = EigenDABlobWitness::new();
+            witness.eigenda_blobs.push(Bytes::copy_from_slice(value.data.as_slice()));
+            witness.commitments.push(Bytes::copy_from_slice(value.commitment.as_slice()));
+            witness.proofs.push(Bytes::copy_from_slice(value.kzg_proof.as_slice()));
+            if witness.verify() {
+                continue
+            } else {
+                return Err(anyhow!("failed to verify eigen da blob proof"));
+            }
+        }
+        println!("cycle-tracker-report-end: eigen-da-blob-verification");
+
+
+
 
         Ok(())
     }

@@ -46,3 +46,4 @@ spin.workspace = true
 
 # kzg
 kzg-rs.workspace = true
+kzg-rs-bn254.workspace = true
