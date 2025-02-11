@@ -18,8 +18,12 @@ use rkyv::{
 use sha2::{Digest, Sha256};
 use spin::mutex::Mutex;
 use std::{collections::HashMap, sync::Arc};
-use kzg_rs_bn254::EigenDABlobWitness;
 use alloy_primitives::Bytes;
+use ark_bn254::{Fq, G1Affine, G1Projective};
+use rust_kzg_bn254_verifier::batch::verify_blob_kzg_proof_batch;
+use rust_kzg_bn254_primitives::blob::Blob as EigenBlob;
+use ark_ff::PrimeField;
+use rust_kzg_bn254_verifier::batch;
 
 type LockableMap = Arc<Mutex<HashMap<[u8; 32], Vec<u8>, BytesHasherBuilder>>>;
 
@@ -248,17 +252,25 @@ impl InMemoryOracle {
 
         println!("cycle-tracker-report-start: eigen-da-blob-verification");
         println!("Verifying {} blobs", eigenda_blobs.len());
+
+
+
+        let mut eigen_blobs: Vec<EigenBlob> = Vec::new();
+        let mut eigen_commitments: Vec<G1Affine> = Vec::new();
+        let mut eigen_proofs: Vec<G1Affine> = Vec::new();
         for (_, value) in eigenda_blobs {
-            let mut witness = EigenDABlobWitness::new();
-            witness.eigenda_blobs.push(Bytes::copy_from_slice(value.data.as_slice()));
-            witness.commitments.push(Bytes::copy_from_slice(value.commitment.as_slice()));
-            witness.proofs.push(Bytes::copy_from_slice(value.kzg_proof.as_slice()));
-            if witness.verify() {
-                continue
-            } else {
-                return Err(anyhow!("failed to verify eigen da blob proof"));
-            }
+            eigen_blobs.push(EigenBlob::from(value.data));
+            let x = Fq::from_be_bytes_mod_order(&value.commitment[..32]);
+            let y = Fq::from_be_bytes_mod_order(&value.commitment[32..64]);
+            eigen_commitments.push(G1Affine::new(x, y));
+            let p_x = Fq::from_be_bytes_mod_order(&value.kzg_proof[..32]);
+            let p_y = Fq::from_be_bytes_mod_order(&value.kzg_proof[32..64]);
+            eigen_proofs.push(G1Affine::new(p_x, p_y));
         }
+        //Verify EigenDa blob
+        verify_blob_kzg_proof_batch(&eigen_blobs, &eigen_commitments, &eigen_proofs)
+            .map_err(|e| anyhow!("blob verification failed for batch: {:?}", e))?;
+
         println!("cycle-tracker-report-end: eigen-da-blob-verification");
 
 
