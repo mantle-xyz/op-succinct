@@ -52,7 +52,7 @@ dependencies = [
  "cfg-if",
  "once_cell",
  "version_check",
- "zerocopy",
+ "zerocopy 0.7.35",
 ]
 
 [[package]]
@@ -304,7 +304,7 @@ dependencies = [
  "keccak-asm",
  "paste",
  "proptest",
- "rand",
+ "rand 0.8.5",
  "ruint",
  "rustc-hash 2.1.1",
  "serde",
@@ -543,7 +543,7 @@ dependencies = [
  "alloy-signer",
  "async-trait",
  "k256",
- "rand",
+ "rand 0.8.5",
  "thiserror 2.0.11",
 ]
 
@@ -1014,7 +1014,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1df2c09229cbc5a028b1d70e00fdb2acee28b1055dfb5ca73eea49c5a25c4e7c"
 dependencies = [
  "num-traits",
- "rand",
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -1024,7 +1024,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94893f1e0c6eeab764ade8dc4c0db24caf4fe7cbbaafc0eba0a9030f447b5185"
 dependencies = [
  "num-traits",
- "rand",
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -1034,7 +1034,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "246a225cc6131e9ee4f24619af0f19d67761fff15d7ccc22e42b80846e69449a"
 dependencies = [
  "num-traits",
- "rand",
+ "rand 0.8.5",
  "rayon",
 ]
 
@@ -1207,7 +1207,7 @@ dependencies = [
  "getrandom 0.2.15",
  "instant",
  "pin-project-lite",
- "rand",
+ "rand 0.8.5",
  "tokio",
 ]
 
@@ -1377,7 +1377,7 @@ dependencies = [
  "ff 0.12.1",
  "group 0.12.1",
  "pairing 0.22.0",
- "rand_core",
+ "rand_core 0.6.4",
  "subtle",
 ]
 
@@ -1820,7 +1820,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0dc92fb57ca44df6db8059111ab3af99a63d5d0f8375d9972e319a379c6bab76"
 dependencies = [
  "generic-array 0.14.7",
- "rand_core",
+ "rand_core 0.6.4",
  "subtle",
  "zeroize",
 ]
@@ -2130,7 +2130,7 @@ checksum = "9ac1e888d6830712d565b2f3a974be3200be9296bc1b03db8251a4cbf18a4a34"
 dependencies = [
  "digest 0.10.7",
  "futures",
- "rand",
+ "rand 0.8.5",
  "reqwest",
  "thiserror 1.0.69",
  "tokio",
@@ -2176,18 +2176,15 @@ dependencies = [
 [[package]]
 name = "eigen-da"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt#766cc28b8f248d74c51fe02655ea1f69249c2560"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
 dependencies = [
  "alloy-primitives",
- "anyhow",
- "async-trait",
+ "alloy-rlp",
  "bytes",
  "hex",
  "kona-derive",
- "prost",
- "reqwest",
- "rlp 0.6.1",
- "tokio",
+ "rust-kzg-bn254-primitives 0.1.1",
+ "tracing",
 ]
 
 [[package]]
@@ -2217,7 +2214,7 @@ dependencies = [
  "hkdf",
  "pem-rfc7468",
  "pkcs8",
- "rand_core",
+ "rand_core 0.6.4",
  "sec1",
  "subtle",
  "zeroize",
@@ -2424,7 +2421,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d013fc25338cc558c5c2cfbad646908fb23591e2404481826742b651c9af7160"
 dependencies = [
  "bitvec",
- "rand_core",
+ "rand_core 0.6.4",
  "subtle",
 ]
 
@@ -2437,7 +2434,7 @@ dependencies = [
  "bitvec",
  "byteorder",
  "ff_derive",
- "rand_core",
+ "rand_core 0.6.4",
  "subtle",
 ]
 
@@ -2464,7 +2461,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "835c052cb0c08c1acf6ffd71c022172e18723949c8282f2b9f27efbc51e64534"
 dependencies = [
  "byteorder",
- "rand",
+ "rand 0.8.5",
  "rustc-hex",
  "static_assertions",
 ]
@@ -2678,7 +2675,7 @@ checksum = "5dfbfb3a6cfbd390d5c9564ab283a0349b9b9fcd46a706c1eb10e0db70bfbac7"
 dependencies = [
  "ff 0.12.1",
  "memuse",
- "rand_core",
+ "rand_core 0.6.4",
  "subtle",
 ]
 
@@ -2689,7 +2686,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0f9ef7462f7c099f518d754361858f86d8a07af53ba9af0fe635bbccb151a63"
 dependencies = [
  "ff 0.13.0",
- "rand_core",
+ "rand_core 0.6.4",
  "subtle",
 ]
 
@@ -2737,7 +2734,7 @@ dependencies = [
  "ff 0.12.1",
  "group 0.12.1",
  "pasta_curves 0.4.1",
- "rand_core",
+ "rand_core 0.6.4",
  "rayon",
 ]
 
@@ -2813,6 +2810,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
  "digest 0.10.7",
+]
+
+[[package]]
+name = "hokulea-cryptography"
+version = "0.1.0"
+source = "git+https://github.com/Layr-Labs/hokulea.git?rev=14aad446793b1636fb7029ec6b30637baa105549#14aad446793b1636fb7029ec6b30637baa105549"
+dependencies = [
+ "alloy-primitives",
+ "ark-bn254",
+ "ark-ff 0.5.0",
+ "num",
+ "rust-kzg-bn254-primitives 0.1.0",
+ "rust-kzg-bn254-prover",
+ "rust-kzg-bn254-verifier 0.1.0 (git+https://github.com/Layr-Labs/rust-kzg-bn254?rev=b3e532e9aad533009849755d5ad7b9578a16bfb2)",
+ "thiserror 2.0.11",
+ "tracing",
 ]
 
 [[package]]
@@ -3283,7 +3296,7 @@ dependencies = [
  "bls12_381",
  "ff 0.12.1",
  "group 0.12.1",
- "rand_core",
+ "rand_core 0.6.4",
  "subtle",
 ]
 
@@ -3324,7 +3337,7 @@ dependencies = [
 [[package]]
 name = "kona-client"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt#766cc28b8f248d74c51fe02655ea1f69249c2560"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3357,7 +3370,7 @@ dependencies = [
 [[package]]
 name = "kona-derive"
 version = "0.2.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt#766cc28b8f248d74c51fe02655ea1f69249c2560"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3382,7 +3395,7 @@ dependencies = [
 [[package]]
 name = "kona-driver"
 version = "0.2.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt#766cc28b8f248d74c51fe02655ea1f69249c2560"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",
@@ -3402,7 +3415,7 @@ dependencies = [
 [[package]]
 name = "kona-executor"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt#766cc28b8f248d74c51fe02655ea1f69249c2560"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3421,7 +3434,7 @@ dependencies = [
 [[package]]
 name = "kona-host"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt#766cc28b8f248d74c51fe02655ea1f69249c2560"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3437,6 +3450,7 @@ dependencies = [
  "async-trait",
  "clap",
  "eigen-da",
+ "hokulea-cryptography",
  "kona-client",
  "kona-derive",
  "kona-mpt",
@@ -3461,7 +3475,7 @@ dependencies = [
 [[package]]
 name = "kona-mpt"
 version = "0.1.1"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt#766cc28b8f248d74c51fe02655ea1f69249c2560"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -3473,7 +3487,7 @@ dependencies = [
 [[package]]
 name = "kona-preimage"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt#766cc28b8f248d74c51fe02655ea1f69249c2560"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
 dependencies = [
  "alloy-primitives",
  "async-channel",
@@ -3487,13 +3501,14 @@ dependencies = [
 [[package]]
 name = "kona-proof"
 version = "0.2.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt#766cc28b8f248d74c51fe02655ea1f69249c2560"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
  "alloy-primitives",
  "alloy-rlp",
  "async-trait",
+ "eigen-da",
  "kona-derive",
  "kona-driver",
  "kona-executor",
@@ -3515,7 +3530,7 @@ dependencies = [
 [[package]]
 name = "kona-providers-alloy"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt#766cc28b8f248d74c51fe02655ea1f69249c2560"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3535,12 +3550,13 @@ dependencies = [
  "reqwest",
  "serde",
  "thiserror 2.0.11",
+ "tokio",
 ]
 
 [[package]]
 name = "kona-std-fpvm"
 version = "0.1.1"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt#766cc28b8f248d74c51fe02655ea1f69249c2560"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
 dependencies = [
  "async-trait",
  "cfg-if",
@@ -3553,7 +3569,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm-proc"
 version = "0.1.1"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt#766cc28b8f248d74c51fe02655ea1f69249c2560"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -4177,8 +4193,8 @@ dependencies = [
  "op-alloy-rpc-types-engine",
  "revm",
  "rkyv",
- "rust-kzg-bn254-primitives",
- "rust-kzg-bn254-verifier",
+ "rust-kzg-bn254-primitives 0.1.1",
+ "rust-kzg-bn254-verifier 0.1.0 (git+https://github.com/Layr-Labs/rust-kzg-bn254?branch=master)",
  "serde",
  "serde_json",
  "sha2",
@@ -4411,7 +4427,7 @@ dependencies = [
  "p3-mds",
  "p3-poseidon2",
  "p3-symmetric",
- "rand",
+ "rand 0.8.5",
  "serde",
 ]
 
@@ -4426,7 +4442,7 @@ dependencies = [
  "p3-field",
  "p3-poseidon2",
  "p3-symmetric",
- "rand",
+ "rand 0.8.5",
  "serde",
 ]
 
@@ -4481,7 +4497,7 @@ dependencies = [
  "num-bigint 0.4.6",
  "num-traits",
  "p3-util",
- "rand",
+ "rand 0.8.5",
  "serde",
 ]
 
@@ -4539,7 +4555,7 @@ dependencies = [
  "p3-field",
  "p3-maybe-rayon",
  "p3-util",
- "rand",
+ "rand 0.8.5",
  "serde",
  "tracing",
 ]
@@ -4565,7 +4581,7 @@ dependencies = [
  "p3-matrix",
  "p3-symmetric",
  "p3-util",
- "rand",
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -4595,7 +4611,7 @@ dependencies = [
  "p3-field",
  "p3-mds",
  "p3-symmetric",
- "rand",
+ "rand 0.8.5",
  "serde",
 ]
 
@@ -4723,7 +4739,7 @@ dependencies = [
  "ff 0.12.1",
  "group 0.12.1",
  "lazy_static",
- "rand",
+ "rand 0.8.5",
  "static_assertions",
  "subtle",
 ]
@@ -4738,7 +4754,7 @@ dependencies = [
  "ff 0.13.0",
  "group 0.13.0",
  "lazy_static",
- "rand",
+ "rand 0.8.5",
  "static_assertions",
  "subtle",
 ]
@@ -4857,7 +4873,7 @@ version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77957b295656769bb8ad2b6a6b09d897d94f05c41b069aede1fcdaa675eaea04"
 dependencies = [
- "zerocopy",
+ "zerocopy 0.7.35",
 ]
 
 [[package]]
@@ -4950,8 +4966,8 @@ dependencies = [
  "bitflags",
  "lazy_static",
  "num-traits",
- "rand",
- "rand_chacha",
+ "rand 0.8.5",
+ "rand_chacha 0.3.1",
  "rand_xorshift",
  "regex-syntax 0.8.5",
  "rusty-fork",
@@ -5034,7 +5050,7 @@ checksum = "a2fe5ef3495d7d2e377ff17b1a8ce2ee2ec2a18cde8b6ad6619d65d0701c135d"
 dependencies = [
  "bytes",
  "getrandom 0.2.15",
- "rand",
+ "rand 0.8.5",
  "ring",
  "rustc-hash 2.1.1",
  "rustls",
@@ -5091,9 +5107,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
  "libc",
- "rand_chacha",
- "rand_core",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
  "serde",
+]
+
+[[package]]
+name = "rand"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3779b94aeb87e8bd4e834cee3650289ee9e0d5677f976ecdb6d219e5f4f6cd94"
+dependencies = [
+ "rand_chacha 0.9.0",
+ "rand_core 0.9.1",
+ "zerocopy 0.8.18",
 ]
 
 [[package]]
@@ -5103,7 +5130,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
 dependencies = [
  "ppv-lite86",
- "rand_core",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.9.1",
 ]
 
 [[package]]
@@ -5116,12 +5153,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_core"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a88e0da7a2c97baa202165137c158d0a2e824ac465d13d81046727b34cb247d3"
+dependencies = [
+ "getrandom 0.3.1",
+ "zerocopy 0.8.18",
+]
+
+[[package]]
 name = "rand_xorshift"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d25bf25ec5ae4a3f1b92f929810509a2f53d7dca2f50b794ff57e3face536c8f"
 dependencies = [
- "rand_core",
+ "rand_core 0.6.4",
 ]
 
 [[package]]
@@ -5511,7 +5558,7 @@ dependencies = [
  "parity-scale-codec",
  "primitive-types",
  "proptest",
- "rand",
+ "rand 0.8.5",
  "rlp 0.5.2",
  "ruint-macro",
  "serde",
@@ -5524,6 +5571,22 @@ name = "ruint-macro"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
+
+[[package]]
+name = "rust-kzg-bn254-primitives"
+version = "0.1.0"
+source = "git+https://github.com/Layr-Labs/rust-kzg-bn254?rev=b3e532e9aad533009849755d5ad7b9578a16bfb2#b3e532e9aad533009849755d5ad7b9578a16bfb2"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff 0.5.0",
+ "ark-poly",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0",
+ "num-traits",
+ "sha2",
+ "thiserror 2.0.11",
+]
 
 [[package]]
 name = "rust-kzg-bn254-primitives"
@@ -5542,6 +5605,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-kzg-bn254-prover"
+version = "0.1.0"
+source = "git+https://github.com/Layr-Labs/rust-kzg-bn254?rev=b3e532e9aad533009849755d5ad7b9578a16bfb2#b3e532e9aad533009849755d5ad7b9578a16bfb2"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff 0.5.0",
+ "ark-poly",
+ "ark-std 0.5.0",
+ "crossbeam-channel",
+ "num-traits",
+ "num_cpus",
+ "rayon",
+ "rust-kzg-bn254-primitives 0.1.0",
+]
+
+[[package]]
 name = "rust-kzg-bn254-verifier"
 version = "0.1.0"
 source = "git+https://github.com/Layr-Labs/rust-kzg-bn254?branch=master#df1ac7ad835894a42dd9d384c92c59d647a4e334"
@@ -5550,7 +5630,19 @@ dependencies = [
  "ark-ec",
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
- "rust-kzg-bn254-primitives",
+ "rust-kzg-bn254-primitives 0.1.1",
+]
+
+[[package]]
+name = "rust-kzg-bn254-verifier"
+version = "0.1.0"
+source = "git+https://github.com/Layr-Labs/rust-kzg-bn254?rev=b3e532e9aad533009849755d5ad7b9578a16bfb2#b3e532e9aad533009849755d5ad7b9578a16bfb2"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff 0.5.0",
+ "ark-serialize 0.5.0",
+ "rust-kzg-bn254-primitives 0.1.0",
 ]
 
 [[package]]
@@ -5762,7 +5854,7 @@ version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9465315bc9d4566e1724f0fffcbcc446268cb522e60f9a27bcded6b19c108113"
 dependencies = [
- "rand",
+ "rand 0.8.5",
  "secp256k1-sys",
 ]
 
@@ -6053,7 +6145,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "digest 0.10.7",
- "rand_core",
+ "rand_core 0.6.4",
 ]
 
 [[package]]
@@ -6147,7 +6239,7 @@ dependencies = [
  "p3-field",
  "p3-maybe-rayon",
  "p3-util",
- "rand",
+ "rand 0.8.5",
  "rrs-succinct",
  "serde",
  "serde_json",
@@ -6197,7 +6289,7 @@ dependencies = [
  "p3-uni-stark",
  "p3-util",
  "pathdiff",
- "rand",
+ "rand 0.8.5",
  "rayon",
  "rayon-scan",
  "serde",
@@ -6364,7 +6456,7 @@ dependencies = [
  "p3-symmetric",
  "p3-uni-stark",
  "p3-util",
- "rand",
+ "rand 0.8.5",
  "rayon",
  "serde",
  "sp1-core-executor",
@@ -6430,7 +6522,7 @@ dependencies = [
  "p3-symmetric",
  "p3-util",
  "pathdiff",
- "rand",
+ "rand 0.8.5",
  "serde",
  "sp1-core-machine",
  "sp1-derive",
@@ -6575,7 +6667,7 @@ dependencies = [
  "libm",
  "p3-baby-bear",
  "p3-field",
- "rand",
+ "rand 0.8.5",
  "sha2",
  "sp1-lib",
  "sp1-primitives",
@@ -6591,7 +6683,7 @@ dependencies = [
  "ff 0.13.0",
  "group 0.13.0",
  "pairing 0.23.0",
- "rand_core",
+ "rand_core 0.6.4",
  "sp1-lib",
  "subtle",
 ]
@@ -6687,7 +6779,7 @@ dependencies = [
  "crunchy",
  "lazy_static",
  "num-bigint 0.4.6",
- "rand",
+ "rand 0.8.5",
  "rustc-hex",
  "sp1-lib",
 ]
@@ -7022,9 +7114,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
-version = "0.26.1"
+version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be4bf6fecd69fcdede0ec680aaf474cdab988f9de6bc73d3758f0160e3b7025a"
+checksum = "7a9daff607c6d2bf6c16fd681ccb7eecc83e4e2cdc1ca067ffaadfca5de7f084"
 dependencies = [
  "futures-util",
  "log",
@@ -7138,7 +7230,7 @@ dependencies = [
  "indexmap 1.9.3",
  "pin-project",
  "pin-project-lite",
- "rand",
+ "rand 0.8.5",
  "slab",
  "tokio",
  "tokio-util",
@@ -7286,17 +7378,16 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tungstenite"
-version = "0.26.1"
+version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413083a99c579593656008130e29255e54dcaae495be556cc26888f211648c24"
+checksum = "4793cb5e56680ecbb1d843515b23b6de9a75eb04b66643e256a396d43be33c13"
 dependencies = [
- "byteorder",
  "bytes",
  "data-encoding",
  "http",
  "httparse",
  "log",
- "rand",
+ "rand 0.9.0",
  "rustls",
  "rustls-pki-types",
  "sha1",
@@ -7996,7 +8087,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b9b4fd18abc82b8136838da5d50bae7bdea537c574d8dc1a34ed098d6c166f0"
 dependencies = [
  "byteorder",
- "zerocopy-derive",
+ "zerocopy-derive 0.7.35",
+]
+
+[[package]]
+name = "zerocopy"
+version = "0.8.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79386d31a42a4996e3336b0919ddb90f81112af416270cff95b5f5af22b839c2"
+dependencies = [
+ "zerocopy-derive 0.8.18",
 ]
 
 [[package]]
@@ -8004,6 +8104,17 @@ name = "zerocopy-derive"
 version = "0.7.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa4f8080344d4671fb4e831a13ad1e68092748387dfc4f55e356242fae12ce3e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.98",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.8.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76331675d372f91bf8d17e13afbd5fe639200b73d01f0fc748bb059f9cca2db7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8093,7 +8204,7 @@ dependencies = [
  "jubjub",
  "lazy_static",
  "pasta_curves 0.5.1",
- "rand",
+ "rand 0.8.5",
  "serde",
  "sha2",
  "sha3",
