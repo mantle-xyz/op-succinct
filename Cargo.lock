@@ -72,13 +72,13 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alloy-chains"
-version = "0.1.61"
+version = "0.1.62"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a754dbb534198644cb8355b8c23f4aaecf03670fb9409242be1fa1e25897ee9"
+checksum = "1317fde6d2d3cd6082a15144c23230697a5e1a91a27d1facc146715d3b4b2046"
 dependencies = [
  "alloy-primitives",
  "num_enum 0.7.3",
- "strum",
+ "strum 0.27.1",
 ]
 
 [[package]]
@@ -482,7 +482,7 @@ dependencies = [
  "ethereum_ssz",
  "ethereum_ssz_derive",
  "serde",
- "strum",
+ "strum 0.26.3",
 ]
 
 [[package]]
@@ -1308,18 +1308,18 @@ dependencies = [
 
 [[package]]
 name = "bit-set"
-version = "0.5.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0700ddab506f33b20a03b13996eccd309a48e5ff77d0d95926aa0210fb4e95f1"
+checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
 dependencies = [
  "bit-vec",
 ]
 
 [[package]]
 name = "bit-vec"
-version = "0.6.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb"
+checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
 
 [[package]]
 name = "bitflags"
@@ -2176,7 +2176,7 @@ dependencies = [
 [[package]]
 name = "eigen-da"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#435a4a9d87ad729bf82a93542b42731aa612b932"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -2692,9 +2692,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.7"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccae279728d634d083c00f6099cb58f01cc99c145b84b8be2f6c74618d79922e"
+checksum = "5017294ff4bb30944501348f6f8e42e6ad28f42c8bbef7a74029aff064a4e3c2"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -3337,7 +3337,7 @@ dependencies = [
 [[package]]
 name = "kona-client"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#435a4a9d87ad729bf82a93542b42731aa612b932"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3370,7 +3370,7 @@ dependencies = [
 [[package]]
 name = "kona-derive"
 version = "0.2.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#435a4a9d87ad729bf82a93542b42731aa612b932"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3395,7 +3395,7 @@ dependencies = [
 [[package]]
 name = "kona-driver"
 version = "0.2.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#435a4a9d87ad729bf82a93542b42731aa612b932"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",
@@ -3415,7 +3415,7 @@ dependencies = [
 [[package]]
 name = "kona-executor"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#435a4a9d87ad729bf82a93542b42731aa612b932"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3434,7 +3434,7 @@ dependencies = [
 [[package]]
 name = "kona-host"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#435a4a9d87ad729bf82a93542b42731aa612b932"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3475,7 +3475,7 @@ dependencies = [
 [[package]]
 name = "kona-mpt"
 version = "0.1.1"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#435a4a9d87ad729bf82a93542b42731aa612b932"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -3487,7 +3487,7 @@ dependencies = [
 [[package]]
 name = "kona-preimage"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#435a4a9d87ad729bf82a93542b42731aa612b932"
 dependencies = [
  "alloy-primitives",
  "async-channel",
@@ -3501,7 +3501,7 @@ dependencies = [
 [[package]]
 name = "kona-proof"
 version = "0.2.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#435a4a9d87ad729bf82a93542b42731aa612b932"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3530,7 +3530,7 @@ dependencies = [
 [[package]]
 name = "kona-providers-alloy"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#435a4a9d87ad729bf82a93542b42731aa612b932"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3556,7 +3556,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm"
 version = "0.1.1"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#435a4a9d87ad729bf82a93542b42731aa612b932"
 dependencies = [
  "async-trait",
  "cfg-if",
@@ -3569,7 +3569,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm-proc"
 version = "0.1.1"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#f6dde5602b521a6f5696a347e6df4fde3123f6eb"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#435a4a9d87ad729bf82a93542b42731aa612b932"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -4957,9 +4957,9 @@ dependencies = [
 
 [[package]]
 name = "proptest"
-version = "1.5.0"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4c2511913b88df1637da85cc8d96ec8e43a3f8bb8ccb71ee1ac240d6f3df58d"
+checksum = "14cae93065090804185d3b75f0bf93b8eeda30c7a9b4a33d3bdb3988d6229e50"
 dependencies = [
  "bit-set",
  "bit-vec",
@@ -5542,9 +5542,9 @@ dependencies = [
 
 [[package]]
 name = "ruint"
-version = "1.12.4"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5ef8fb1dd8de3870cb8400d51b4c2023854bbafd5431a3ac7e7317243e22d2f"
+checksum = "825df406ec217a8116bd7b06897c6cc8f65ffefc15d030ae2c9540acc9ed50b6"
 dependencies = [
  "alloy-rlp",
  "ark-ff 0.3.0",
@@ -6246,8 +6246,8 @@ dependencies = [
  "sp1-curves",
  "sp1-primitives",
  "sp1-stark",
- "strum",
- "strum_macros",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
  "subenum",
  "thiserror 1.0.69",
  "tiny-keccak",
@@ -6302,8 +6302,8 @@ dependencies = [
  "sp1-primitives",
  "sp1-stark",
  "static_assertions",
- "strum",
- "strum_macros",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
@@ -6608,8 +6608,8 @@ dependencies = [
  "sp1-primitives",
  "sp1-prover",
  "sp1-stark",
- "strum",
- "strum_macros",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -6647,8 +6647,8 @@ dependencies = [
  "serde",
  "sp1-derive",
  "sp1-primitives",
- "strum",
- "strum_macros",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
  "sysinfo 0.30.13",
  "tracing",
 ]
@@ -6740,7 +6740,16 @@ version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
 dependencies = [
- "strum_macros",
+ "strum_macros 0.26.4",
+]
+
+[[package]]
+name = "strum"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f64def088c51c9510a8579e3c5d67c65349dcf755e5479ad3d010aa6454e2c32"
+dependencies = [
+ "strum_macros 0.27.1",
 ]
 
 [[package]]
@@ -6748,6 +6757,19 @@ name = "strum_macros"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 2.0.98",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c77a8c5abcaf0f9ce05d62342b7d298c346515365c36b673df4ebe3ced01fde8"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -7449,9 +7471,9 @@ checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
 
 [[package]]
 name = "unicode-ident"
-version = "1.0.16"
+version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a210d160f08b701c8721ba1c726c11662f877ea6b7094007e1ca9a1041945034"
+checksum = "00e2473a93778eb0bad35909dff6a10d28e63f792f16ed15e404fca9d5eeedbe"
 
 [[package]]
 name = "unicode-width"
