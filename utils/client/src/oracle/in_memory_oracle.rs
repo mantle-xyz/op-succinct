@@ -196,19 +196,24 @@ impl InMemoryOracle {
                         let element_idx_bytes: [u8; 8] = blob_key_data[64..].try_into().unwrap();
                         let element_idx: u64 = u64::from_be_bytes(element_idx_bytes);
                         // Add the 32 bytes of blob data into the correct spot in the blob.
+                        // eigenda_blobs
+                        //     .entry(commitment)
+                        //     .or_default()
+                        //     .data
+                        //     .get_mut((element_idx as usize) << 5..(element_idx as usize + 1) << 5)
+                        //     .map(|slice| {
+                        //         if slice.iter().all(|&byte| byte == 0) {
+                        //             slice.copy_from_slice(value);
+                        //             Ok(())
+                        //         } else {
+                        //             Err(anyhow!("trying to overwrite existing blob data"))
+                        //         }
+                        //     });
                         eigenda_blobs
                             .entry(commitment)
                             .or_default()
                             .data
-                            .get_mut((element_idx as usize) << 5..(element_idx as usize + 1) << 5)
-                            .map(|slice| {
-                                if slice.iter().all(|&byte| byte == 0) {
-                                    slice.copy_from_slice(value);
-                                    Ok(())
-                                } else {
-                                    Err(anyhow!("trying to overwrite existing blob data"))
-                                }
-                            });
+                            .copy_from_slice(value);
                     }
                 } else {
                     return Err(anyhow!("eigenda blob data not found"));
