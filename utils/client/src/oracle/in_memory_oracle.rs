@@ -211,8 +211,6 @@ impl InMemoryOracle {
                                 }
                             });
                     }
-                } else {
-                    return Err(anyhow!("eigenda blob data not found,{:?}", *key));
                 }
             } else {
                 verify_preimage(&preimage_key, value)?;
