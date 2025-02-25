@@ -2176,7 +2176,7 @@ dependencies = [
 [[package]]
 name = "eigen-da"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#d7af185baa4fa49b20428ee1fa5931240c4a2195"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -3321,7 +3321,7 @@ dependencies = [
 [[package]]
 name = "kona-client"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#d7af185baa4fa49b20428ee1fa5931240c4a2195"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3354,7 +3354,7 @@ dependencies = [
 [[package]]
 name = "kona-derive"
 version = "0.2.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#d7af185baa4fa49b20428ee1fa5931240c4a2195"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3379,7 +3379,7 @@ dependencies = [
 [[package]]
 name = "kona-driver"
 version = "0.2.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#d7af185baa4fa49b20428ee1fa5931240c4a2195"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",
@@ -3399,7 +3399,7 @@ dependencies = [
 [[package]]
 name = "kona-executor"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#d7af185baa4fa49b20428ee1fa5931240c4a2195"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3418,7 +3418,7 @@ dependencies = [
 [[package]]
 name = "kona-host"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#d7af185baa4fa49b20428ee1fa5931240c4a2195"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3463,7 +3463,7 @@ dependencies = [
 [[package]]
 name = "kona-mpt"
 version = "0.1.1"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#d7af185baa4fa49b20428ee1fa5931240c4a2195"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -3475,7 +3475,7 @@ dependencies = [
 [[package]]
 name = "kona-preimage"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#d7af185baa4fa49b20428ee1fa5931240c4a2195"
 dependencies = [
  "alloy-primitives",
  "async-channel",
@@ -3489,7 +3489,7 @@ dependencies = [
 [[package]]
 name = "kona-proof"
 version = "0.2.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#d7af185baa4fa49b20428ee1fa5931240c4a2195"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3518,7 +3518,7 @@ dependencies = [
 [[package]]
 name = "kona-providers-alloy"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#d7af185baa4fa49b20428ee1fa5931240c4a2195"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3544,7 +3544,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm"
 version = "0.1.1"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#d7af185baa4fa49b20428ee1fa5931240c4a2195"
 dependencies = [
  "async-trait",
  "cfg-if",
@@ -3557,7 +3557,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm-proc"
 version = "0.1.1"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#d7af185baa4fa49b20428ee1fa5931240c4a2195"
 dependencies = [
  "anyhow",
  "cfg-if",

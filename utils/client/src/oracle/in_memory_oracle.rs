@@ -187,11 +187,12 @@ impl InMemoryOracle {
                             .or_default()
                             .kzg_proof
                             .copy_from_slice(value);
+                    } else if blob_key_data.len() == 65 {
                         eigenda_blobs
                             .entry(commitment)
                             .or_default()
                             .commitment
-                            .copy_from_slice(&commitment);
+                            .copy_from_slice(value);
                     } else {
                         let element_idx_bytes: [u8; 8] = blob_key_data[64..].try_into().unwrap();
                         let element_idx: u64 = u64::from_be_bytes(element_idx_bytes);
