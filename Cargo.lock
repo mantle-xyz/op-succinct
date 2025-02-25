@@ -72,9 +72,9 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alloy-chains"
-version = "0.1.62"
+version = "0.1.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1317fde6d2d3cd6082a15144c23230697a5e1a91a27d1facc146715d3b4b2046"
+checksum = "996564c1782285d4e0299c29b318bc74f24b1d7f456cef3e040810b061ee3256"
 dependencies = [
  "alloy-primitives",
  "num_enum 0.7.3",
@@ -1600,9 +1600,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.30"
+version = "4.5.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92b7b18d71fad5313a1e320fa9897994228ce274b60faa4d694fe0ea89cd9e6d"
+checksum = "027bb0d98429ae334a8698531da7077bdf906419543a35a55c2cb1b66437d767"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1610,9 +1610,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.30"
+version = "4.5.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a35db2071778a7344791a4fb4f95308b5673d219dee3ae348b86642574ecc90c"
+checksum = "5589e0cba072e0f3d23791efac0fd8627b49c829c196a492e88168e6a669d863"
 dependencies = [
  "anstream",
  "anstyle",
@@ -2176,14 +2176,14 @@ dependencies = [
 [[package]]
 name = "eigen-da"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bef70668d397bff6320d2887cf80a9a770d58d0e"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
  "bytes",
  "hex",
  "kona-derive",
- "rust-kzg-bn254-primitives 0.1.1",
+ "rust-kzg-bn254-primitives 0.1.0",
  "tracing",
 ]
 
@@ -2813,22 +2813,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hokulea-cryptography"
-version = "0.1.0"
-source = "git+https://github.com/Layr-Labs/hokulea.git?rev=14aad446793b1636fb7029ec6b30637baa105549#14aad446793b1636fb7029ec6b30637baa105549"
-dependencies = [
- "alloy-primitives",
- "ark-bn254",
- "ark-ff 0.5.0",
- "num",
- "rust-kzg-bn254-primitives 0.1.0",
- "rust-kzg-bn254-prover",
- "rust-kzg-bn254-verifier 0.1.0 (git+https://github.com/Layr-Labs/rust-kzg-bn254?rev=b3e532e9aad533009849755d5ad7b9578a16bfb2)",
- "thiserror 2.0.11",
- "tracing",
-]
-
-[[package]]
 name = "http"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3337,7 +3321,7 @@ dependencies = [
 [[package]]
 name = "kona-client"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bef70668d397bff6320d2887cf80a9a770d58d0e"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3370,7 +3354,7 @@ dependencies = [
 [[package]]
 name = "kona-derive"
 version = "0.2.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bef70668d397bff6320d2887cf80a9a770d58d0e"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3395,7 +3379,7 @@ dependencies = [
 [[package]]
 name = "kona-driver"
 version = "0.2.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bef70668d397bff6320d2887cf80a9a770d58d0e"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",
@@ -3415,7 +3399,7 @@ dependencies = [
 [[package]]
 name = "kona-executor"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bef70668d397bff6320d2887cf80a9a770d58d0e"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3434,7 +3418,7 @@ dependencies = [
 [[package]]
 name = "kona-host"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bef70668d397bff6320d2887cf80a9a770d58d0e"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3447,10 +3431,11 @@ dependencies = [
  "alloy-serde",
  "alloy-transport-http",
  "anyhow",
+ "ark-bn254",
+ "ark-ff 0.5.0",
  "async-trait",
  "clap",
  "eigen-da",
- "hokulea-cryptography",
  "kona-client",
  "kona-derive",
  "kona-mpt",
@@ -3458,6 +3443,7 @@ dependencies = [
  "kona-proof",
  "kona-providers-alloy",
  "kona-std-fpvm",
+ "num",
  "op-alloy-genesis",
  "op-alloy-network",
  "op-alloy-protocol",
@@ -3465,6 +3451,8 @@ dependencies = [
  "reqwest",
  "revm",
  "rocksdb",
+ "rust-kzg-bn254-primitives 0.1.0",
+ "rust-kzg-bn254-prover",
  "serde",
  "serde_json",
  "tokio",
@@ -3475,7 +3463,7 @@ dependencies = [
 [[package]]
 name = "kona-mpt"
 version = "0.1.1"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bef70668d397bff6320d2887cf80a9a770d58d0e"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -3487,7 +3475,7 @@ dependencies = [
 [[package]]
 name = "kona-preimage"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bef70668d397bff6320d2887cf80a9a770d58d0e"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
 dependencies = [
  "alloy-primitives",
  "async-channel",
@@ -3501,7 +3489,7 @@ dependencies = [
 [[package]]
 name = "kona-proof"
 version = "0.2.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bef70668d397bff6320d2887cf80a9a770d58d0e"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3530,7 +3518,7 @@ dependencies = [
 [[package]]
 name = "kona-providers-alloy"
 version = "0.1.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bef70668d397bff6320d2887cf80a9a770d58d0e"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -3556,7 +3544,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm"
 version = "0.1.1"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bef70668d397bff6320d2887cf80a9a770d58d0e"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
 dependencies = [
  "async-trait",
  "cfg-if",
@@ -3569,7 +3557,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm-proc"
 version = "0.1.1"
-source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bef70668d397bff6320d2887cf80a9a770d58d0e"
+source = "git+https://github.com/mantle-xyz/kona?branch=mantle-kona-mpt-verify#bea463cdf89d6b2e9d51cf2280aa030c22dd4027"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -4194,7 +4182,7 @@ dependencies = [
  "revm",
  "rkyv",
  "rust-kzg-bn254-primitives 0.1.1",
- "rust-kzg-bn254-verifier 0.1.0 (git+https://github.com/Layr-Labs/rust-kzg-bn254?branch=master)",
+ "rust-kzg-bn254-verifier",
  "serde",
  "serde_json",
  "sha2",
@@ -4857,9 +4845,9 @@ checksum = "953ec861398dccce10c670dfeaf3ec4911ca479e9c02154b3a215178c5f566f2"
 
 [[package]]
 name = "portable-atomic"
-version = "1.10.0"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "280dc24453071f1b63954171985a0b0d30058d287960968b9b2aca264c8d4ee6"
+checksum = "350e9b48cbc6b0e028b0473b114454c6316e57336ee184ceab6e53f72c178b3e"
 
 [[package]]
 name = "powerfmt"
@@ -5631,18 +5619,6 @@ dependencies = [
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
  "rust-kzg-bn254-primitives 0.1.1",
-]
-
-[[package]]
-name = "rust-kzg-bn254-verifier"
-version = "0.1.0"
-source = "git+https://github.com/Layr-Labs/rust-kzg-bn254?rev=b3e532e9aad533009849755d5ad7b9578a16bfb2#b3e532e9aad533009849755d5ad7b9578a16bfb2"
-dependencies = [
- "ark-bn254",
- "ark-ec",
- "ark-ff 0.5.0",
- "ark-serialize 0.5.0",
- "rust-kzg-bn254-primitives 0.1.0",
 ]
 
 [[package]]
