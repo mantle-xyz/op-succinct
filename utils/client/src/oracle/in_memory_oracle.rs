@@ -233,13 +233,14 @@ impl InMemoryOracle {
             .collect_vec();
         println!("Verifying {} blobs", blob_datas.len());
         // Verify reconstructed blobs.
-        kzg_rs::KzgProof::verify_blob_kzg_proof_batch(
+        let result = kzg_rs::KzgProof::verify_blob_kzg_proof_batch(
             blob_datas,
             commitments,
             kzg_proofs,
             &get_kzg_settings(),
         )
         .map_err(|e| anyhow!("blob verification failed for batch: {:?}", e))?;
+        assert!(result,"ethereum blob verification false");
         println!("cycle-tracker-report-end: blob-verification");
 
         println!("cycle-tracker-report-start: eigen-da-blob-verification");
@@ -257,9 +258,9 @@ impl InMemoryOracle {
             eigen_proofs.push(G1Affine::new(p_x, p_y));
         }
         //Verify EigenDa blob
-        verify_blob_kzg_proof_batch(&eigen_blobs, &eigen_commitments, &eigen_proofs)
+        let e_r = verify_blob_kzg_proof_batch(&eigen_blobs, &eigen_commitments, &eigen_proofs)
             .map_err(|e| anyhow!("blob verification failed for batch: {:?}", e))?;
-
+        assert!(e_r, "eigen blob verification failed");
         println!("cycle-tracker-report-end: eigen-da-blob-verification");
 
         Ok(())
