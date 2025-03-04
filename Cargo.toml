@@ -101,7 +101,7 @@ op-alloy-rpc-types-engine = { git = "https://github.com/mantle-xyz/op-alloy", br
 op-alloy-network = { git = "https://github.com/mantle-xyz/op-alloy", branch = "alloy-0.11.1", default-features = false }
 
 # Revm
-revm = { git = "https://github.com/mantle-xyz/revm", branch = "kona", default-features = false, features = [
+revm = { git = "https://github.com/mantle-xyz/revm", branch = "dev", default-features = false, features = [
     "kzg-rs",
 ] }
 
