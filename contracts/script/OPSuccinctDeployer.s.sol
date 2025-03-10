@@ -47,6 +47,6 @@ contract OPSuccinctDeployer is Script, Utils {
 
         vm.stopBroadcast();
 
-        return address(proxy);
+        return address(config.l2OutputOracleProxy);
     }
 }

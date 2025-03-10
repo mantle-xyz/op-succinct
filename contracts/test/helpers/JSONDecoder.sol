@@ -7,6 +7,7 @@ contract JSONDecoder {
         address challenger;
         uint256 finalizationPeriod;
         uint256 l2BlockTime;
+        address l2OutputOracleProxy;
         address opSuccinctL2OutputOracleImpl;
         address owner;
         address proposer;
@@ -18,7 +19,6 @@ contract JSONDecoder {
         uint256 startingTimestamp;
         uint256 submissionInterval;
         address verifier;
-        address l2OutputOracleProxy;
     }
 
     struct OutputAtBlock {

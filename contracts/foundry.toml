@@ -19,6 +19,7 @@ remappings = [
     "src/L2/=lib/optimism/packages/contracts-bedrock/src/L2/",
     "src/dispute/=lib/optimism/packages/contracts-bedrock/src/dispute/",
     "src/universal/=lib/optimism/packages/contracts-bedrock/src/universal/",
+    "@rari-capital/solmate=lib/solmate"
 ]
 
 # Enable read-write access to config files

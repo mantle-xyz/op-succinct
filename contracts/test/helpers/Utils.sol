@@ -5,7 +5,8 @@ import {Test, console} from "forge-std/Test.sol";
 import {JSONDecoder} from "./JSONDecoder.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {Proxy} from "@optimism/contracts/universal/Proxy.sol";
-import {OPSuccinctL2OutputOracle} from "../../src/OPSuccinctL2OutputOracle.sol";
+import {ProxyAdmin} from "@optimism/contracts/universal/ProxyAdmin.sol";
+import {OPSuccinctL2OutputOracle} from "../../src/validity/OPSuccinctL2OutputOracle.sol";
 
 contract Utils is Test, JSONDecoder {
     function deployWithConfig(Config memory cfg) public returns (address) {
@@ -14,7 +15,7 @@ contract Utils is Test, JSONDecoder {
         }
 
         Proxy l2OutputOracleProxy = new Proxy(msg.sender);
-        upgradeAndInitialize(cfg, address(l2OutputOracleProxy), true);
+        upgradeAndInitialize(cfg, true);
 
         return address(l2OutputOracleProxy);
     }
@@ -45,7 +46,7 @@ contract Utils is Test, JSONDecoder {
         bytes memory initializationParams =
             abi.encodeWithSelector(OPSuccinctL2OutputOracle.initialize.selector, initParams);
 
-        console.log("The impl are:", impl);
+        console.log("The impl are:", cfg.opSuccinctL2OutputOracleImpl);
         console.log("msg.sender:", msg.sender);
 
         if (executeUpgradeCall) {

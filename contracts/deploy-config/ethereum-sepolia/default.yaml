@@ -14,19 +14,19 @@ envs:
 explorers: {}
 
 config:
+  aggregationVkey: "0x004f113a89b4e8d162197047643c9d710b42a30e7da7052703855d5c4716a81d"
   challenger: "0x428E2D9C04B2c09D5480c82cFfBDDb0c73278d50"
   finalizationPeriod: 300
   l2BlockTime: 2
+  opSuccinctL2OutputOracleImpl: "0x0000000000000000000000000000000000000000"
   owner: "0xb6e11c5980d014dc8bd3087377685f3d86d85b85"
   proposer: "0x9361Fb131A1c3928BB22C316257EeA7608b26177"
+  proxyAdmin: "0x0000000000000000000000000000000000000000"
+  rangeVkeyCommitment: "0x019aad6a06c795903de1dde50a355f213dbd8fb9165563360e3c176250282340"
   rollupConfigHash: "0xbc38c439082a874a2da4db07a9e270074b690e51f92a80fa1803c70dc0590a12"
   startingBlockNumber: 325709
   startingOutputRoot: "0xe90f309512fd27b4a0df4b59bc6f5a8a55e7be6610e02e665bc81e4d3168dd18"
   startingTimestamp: 1702196091
   submissionInterval: 450
   verifier: "0x397A5f7f3dBd538f23DE225B51f532c34448dA9B"
-  aggregationVkey: "0x004f113a89b4e8d162197047643c9d710b42a30e7da7052703855d5c4716a81d"
-  rangeVkeyCommitment: "0x019aad6a06c795903de1dde50a355f213dbd8fb9165563360e3c176250282340"
-
-proxyAddress:
-  0x4121dc8e48Bc6196795eb4867772A5e259fecE07
+  l2OutputOracleProxy: "0x4121dc8e48Bc6196795eb4867772A5e259fecE07"
