@@ -16,3 +16,6 @@
 [submodule "contracts/lib/solady-v0.0.281"]
 	path = contracts/lib/solady-v0.0.281
 	url = https://github.com/vectorized/solady
+[submodule "contracts/lib/optimism"]
+	path = contracts/lib/optimism
+	url = https://github.com/mantlenetworkio/mantle-v2.git
