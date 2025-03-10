@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 import {Test, console} from "forge-std/Test.sol";
 import {JSONDecoder} from "./JSONDecoder.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
-import {Proxy} from "@optimism/src/universal/Proxy.sol";
+import {Proxy} from "@optimism/contracts/universal/Proxy.sol";
 import {OPSuccinctL2OutputOracle} from "../../src/OPSuccinctL2OutputOracle.sol";
 
 contract Utils is Test, JSONDecoder {
@@ -20,7 +20,7 @@ contract Utils is Test, JSONDecoder {
     }
 
     // If `executeUpgradeCall` is false, the upgrade call will not be executed.
-    function upgradeAndInitialize(Config memory cfg, address l2OutputOracleProxy, bool executeUpgradeCall) public {
+    function upgradeAndInitialize(Config memory cfg, bool executeUpgradeCall) public {
         // Require that the verifier gateway is deployed
         require(
             address(cfg.verifier).code.length > 0, "OPSuccinctL2OutputOracleUpgrader: verifier gateway not deployed"
@@ -50,12 +50,12 @@ contract Utils is Test, JSONDecoder {
 
         if (executeUpgradeCall) {
             if (cfg.proxyAdmin == address(0)) {
-                Proxy existingProxy = Proxy(payable(l2OutputOracleProxy));
+                Proxy existingProxy = Proxy(payable(cfg.l2OutputOracleProxy));
                 existingProxy.upgradeToAndCall(cfg.opSuccinctL2OutputOracleImpl, initializationParams);
             } else {
                 // This is used if the ProxyAdmin contract is deployed.
                 ProxyAdmin(payable(cfg.proxyAdmin)).upgradeAndCall(
-                    payable(l2OutputOracleProxy), cfg.opSuccinctL2OutputOracleImpl, initializationParams
+                    payable(cfg.l2OutputOracleProxy), cfg.opSuccinctL2OutputOracleImpl, initializationParams
                 );
             }
         } else {
@@ -86,12 +86,4 @@ contract Utils is Test, JSONDecoder {
         return abi.decode(data, (Config));
     }
 
-    // Read the proxy address from the json file.
-    function readUpgradeProxyAddress(string memory filepath) public view returns (address) {
-        string memory root = vm.projectRoot();
-        string memory path = string.concat(root, "/", filepath);
-        string memory json = vm.readFile(path);
-        bytes memory data = vm.parseJson(json, ".proxyAddress");
-        return abi.decode(data, (address));
-    }
 }

@@ -18,6 +18,7 @@ contract JSONDecoder {
         uint256 startingTimestamp;
         uint256 submissionInterval;
         address verifier;
+        address l2OutputOracleProxy;
     }
 
     struct OutputAtBlock {

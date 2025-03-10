@@ -12,7 +12,6 @@ contract OPSuccinctUpgrader is Script, Utils {
         vm.startBroadcast();
 
         Config memory cfg = readJson(string.concat("deploy-config/", vm.envString("NETWORK"), "/default.json"));
-        address l2OutputOracleProxy = readUpgradeProxyAddress(string.concat("deploy-config/", vm.envString("NETWORK"), "/default.json"));
         
         bool executeUpgradeCall = true;
 
@@ -43,7 +42,7 @@ contract OPSuccinctUpgrader is Script, Utils {
             vm.startBroadcast();
         }
 
-        upgradeAndInitialize(cfg, l2OutputOracleProxy, executeUpgradeCall);
+        upgradeAndInitialize(cfg, executeUpgradeCall);
 
         vm.stopBroadcast();
     }
