@@ -22,3 +22,6 @@
 [submodule "contracts/lib/solmate"]
 	path = contracts/lib/solmate
 	url = https://github.com/rari-capital/solmate
+[submodule "contracts/lib/mantle-cdk"]
+	path = contracts/lib/mantle-cdk
+	url = https://github.com/mantle-xyz/mantle-cdk
