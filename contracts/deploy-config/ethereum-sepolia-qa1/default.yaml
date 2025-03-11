@@ -28,5 +28,5 @@ config:
   startingOutputRoot: "0x9a3a2bc81b260739b26d860e5c298faba65ee87929af3c8a54560b47b25ed65c"
   startingTimestamp: 1735384596
   submissionInterval: 450
-  verifier: "0x8f72ec5679caddd344c7b631a15b1871eb6fc7fc"
+  verifier: "0x397A5f7f3dBd538f23DE225B51f532c34448dA9B"
   l2OutputOracleProxy: "0x01f9FC616F1f9ec0D52D1f978eD805DBb54dBC04"
