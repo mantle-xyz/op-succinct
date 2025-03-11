@@ -14,16 +14,16 @@ explorers: {}
 
 config:
   aggregationVkey: "0x004f113a89b4e8d162197047643c9d710b42a30e7da7052703855d5c4716a81d"
-  challenger: "0xEaE9f288E4F1486dC864c257346105D720A89655"
+  challenger: "0x692681443876f556A7fB5b5D41aB4cAf020363C5"
   executeUpgradeCall: false
   finalizationPeriod: 300
   l2BlockTime: 2
   opSuccinctL2OutputOracleImpl: "0x0000000000000000000000000000000000000000"
-  owner: "0xEaE9f288E4F1486dC864c257346105D720A89655"
+  owner: "0x692681443876f556A7fB5b5D41aB4cAf020363C5"
   proposer: "0x7630EeA78459A7668e2288d5679FCdc290ddEF75"
   proxyAdmin: "0xf141FEfaa1dEAC7f51fA11373005f333351455B5"
-  rangeVkeyCommitment: "0x019aad6a06c795903de1dde50a355f213dbd8fb9165563360e3c176250282340"
-  rollupConfigHash: "0x3fb52823d66e7e7ddb4f18d3c84174429d8f52a997e9e469c78ad2dd03e33bc5"
+  rangeVkeyCommitment: "0x4fbeb97c65279a432decbbbf33ae9b9454c8714a2cbca7814fdd098d508a5f5e"
+  rollupConfigHash: "0xca31b9e8270a56b41fc7a672527d565d279a056fcc1d6f68bc14405b369587ac"
   startingBlockNumber: 0
   startingOutputRoot: "0x9a3a2bc81b260739b26d860e5c298faba65ee87929af3c8a54560b47b25ed65c"
   startingTimestamp: 1735384596
