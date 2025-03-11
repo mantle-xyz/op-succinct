@@ -15,6 +15,7 @@ explorers: {}
 config:
   aggregationVkey: "0x004f113a89b4e8d162197047643c9d710b42a30e7da7052703855d5c4716a81d"
   challenger: "0xEaE9f288E4F1486dC864c257346105D720A89655"
+  executeUpgradeCall: false
   finalizationPeriod: 300
   l2BlockTime: 2
   opSuccinctL2OutputOracleImpl: "0x0000000000000000000000000000000000000000"

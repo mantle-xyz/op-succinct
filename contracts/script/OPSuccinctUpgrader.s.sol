@@ -11,8 +11,6 @@ contract OPSuccinctUpgrader is Script, Utils {
     function run() public {
         Config memory cfg = readJson(string.concat("deploy-config/", vm.envString("NETWORK"), "/default.json"));
         
-        bool executeUpgradeCall = true;
-
         // Use implementation address from config
         address OPSuccinctL2OutputOracleImpl = cfg.opSuccinctL2OutputOracleImpl;
 
@@ -29,7 +27,7 @@ contract OPSuccinctUpgrader is Script, Utils {
 
         if (OPSuccinctL2OutputOracleImpl == address(0)) {
             console.log("Deploying new OPSuccinctL2OutputOracle impl");
-            OPSuccinctL2OutputOracleImpl = address(new OPSuccinctL2OutputOracle());
+            cfg.opSuccinctL2OutputOracleImpl = address(new OPSuccinctL2OutputOracle());
         }
 
         vm.stopBroadcast();
@@ -40,7 +38,7 @@ contract OPSuccinctUpgrader is Script, Utils {
             vm.startBroadcast();
         }
 
-        upgradeAndInitialize(cfg, executeUpgradeCall);
+        upgradeAndInitialize(cfg);
 
         vm.stopBroadcast();
     }

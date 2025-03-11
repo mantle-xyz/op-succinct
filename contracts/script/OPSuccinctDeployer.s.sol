@@ -43,7 +43,7 @@ contract OPSuccinctDeployer is Script, Utils {
             vm.startBroadcast();
         }
 
-        upgradeAndInitialize(config, true);
+        upgradeAndInitialize(config);
 
         vm.stopBroadcast();
 
