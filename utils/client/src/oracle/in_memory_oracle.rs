@@ -217,8 +217,8 @@ impl InMemoryOracle {
             }
         }
 
-        println!("cycle-tracker-report-start: blob-verification");
         if !blobs.is_empty() {
+            println!("cycle-tracker-report-start: blob-verification");
             let commitments: Vec<Bytes48> = blobs
                 .keys()
                 .cloned()
@@ -242,12 +242,12 @@ impl InMemoryOracle {
             )
                 .map_err(|e| anyhow!("blob verification failed for batch: {:?}", e))?;
             assert!(result,"ethereum blob verification false");
+            println!("cycle-tracker-report-end: blob-verification");
         }
-        println!("cycle-tracker-report-end: blob-verification");
 
-        println!("cycle-tracker-report-start: eigen-da-blob-verification");
-        println!("Verifying {} eigenda blobs", eigenda_blobs.len());
         if !eigenda_blobs.is_empty() {
+            println!("cycle-tracker-report-start: eigen-da-blob-verification");
+            println!("Verifying {} eigenda blobs", eigenda_blobs.len());
             let mut eigen_blobs: Vec<EigenBlob> = Vec::new();
             let mut eigen_commitments: Vec<G1Affine> = Vec::new();
             let mut eigen_proofs: Vec<G1Affine> = Vec::new();
@@ -264,8 +264,8 @@ impl InMemoryOracle {
             let e_r = verify_blob_kzg_proof_batch(&eigen_blobs, &eigen_commitments, &eigen_proofs)
                 .map_err(|e| anyhow!("blob verification failed for batch: {:?}", e))?;
             assert!(e_r, "eigen blob verification failed");
+            println!("cycle-tracker-report-end: eigen-da-blob-verification");
         }
-        println!("cycle-tracker-report-end: eigen-da-blob-verification");
         Ok(())
     }
 }
