@@ -23,7 +23,7 @@ config:
   proposer: "0x08f5c0b3daC627a1B45dd1B5f4a9D2BAa4A320eC"
   proxyAdmin: "0x6cf2b821fc032093ca9ba5889f348d9e3a1dee27"
   rangeVkeyCommitment: "0x4fbeb97c65279a432decbbbf33ae9b9454c8714a2cbca7814fdd098d508a5f5e"
-  rollupConfigHash: ""
+  rollupConfigHash: "0x354486583bd80e7753d0d290679bf01d1c0e2b75af07829cc2783057cee1fa15"
   startingBlockNumber: 0
   startingOutputRoot: "0x84a79188016f1d7bbf8f69b12f24504b0f79b0fef8c1adcb726787eda7e97f31"
   startingTimestamp: 1741602624
