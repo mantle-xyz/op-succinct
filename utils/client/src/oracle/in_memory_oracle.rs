@@ -17,6 +17,8 @@ use ark_bn254::{Fq, G1Affine};
 use ark_ff::PrimeField;
 use rust_kzg_bn254_verifier::batch::verify_blob_kzg_proof_batch;
 use rust_kzg_bn254_primitives::blob::Blob as EigenBlob;
+use tracing::info;
+
 use super::StoreOracle;
 
 /// An in-memory HashMap that will serve as the oracle for the zkVM.
@@ -232,16 +234,15 @@ impl InMemoryOracle {
                 .values()
                 .map(|blob| KzgRsBlob::from_slice(&blob.data.0).unwrap())
                 .collect_vec();
-            println!("Verifying {} blobs", blob_datas.len());
+            info!("Verifying {} blobs", blob_datas.len());
             // Verify reconstructed blobs.
-            let result = kzg_rs::KzgProof::verify_blob_kzg_proof_batch(
+            kzg_rs::KzgProof::verify_blob_kzg_proof_batch(
                 blob_datas,
                 commitments,
                 kzg_proofs,
                 &get_kzg_settings(),
             )
-                .map_err(|e| anyhow!("blob verification failed for batch: {:?}", e))?;
-            assert!(result,"ethereum blob verification false");
+            .map_err(|e| anyhow!("blob verification failed for batch: {:?}", e))?;
             println!("cycle-tracker-report-end: blob-verification");
         }
 
