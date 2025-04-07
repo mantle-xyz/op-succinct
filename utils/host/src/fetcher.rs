@@ -6,12 +6,11 @@ use alloy_rlp::Decodable;
 use alloy_sol_types::SolValue;
 use anyhow::Result;
 use anyhow::{anyhow, bail};
-use kona_genesis::RollupConfig;
 use kona_host::single::SingleChainHost;
 use op_alloy_consensus::OpBlock;
 use op_alloy_genesis::RollupConfig;
 use op_alloy_network::{
-    primitives::{BlockTransactions, HeaderResponse},
+    primitives::{BlockTransactions, HeaderResponse, BlockTransactionsKind},
     BlockResponse, Network, Optimism,
 };
 use op_alloy_protocol::calculate_tx_l1_cost_fjord;
@@ -21,7 +20,7 @@ use op_succinct_client_utils::boot::BootInfoStruct;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+// use std::path::PathBuf;
 use std::{
     cmp::{min, Ordering},
     env, fs,
@@ -30,13 +29,8 @@ use std::{
     sync::Arc,
 };
 
-use alloy_primitives::{keccak256, map::HashMap, Bytes, U256, U64};
-
-use crate::{
-    rollup_config::{get_eigen_da_config, get_rollup_config_path, read_rollup_config},
-    ProgramType,
-};
-use crate::{L2Output, OPSuccinctHost};
+use crate::rollup_config::{get_eigen_da_config, get_rollup_config_path, read_rollup_config};
+use crate::L2Output;
 
 #[derive(Clone)]
 /// The OPSuccinctDataFetcher struct is used to fetch the L2 output data and L2 claim data for a
@@ -47,7 +41,6 @@ pub struct OPSuccinctDataFetcher {
     pub l1_provider: Arc<RootProvider>,
     pub l2_provider: Arc<RootProvider<Optimism>>,
     pub rollup_config: Option<RollupConfig>,
-    pub rollup_config_path: Option<PathBuf>,
 }
 
 impl Default for OPSuccinctDataFetcher {
@@ -119,7 +112,6 @@ impl OPSuccinctDataFetcher {
             l1_provider,
             l2_provider,
             rollup_config: None,
-            rollup_config_path: None,
         }
     }
 
@@ -136,7 +128,6 @@ impl OPSuccinctDataFetcher {
             l1_provider,
             l2_provider,
             rollup_config: Some(rollup_config),
-            rollup_config_path: Some(rollup_config_path),
         })
     }
 
@@ -147,7 +138,7 @@ impl OPSuccinctDataFetcher {
     pub async fn get_l2_head(&self) -> Result<Header> {
         let block = self
             .l2_provider
-            .get_block_by_number(BlockNumberOrTag::Latest)
+            .get_block_by_number(BlockNumberOrTag::Latest, BlockTransactionsKind::Hashes)
             .await?;
         if let Some(block) = block {
             Ok(block.header.inner)
@@ -169,7 +160,7 @@ impl OPSuccinctDataFetcher {
         // Return a tuple of the block number and the transactions.
         let transactions: Vec<(u64, Vec<B256>)> = stream::iter(start..=end)
             .map(|block_number| async move {
-                let block = self.l2_provider.get_block(block_number.into()).await?;
+                let block = self.l2_provider.get_block(block_number.into(), BlockTransactionsKind::Hashes).await?;
                 if let Some(block) = block {
                     match block.transactions {
                         BlockTransactions::Hashes(txs) => Ok((block_number, txs)),
@@ -325,7 +316,7 @@ impl OPSuccinctDataFetcher {
             .map(|block_number| async move {
                 let block = self
                     .l2_provider
-                    .get_block_by_number(block_number.into())
+                    .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
                     .await?
                     .unwrap();
                 let receipts = self
@@ -363,7 +354,7 @@ impl OPSuccinctDataFetcher {
     }
 
     pub async fn get_l1_header(&self, block_number: BlockId) -> Result<Header> {
-        let block = self.l1_provider.get_block(block_number).await?;
+        let block = self.l1_provider.get_block(block_number, BlockTransactionsKind::Hashes).await?;
 
         if let Some(block) = block {
             Ok(block.header.inner)
@@ -373,7 +364,7 @@ impl OPSuccinctDataFetcher {
     }
 
     pub async fn get_l2_header(&self, block_number: BlockId) -> Result<Header> {
-        let block = self.l2_provider.get_block(block_number).await?;
+        let block = self.l2_provider.get_block(block_number, BlockTransactionsKind::Hashes).await?;
 
         if let Some(block) = block {
             Ok(block.header.inner)
@@ -403,7 +394,7 @@ impl OPSuccinctDataFetcher {
     where
         N: Network,
     {
-        let latest_block = provider.get_block(BlockId::finalized()).await?;
+        let latest_block = provider.get_block(BlockId::finalized(), BlockTransactionsKind::Hashes).await?;
         let mut low = 0;
         let mut high = if let Some(block) = latest_block {
             block.header().number()
@@ -413,7 +404,7 @@ impl OPSuccinctDataFetcher {
 
         while low <= high {
             let mid = (low + high) / 2;
-            let block = provider.get_block(mid.into()).await?;
+            let block = provider.get_block(mid.into(), BlockTransactionsKind::Hashes).await?;
             if let Some(block) = block {
                 let block_timestamp = block.header().timestamp();
 
@@ -430,7 +421,7 @@ impl OPSuccinctDataFetcher {
         }
 
         // Return the block hash of the closest block after the target timestamp
-        let block = provider.get_block(low.into()).await?;
+        let block = provider.get_block(low.into(), BlockTransactionsKind::Hashes).await?;
         if let Some(block) = block {
             Ok((block.header().hash().0.into(), block.header().number()))
         } else {
@@ -751,7 +742,7 @@ impl OPSuccinctDataFetcher {
 
         // Get L2 output data.
         let l2_output_block = l2_provider
-            .get_block_by_number(l2_start_block.into())
+            .get_block_by_number(l2_start_block.into(), BlockTransactionsKind::Hashes)
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!("Block not found for block number {}", l2_start_block)
@@ -777,7 +768,7 @@ impl OPSuccinctDataFetcher {
 
         // Get L2 claim data.
         let l2_claim_block = l2_provider
-            .get_block_by_number(l2_end_block.into())
+            .get_block_by_number(l2_end_block.into(), BlockTransactionsKind::Hashes)
             .await?
             .unwrap();
         let l2_claim_state_root = l2_claim_block.header.state_root;
@@ -826,6 +817,11 @@ impl OPSuccinctDataFetcher {
             fs::remove_dir_all(&data_directory)?;
         }
 
+        // Get the path to the rollup config file.
+        let rollup_config_path = get_rollup_config_path()?;
+
+        // Get the EigenDa config.
+        let eigen_da_config = get_eigen_da_config()?;
         // Creates the data directory if it doesn't exist, or no-ops if it does. Used to store the
         // witness data.
         fs::create_dir_all(&data_directory).expect("Failed to create data directory");
@@ -836,7 +832,7 @@ impl OPSuccinctDataFetcher {
             agreed_l2_head_hash,
             claimed_l2_output_root,
             claimed_l2_block_number: l2_end_block,
-            l2_chain_id: None,
+            l2_chain_id: Some(l2_chain_id),
             // Trim the trailing slash to avoid double slashes in the URL.
             l2_node_address: Some(
                 self.rpc_config
@@ -862,7 +858,12 @@ impl OPSuccinctDataFetcher {
             data_dir: Some(data_directory.into()),
             native: false,
             server: true,
-            rollup_config_path: self.rollup_config_path.clone(),
+            rollup_config_path: Some(rollup_config_path),
+            mantle_da_indexer_url: None,
+            proxy_url: eigen_da_config.proxy_url.clone(),
+            disperse_url: None,
+            disperse_timeout: Default::default(),
+            retrieve_timeout: eigen_da_config.retrieve_timeout,
         })
     }
 }

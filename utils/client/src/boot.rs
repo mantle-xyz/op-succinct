@@ -3,7 +3,6 @@
 
 use alloy_primitives::B256;
 use alloy_sol_types::sol;
-use kona_genesis::RollupConfig;
 use kona_proof::BootInfo;
 use op_alloy_genesis::RollupConfig;
 use serde::{Deserialize, Serialize};

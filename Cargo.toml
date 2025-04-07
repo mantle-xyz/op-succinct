@@ -67,33 +67,33 @@ op-succinct-validity = { path = "validity" }
 op-succinct-fp = { path = "fault-proof" }
 
 # Alloy (Network)
-alloy-signer-local = { version = "0.12.4" }
-alloy-provider = { version = "0.12.4" }
-alloy-transport = { version = "0.12.4" }
-alloy-transport-http = { version = "0.12.4" }
-alloy-contract = { version = "0.12.4" }
-alloy-network = { version = "0.12.4" }
+alloy-signer-local = { version = "0.11.0", default-features = false }
+alloy-provider = { version = "0.11.0", default-features = false }
+alloy-transport = { version = "0.11.0", default-features = false }
+alloy-transport-http = { version = "0.11.0", default-features = false }
+alloy-contract = { version = "0.11.0", default-features = false }
+alloy-network = { version = "0.11.0", default-features = false }
 
 # Alloy
 alloy-rlp = { version = "0.3.10", default-features = false }
-alloy-trie = { version = "0.7.9", default-features = false }
-alloy-eips = { version = "0.12.4", default-features = false }
-alloy-serde = { version = "0.12.4", default-features = false }
-alloy-consensus = { version = "0.12.4", default-features = false }
-alloy-rpc-types = { version = "0.12.4", default-features = false }
-alloy-rpc-client = { version = "0.12.4", default-features = false }
-alloy-node-bindings = { version = "0.12.4", default-features = false }
-alloy-rpc-types-engine = { version = "0.12.4", default-features = false }
-alloy-rpc-types-beacon = { version = "0.12.4", default-features = false }
-alloy-rpc-types-eth = { version = "0.12.4", default-features = false }
-alloy-signer = { version = "0.12.4", default-features = false }
+alloy-trie = { version = "0.7.8", default-features = false }
+alloy-eips = { version = "0.11.0", default-features = false }
+alloy-serde = { version = "0.11.0", default-features = false }
+alloy-consensus = { version = "0.11.0", default-features = false }
+alloy-rpc-types = { version = "0.11.0", default-features = false }
+alloy-rpc-client = { version = "0.11.0", default-features = false }
+alloy-node-bindings = { version = "0.11.0", default-features = false }
+alloy-rpc-types-engine = { version = "0.11.0", default-features = false }
+alloy-rpc-types-beacon = { version = "0.11.0", default-features = false }
+alloy-rpc-types-eth = { version = "0.11.0", default-features = false }
+alloy-signer = { version = "0.11.0", default-features = false }
 
 # Keccak with the SHA3 patch is more efficient than the default Keccak.
-alloy-primitives = { version = "0.8.21", default-features = false, features = [
+alloy-primitives = { version = "0.8.19", default-features = false, features = [
     "sha3-keccak",
 ] }
-alloy-sol-types = { version = "0.8.21", default-features = false }
-alloy-sol-macro = { version = "0.8.21", default-features = false }
+alloy-sol-types = { version = "0.8.19", default-features = false }
+alloy-sol-macro = { version = "0.8.19", default-features = false }
 
 # OP Alloy
 op-alloy-consensus = { git = "https://github.com/mantle-xyz/op-alloy", tag = "v1.0.1", default-features = false }

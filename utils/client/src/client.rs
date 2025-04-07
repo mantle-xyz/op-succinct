@@ -14,7 +14,6 @@ use kona_driver::DriverResult;
 use kona_driver::Executor;
 use kona_driver::TipCursor;
 use kona_executor::{KonaHandleRegister, TrieDBProvider};
-use kona_genesis::RollupConfig;
 use kona_preimage::{CommsClient, PreimageKey};
 use kona_proof::errors::OracleProviderError;
 use kona_proof::executor::KonaExecutor;
@@ -110,8 +109,8 @@ where
         eigen_da_provider.clone(),
         l1_provider.clone(),
         l2_provider.clone(),
-    )
-    .await?;
+    );
+    
     let executor = KonaExecutor::new(
         &rollup_config,
         l2_provider.clone(),
