@@ -2,8 +2,8 @@
 pragma solidity ^0.8.15;
 
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
-import {Semver} from "@optimism/contracts/universal/Semver.sol";
-import {Types} from "@optimism/contracts/libraries/Types.sol";
+import {ISemver} from "interfaces/universal/ISemver.sol";
+import {Types} from "@optimism/src/libraries/Types.sol";
 import {AggregationOutputs} from "../lib/Types.sol";
 import {Constants} from "@optimism/contracts/libraries/Constants.sol";
 import {ISP1Verifier} from "@sp1-contracts/src/ISP1Verifier.sol";
@@ -157,6 +157,10 @@ contract OPSuccinctL2OutputOracle is Initializable, Semver {
     /// @notice The L1 block hash is not checkpointed.
     error L1BlockHashNotCheckpointed();
 
+    /// @notice Semantic version.
+    /// @custom:semver v2.0.0
+    string public constant version = "v2.0.0";
+
     /// @notice The version of the initializer on the contract. Used for managing upgrades.
     uint8 public constant initializerVersion = 2;
 
@@ -304,13 +308,18 @@ contract OPSuccinctL2OutputOracle is Initializable, Semver {
     /// @param _outputRoot    The L2 output of the checkpoint block.
     /// @param _l2BlockNumber The L2 block number that resulted in _outputRoot.
     /// @param _l1BlockNumber The block number with the specified block hash.
+    /// @param _proof The aggregation proof that proves the transition from the latest L2 output to the new L2 output.
+    /// @param _proverAddress The address of the prover that submitted the proof. Note: proverAddress is not required to be the msg.sender as there is no reason to front-run the prover.
+    /// in the full validity setting.
     /// @dev Modified the function signature to exclude the `_l1BlockHash` parameter, as it's redundant
     /// for OP Succinct given the `_l1BlockNumber` parameter.
-    function proposeL2Output(bytes32 _outputRoot, uint256 _l2BlockNumber, uint256 _l1BlockNumber, bytes memory _proof)
-        external
-        payable
-        whenNotOptimistic
-    {
+    function proposeL2Output(
+        bytes32 _outputRoot,
+        uint256 _l2BlockNumber,
+        uint256 _l1BlockNumber,
+        bytes memory _proof,
+        address _proverAddress
+    ) external payable whenNotOptimistic {
         // The proposer must be explicitly approved, or the zero address must be approved (permissionless proposing).
         require(
             approvedProposers[msg.sender] || approvedProposers[address(0)],
@@ -340,7 +349,8 @@ contract OPSuccinctL2OutputOracle is Initializable, Semver {
             claimRoot: _outputRoot,
             claimBlockNum: _l2BlockNumber,
             rollupConfigHash: rollupConfigHash,
-            rangeVkeyCommitment: rangeVkeyCommitment
+            rangeVkeyCommitment: rangeVkeyCommitment,
+            proverAddress: _proverAddress
         });
 
         ISP1Verifier(verifier).verifyProof(aggregationVkey, abi.encode(publicValues), _proof);

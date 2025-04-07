@@ -12,8 +12,8 @@ name = "fetch-and-save-proof"
 path = "bin/fetch_and_save_proof.rs"
 
 [[bin]]
-name = "vkey"
-path = "bin/vkey.rs"
+name = "config"
+path = "bin/config.rs"
 
 [[bin]]
 name = "cost-estimator"
@@ -47,13 +47,9 @@ dotenv.workspace = true
 log.workspace = true
 csv.workspace = true
 serde.workspace = true
-reqwest.workspace = true
 futures.workspace = true
 rayon = "1.10.0"
 serde_json.workspace = true
-
-# kona
-kona-host.workspace = true
 
 # local
 op-succinct-host-utils.workspace = true

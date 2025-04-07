@@ -26,7 +26,6 @@ use op_alloy_consensus::OpTxEnvelope;
 use op_alloy_protocol::L2BlockInfo;
 use op_alloy_rpc_types_engine::OpAttributesWithParent;
 use std::fmt::Debug;
-use std::mem::forget;
 use std::sync::Arc;
 use tracing::error;
 use tracing::info;
@@ -40,7 +39,7 @@ pub async fn run_opsuccinct_client<O>(
     handle_register: Option<KonaHandleRegister<OracleL2ChainProvider<O>, OracleL2ChainProvider<O>>>,
 ) -> Result<BootInfo>
 where
-    O: CommsClient + FlushableCache + Send + Sync + Debug,
+    O: CommsClient + FlushableCache + Send + Sync + Debug + Clone,
 {
     ////////////////////////////////////////////////////////////////
     //                          PROLOGUE                          //
@@ -55,7 +54,6 @@ where
 
     let boot_clone = boot.clone();
 
-    let boot_arc = Arc::new(boot.clone());
     let rollup_config = Arc::new(boot.rollup_config);
     let safe_head_hash = fetch_safe_head_hash(oracle.as_ref(), boot.agreed_l2_output_root).await?;
 
@@ -112,6 +110,7 @@ where
         l1_provider.clone(),
         l2_provider.clone(),
     );
+    
     let executor = KonaExecutor::new(
         &rollup_config,
         l2_provider.clone(),
@@ -151,11 +150,13 @@ where
         output_root = output_root
     );
 
-    forget(driver);
-    forget(l1_provider);
-    forget(boot_arc);
-    forget(oracle);
-    forget(rollup_config);
+    #[cfg(target_os = "zkvm")]
+    {
+        std::mem::forget(driver);
+        std::mem::forget(l1_provider);
+        std::mem::forget(oracle);
+        std::mem::forget(rollup_config);
+    }
 
     Ok(boot_clone)
 }
@@ -298,6 +299,7 @@ where
         driver.cursor.write().advance(origin, tip_cursor);
 
         // Add forget calls to save cycles
-        forget(block);
+        #[cfg(target_os = "zkvm")]
+        std::mem::forget(block);
     }
 }
