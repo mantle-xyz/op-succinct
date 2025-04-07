@@ -53,6 +53,7 @@ RUN curl -L https://sp1.succinct.xyz | bash && \
 
 # Copy only the built binaries from builder
 COPY --from=builder /build/validity-proposer /usr/local/bin/validity-proposer
+COPY resources ./resources
 
 # Run the server from its permanent location
 CMD ["/usr/local/bin/validity-proposer"]
