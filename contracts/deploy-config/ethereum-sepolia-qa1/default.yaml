@@ -6,27 +6,27 @@ envs:
   F_MNEMONIC: ""
   F_MNEMONIC_INDEX: 0
   F_AWS_KMS_KEY_ID: ""
-  F_SENDER: "0xEaE9f288E4F1486dC864c257346105D720A89655" 
+  F_SENDER: "0x66d0129e8d89cD4c0441e19d83bc84E7F73D923F" 
   F_VERBOSE: true
   F_RPC_URL: https://rpc.ankr.com/eth_sepolia
 
 explorers: {}
 
 config:
-  aggregationVkey: "0x004f113a89b4e8d162197047643c9d710b42a30e7da7052703855d5c4716a81d"
-  challenger: "0x692681443876f556A7fB5b5D41aB4cAf020363C5"
-  executeUpgradeCall: false
-  finalizationPeriod: 300
+  aggregationVkey: "0x00c34e1ea92b8e3708fb2213142e746caa75a01308f817af6310976012a6fe40"
+  challenger: "0x2CE934f9C72a9A336Ab0BC5a909AC0b132F1aE99"
+  executeUpgradeCall: true
+  finalizationPeriod: 1800
   l2BlockTime: 2
   opSuccinctL2OutputOracleImpl: "0x0000000000000000000000000000000000000000"
-  owner: "0x692681443876f556A7fB5b5D41aB4cAf020363C5"
-  proposer: "0x7630EeA78459A7668e2288d5679FCdc290ddEF75"
-  proxyAdmin: "0xf141FEfaa1dEAC7f51fA11373005f333351455B5"
-  rangeVkeyCommitment: "0x4fbeb97c65279a432decbbbf33ae9b9454c8714a2cbca7814fdd098d508a5f5e"
-  rollupConfigHash: "0xca31b9e8270a56b41fc7a672527d565d279a056fcc1d6f68bc14405b369587ac"
+  owner: "0x2CE934f9C72a9A336Ab0BC5a909AC0b132F1aE99"
+  proposer: "0xDDD4037f3315a1F18AfeA5717b150a6Dda185489"
+  proxyAdmin: "0x7C3207A2e92F37D8dE32F9E8166738ed12272E9f"
+  rangeVkeyCommitment: "0x6b9c169550b420057272ed4b6fe5895a167e01104153eb9324412d4a0e6c2381"
+  rollupConfigHash: "0xac7500d149e63e9d5a6842a9b9b6ba262af1a365fe2f44e9b67f3ebde83dc9d9"
   startingBlockNumber: 0
-  startingOutputRoot: "0x9a3a2bc81b260739b26d860e5c298faba65ee87929af3c8a54560b47b25ed65c"
-  startingTimestamp: 1735384596
-  submissionInterval: 450
+  startingOutputRoot: "0xd7626740aac4ded3c213e45763ba06044fb142212760f0c365d079143c377947"
+  startingTimestamp: 1745203812
+  submissionInterval: 1800
   verifier: "0x397A5f7f3dBd538f23DE225B51f532c34448dA9B"
-  l2OutputOracleProxy: "0x01f9FC616F1f9ec0D52D1f978eD805DBb54dBC04"
+  l2OutputOracleProxy: "0x2aCAC1e215AeF5Ce7e1A9e7EF2A4730b07870F9F"

@@ -57,10 +57,10 @@ tasks:
     cmds:
       - task: _script
         vars:
-          EXTRA_ARGS: ${ROOT_DIR}/script/OPSuccinctDeployer.s.sol {{.CLI_ARGS}}
+          EXTRA_ARGS: ${ROOT_DIR}/script/validity/OPSuccinctDeployer.s.sol {{.CLI_ARGS}}
 
   Upgrade:
     cmds:
       - task: _script
         vars:
-          EXTRA_ARGS: ${ROOT_DIR}/script/OPSuccinctUpgrader.s.sol {{.CLI_ARGS}}
+          EXTRA_ARGS: ${ROOT_DIR}/script/validity/OPSuccinctUpgrader.s.sol {{.CLI_ARGS}}
