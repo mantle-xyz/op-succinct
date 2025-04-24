@@ -6,19 +6,19 @@ remappings = [
     # Use openzeppelin-contracts v4.7.3 as the some contracts are not compatible with 0.8.15
     "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts",
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts",
-    "@optimism/=lib/optimism/packages/contracts-bedrock/",
+    "@optimism/=lib/mantle-v2/packages/contracts-bedrock/",
     "@forge-std/=lib/forge-std/src/",
     "@solady/=lib/solady/src",
     # Note: Use zobront/sp1-contracts as the current version for SP1 contracts is not compatible with the hard
     # version for 0.8.15 on some Optimism contracts.
     "@sp1-contracts/=lib/sp1-contracts/contracts/",
     # Optimism repo uses absolute imports, so we need to have remappings for the paths we use.
-    "src/libraries/=lib/optimism/packages/contracts-bedrock/src/libraries/",
-    "src/L1/=lib/optimism/packages/contracts-bedrock/src/L1/",
-    "src/L2/=lib/optimism/packages/contracts-bedrock/src/L2/",
-    "src/dispute/=lib/optimism/packages/contracts-bedrock/src/dispute/",
-    "interfaces/=lib/optimism/packages/contracts-bedrock/interfaces/",
-    "@lib-keccak/=lib/lib-keccak/contracts/lib"
+    "src/libraries/=lib/mantle-v2/packages/contracts-bedrock/src/libraries/",
+    "src/L1/=lib/mantle-v2/packages/contracts-bedrock/src/L1/",
+    "src/L2/=lib/mantle-v2/packages/contracts-bedrock/src/L2/",
+    "src/dispute/=lib/mantle-v2/packages/contracts-bedrock/src/dispute/",
+    "@lib-keccak/=lib/lib-keccak/contracts/lib",
+    "@rari-capital/solmate=lib/solmate"
 ]
 
 # Enable read-write access to all files in current directory

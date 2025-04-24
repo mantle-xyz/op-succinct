@@ -28,3 +28,6 @@
 [submodule "contracts/lib/lib-keccak"]
 	path = contracts/lib/lib-keccak
 	url = https://github.com/ethereum-optimism/lib-keccak
+[submodule "contracts/lib/mantle-v2"]
+	path = contracts/lib/mantle-v2
+	url = https://github.com/mantlenetworkio/mantle-v2
