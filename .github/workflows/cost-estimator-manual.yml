@@ -1,20 +1,14 @@
-name: Cost Estimator (1000 blocks)
+name: Cost Estimator (1000 blocks) - Sepolia
 
 on:
   workflow_dispatch:
     inputs: {}
   schedule:
-    - cron: '0 0 * * *' # Run the workflow every day at midnight UTC.
+    - cron: "0 0 * * *" # Run the workflow every day at midnight UTC.
 
 jobs:
   daily-cost-estimator:
-    runs-on:
-      - runs-on
-      - cpu=32
-      - ram=128
-      - family=m7a+m7i-flex
-      - image=ubuntu22-full-x64
-      - run-id=${{ github.run_id }}
+    runs-on: [self-hosted, Linux, X64, eks, mantle-default, "sepolia"]
     steps:
       - uses: actions/checkout@v4
 
@@ -23,15 +17,18 @@ jobs:
 
       - name: Run cost estimator
         run: |
+          source $HOME/.cargo/env
           RUST_LOG=info cargo run --bin cost-estimator --release -- --batch-size 30 --default-range 1000
         env:
           L2_NODE_RPC: ${{ secrets.L2_NODE_RPC }}
           L1_RPC: ${{ secrets.L1_RPC }}
           L1_BEACON_RPC: ${{ secrets.L1_BEACON_RPC }}
           L2_RPC: ${{ secrets.L2_RPC }}
+          EIGEN_DA_PROXY_URL: ${{ secrets.EIGEN_DA_PROXY_URL }}
+          ROLLUP_CONFIG_PATH: configs/5003/rollup.json
 
       - name: Upload execution reports
         uses: actions/upload-artifact@v4
         with:
           name: execution-reports
-          path: execution-reports/ 
+          path: execution-reports/

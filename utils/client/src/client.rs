@@ -7,7 +7,6 @@ use kona_derive::errors::PipelineError;
 use kona_derive::errors::PipelineErrorKind;
 use kona_derive::traits::Pipeline;
 use kona_derive::traits::SignalReceiver;
-use kona_derive::types::Signal;
 use kona_driver::Driver;
 use kona_driver::DriverError;
 use kona_driver::DriverPipeline;
@@ -15,19 +14,17 @@ use kona_driver::DriverResult;
 use kona_driver::Executor;
 use kona_driver::TipCursor;
 use kona_executor::{KonaHandleRegister, TrieDBProvider};
-use kona_genesis::RollupConfig;
 use kona_preimage::{CommsClient, PreimageKey};
 use kona_proof::errors::OracleProviderError;
 use kona_proof::executor::KonaExecutor;
-use kona_proof::l1::{OracleL1ChainProvider, OraclePipeline};
+use kona_proof::l1::{OracleEigenDaProvider, OracleL1ChainProvider, OraclePipeline};
 use kona_proof::l2::OracleL2ChainProvider;
 use kona_proof::sync::new_pipeline_cursor;
 use kona_proof::{BootInfo, FlushableCache, HintType};
-use kona_protocol::L2BlockInfo;
-use kona_rpc::OpAttributesWithParent;
 use op_alloy_consensus::OpBlock;
 use op_alloy_consensus::OpTxEnvelope;
-use op_alloy_consensus::OpTxType;
+use op_alloy_protocol::L2BlockInfo;
+use op_alloy_rpc_types_engine::OpAttributesWithParent;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::error;
@@ -63,6 +60,7 @@ where
     let mut l1_provider = OracleL1ChainProvider::new(boot.l1_head, oracle.clone());
     let mut l2_provider =
         OracleL2ChainProvider::new(safe_head_hash, rollup_config.clone(), oracle.clone());
+    let eigen_da_provider = OracleEigenDaProvider::new(oracle.clone());
     let beacon = OPSuccinctOracleBlobProvider::new(oracle.clone());
 
     // Fetch the safe head's block header.
@@ -108,10 +106,11 @@ where
         cursor.clone(),
         oracle.clone(),
         beacon,
+        eigen_da_provider.clone(),
         l1_provider.clone(),
         l2_provider.clone(),
-    )
-    .await?;
+    );
+    
     let executor = KonaExecutor::new(
         &rollup_config,
         l2_provider.clone(),
@@ -126,12 +125,8 @@ where
     // Use custom advance to target with cycle tracking.
     #[cfg(target_os = "zkvm")]
     println!("cycle-tracker-report-start: block-execution-and-derivation");
-    let (safe_head, output_root) = advance_to_target(
-        &mut driver,
-        rollup_config.as_ref(),
-        Some(boot.claimed_l2_block_number),
-    )
-    .await?;
+    let (safe_head, output_root) =
+        advance_to_target(&mut driver, Some(boot.claimed_l2_block_number)).await?;
     #[cfg(target_os = "zkvm")]
     println!("cycle-tracker-report-end: block-execution-and-derivation");
 
@@ -208,7 +203,6 @@ where
 /// - `Err(e)` - An error if the block could not be produced.
 pub async fn advance_to_target<E, DP, P>(
     driver: &mut Driver<E, DP, P>,
-    cfg: &RollupConfig,
     mut target: Option<u64>,
 ) -> DriverResult<(L2BlockInfo, B256), E::Error>
 where
@@ -229,7 +223,7 @@ where
 
         #[cfg(target_os = "zkvm")]
         println!("cycle-tracker-report-start: payload-derivation");
-        let OpAttributesWithParent { mut attributes, .. } = match driver
+        let OpAttributesWithParent { attributes, .. } = match driver
             .pipeline
             .produce_payload(tip_cursor.l2_safe_head)
             .await
@@ -243,14 +237,7 @@ where
                 if target.is_some() {
                     target = Some(tip_cursor.l2_safe_head.block_info.number);
                 };
-
-                // If we are in interop mode, this error must be handled by the caller.
-                // Otherwise, we continue the loop to halt derivation on the next iteration.
-                if cfg.is_interop_active(driver.cursor.read().l2_safe_head().block_info.number) {
-                    return Err(PipelineError::EndOfSource.crit().into());
-                } else {
-                    continue;
-                }
+                continue;
             }
             Err(e) => {
                 error!(target: "client", "Failed to produce payload: {:?}", e);
@@ -270,42 +257,7 @@ where
             Ok(header) => header,
             Err(e) => {
                 error!(target: "client", "Failed to execute L2 block: {}", e);
-
-                if cfg.is_holocene_active(attributes.payload_attributes.timestamp) {
-                    // Retry with a deposit-only block.
-                    warn!(target: "client", "Flushing current channel and retrying deposit only block");
-
-                    // Flush the current batch and channel - if a block was replaced with a
-                    // deposit-only block due to execution failure, the
-                    // batch and channel it is contained in is forwards
-                    // invalidated.
-                    driver.pipeline.signal(Signal::FlushChannel).await?;
-
-                    // Strip out all transactions that are not deposits.
-                    attributes.transactions = attributes.transactions.map(|txs| {
-                        txs.into_iter()
-                            .filter(|tx| (!tx.is_empty() && tx[0] == OpTxType::Deposit as u8))
-                            .collect::<Vec<_>>()
-                    });
-
-                    // Retry the execution.
-                    driver
-                        .executor
-                        .update_safe_head(tip_cursor.l2_safe_head_header.clone());
-                    match driver.executor.execute_payload(attributes.clone()).await {
-                        Ok(header) => header,
-                        Err(e) => {
-                            error!(
-                                target: "client",
-                                "Critical - Failed to execute deposit-only block: {e}",
-                            );
-                            return Err(DriverError::Executor(e));
-                        }
-                    }
-                } else {
-                    // Pre-Holocene, discard the block if execution fails.
-                    continue;
-                }
+                continue;
             }
         };
         #[cfg(target_os = "zkvm")]

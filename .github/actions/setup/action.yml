@@ -22,10 +22,12 @@ runs:
       shell: bash
       run: go version
 
-    - name: Setup GCC
-      uses: Dup4/actions-setup-gcc@v1
-      with:
-        version: latest
+    - name: Install GCC and OpenSSL dependencies
+      shell: bash
+      run: |
+        sudo yum update -y
+        sudo yum install -y gcc gcc-c++ make pkg-config openssl-devel clang llvm llvm-devel clang-devel
+        gcc --version
 
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable

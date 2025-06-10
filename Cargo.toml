@@ -45,25 +45,18 @@ strum = "0.27.1"
 strum_macros = "0.27.1"
 
 # kona
-kona-mpt = { git = "https://github.com/op-rs/kona", tag = "kona-client/v0.1.0-beta.14" }
-kona-derive = { git = "https://github.com/op-rs/kona", tag = "kona-client/v0.1.0-beta.14", default-features = false }
-kona-driver = { git = "https://github.com/op-rs/kona", tag = "kona-client/v0.1.0-beta.14" }
-kona-preimage = { git = "https://github.com/op-rs/kona", tag = "kona-client/v0.1.0-beta.14", features = [
+kona-preimage = { git = "https://github.com/mantle-xyz/kona", tag = "v1.1.1", features = [
     "rkyv",
     "serde",
 ] }
-kona-executor = { git = "https://github.com/op-rs/kona", tag = "kona-client/v0.1.0-beta.14" }
-kona-proof = { git = "https://github.com/op-rs/kona", tag = "kona-client/v0.1.0-beta.14" }
-
-kona-client = { git = "https://github.com/op-rs/kona", tag = "kona-client/v0.1.0-beta.14" }
-kona-host = { git = "https://github.com/op-rs/kona", tag = "kona-client/v0.1.0-beta.14" }
-kona-providers-alloy = { git = "https://github.com/op-rs/kona", tag = "kona-client/v0.1.0-beta.14" }
-kona-rpc = { git = "https://github.com/op-rs/kona", tag = "kona-client/v0.1.0-beta.14", default-features = false, features = [
-    "serde",
-] }
-kona-protocol = { git = "https://github.com/op-rs/kona", tag = "kona-client/v0.1.0-beta.14", default-features = false }
-kona-registry = { git = "https://github.com/op-rs/kona", tag = "kona-client/v0.1.0-beta.14", default-features = false }
-kona-genesis = { git = "https://github.com/op-rs/kona", tag = "kona-client/v0.1.0-beta.14", default-features = false }
+kona-mpt = { git = "https://github.com/mantle-xyz/kona", tag = "v1.1.1" }
+kona-driver = { git = "https://github.com/mantle-xyz/kona", tag = "v1.1.1"}
+kona-derive = { git = "https://github.com/mantle-xyz/kona", tag = "v1.1.1", default-features = false }
+kona-executor = { git = "https://github.com/mantle-xyz/kona", tag = "v1.1.1" }
+kona-client = { git = "https://github.com/mantle-xyz/kona", tag = "v1.1.1" }
+kona-host = { git = "https://github.com/mantle-xyz/kona", tag = "v1.1.1" }
+kona-proof = { git = "https://github.com/mantle-xyz/kona", tag = "v1.1.1" }
+eigen-da = { git = "https://github.com/mantle-xyz/kona", tag = "v1.1.1" }
 
 # op-succinct
 op-succinct-prove = { path = "scripts/prove" }
@@ -74,42 +67,49 @@ op-succinct-validity = { path = "validity" }
 op-succinct-fp = { path = "fault-proof" }
 
 # Alloy (Network)
-alloy-signer-local = { version = "0.12.4" }
-alloy-provider = { version = "0.12.4" }
-alloy-transport = { version = "0.12.4" }
-alloy-transport-http = { version = "0.12.4" }
-alloy-contract = { version = "0.12.4" }
-alloy-network = { version = "0.12.4" }
+alloy-signer-local = { version = "0.11.0", default-features = false }
+alloy-provider = { version = "0.11.0", default-features = false }
+alloy-transport = { version = "0.11.0", default-features = false }
+alloy-transport-http = { version = "0.11.0", default-features = false }
+alloy-contract = { version = "0.11.0", default-features = false }
+alloy-network = { version = "0.11.0", default-features = false }
 
 # Alloy
 alloy-rlp = { version = "0.3.10", default-features = false }
-alloy-trie = { version = "0.7.9", default-features = false }
-alloy-eips = { version = "0.12.4", default-features = false }
-alloy-serde = { version = "0.12.4", default-features = false }
-alloy-consensus = { version = "0.12.4", default-features = false }
-alloy-rpc-types = { version = "0.12.4", default-features = false }
-alloy-rpc-client = { version = "0.12.4", default-features = false }
-alloy-node-bindings = { version = "0.12.4", default-features = false }
-alloy-rpc-types-engine = { version = "0.12.4", default-features = false }
-alloy-rpc-types-beacon = { version = "0.12.4", default-features = false }
-alloy-rpc-types-eth = { version = "0.12.4", default-features = false }
-alloy-signer = { version = "0.12.4", default-features = false }
+alloy-trie = { version = "0.7.8", default-features = false }
+alloy-eips = { version = "0.11.0", default-features = false }
+alloy-serde = { version = "0.11.0", default-features = false }
+alloy-consensus = { version = "0.11.0", default-features = false }
+alloy-rpc-types = { version = "0.11.0", default-features = false }
+alloy-rpc-client = { version = "0.11.0", default-features = false }
+alloy-node-bindings = { version = "0.11.0", default-features = false }
+alloy-rpc-types-engine = { version = "0.11.0", default-features = false }
+alloy-rpc-types-beacon = { version = "0.11.0", default-features = false }
+alloy-rpc-types-eth = { version = "0.11.0", default-features = false }
+alloy-signer = { version = "0.11.0", default-features = false }
 
 # Keccak with the SHA3 patch is more efficient than the default Keccak.
-alloy-primitives = { version = "0.8.21", default-features = false, features = [
+alloy-primitives = { version = "0.8.19", default-features = false, features = [
     "sha3-keccak",
 ] }
-alloy-sol-types = { version = "0.8.21", default-features = false }
-alloy-sol-macro = { version = "0.8.21", default-features = false }
+alloy-sol-types = { version = "0.8.19", default-features = false }
+alloy-sol-macro = { version = "0.8.19", default-features = false }
 
 # OP Alloy
-op-alloy-consensus = { version = "0.11.0", default-features = false }
-op-alloy-rpc-types = { version = "0.11.0", default-features = false }
-op-alloy-rpc-types-engine = { version = "0.11.0", default-features = false }
-op-alloy-network = { version = "0.11.0", default-features = false }
+op-alloy-consensus = { git = "https://github.com/mantle-xyz/op-alloy", tag = "v1.0.1", default-features = false }
+op-alloy-genesis = { git = "https://github.com/mantle-xyz/op-alloy", tag = "v1.0.1", default-features = false, features = [
+    "serde",
+] }
+
+op-alloy-protocol = { git = "https://github.com/mantle-xyz/op-alloy", tag = "v1.0.1", default-features = false }
+op-alloy-rpc-types = { git = "https://github.com/mantle-xyz/op-alloy", tag = "v1.0.1", default-features = false }
+op-alloy-rpc-types-engine = { git = "https://github.com/mantle-xyz/op-alloy", tag = "v1.0.1", default-features = false }
+op-alloy-network = { git = "https://github.com/mantle-xyz/op-alloy", tag = "v1.0.1", default-features = false }
 
 # Revm
-revm = { version = "19.5.0", default-features = false, features = ["kzg-rs"] }
+revm = { git = "https://github.com/mantle-xyz/revm", tag = "v1.1.0", default-features = false, features = [
+    "kzg-rs",
+] }
 
 # SP1
 sp1-sdk = { version = "4.1.7" }
@@ -117,6 +117,12 @@ sp1-lib = { version = "4.1.7", features = ["verify"] }
 sp1-zkvm = { version = "4.1.7", features = ["verify"] }
 sp1-build = { version = "4.1.7" }
 kzg-rs = { version = "0.2.5" }
+
+# EigenDA
+rust-kzg-bn254-verifier = { git = "https://github.com/Layr-Labs/rust-kzg-bn254", branch = "master", default-features = false }
+rust-kzg-bn254-primitives = { git = "https://github.com/Layr-Labs/rust-kzg-bn254", branch = "master", default-features = false }
+ark-bn254 = "0.5.0"
+ark-ff = { version = "0.5.0", features = ["parallel"] }
 
 [profile.release-client-lto]
 inherits = "release"

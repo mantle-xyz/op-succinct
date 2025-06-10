@@ -5,7 +5,7 @@ pub mod proposer;
 pub mod utils;
 
 use alloy_eips::BlockNumberOrTag;
-use alloy_network::Ethereum;
+use alloy_network::{primitives::BlockTransactionsKind, Ethereum};
 use alloy_primitives::{address, keccak256, Address, FixedBytes, B256, U256};
 use alloy_provider::{
     fillers::{FillProvider, TxFiller},
@@ -74,7 +74,9 @@ impl L2ProviderTrait for L2Provider {
         &self,
         block_number: BlockNumberOrTag,
     ) -> Result<Block<Transaction>> {
-        let block = self.get_block_by_number(block_number).await?;
+        let block = self
+            .get_block_by_number(block_number, BlockTransactionsKind::Hashes)
+            .await?;
         if let Some(block) = block {
             Ok(block)
         } else {

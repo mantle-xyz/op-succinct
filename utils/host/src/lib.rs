@@ -7,6 +7,7 @@ pub mod stats;
 pub use contract::*;
 pub use proof::*;
 pub mod metrics;
+pub mod rollup_config;
 
 use clap::{Parser, ValueEnum};
 use strum_macros::EnumString;

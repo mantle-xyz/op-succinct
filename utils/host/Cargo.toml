@@ -17,12 +17,12 @@ op-alloy-rpc-types.workspace = true
 op-alloy-network.workspace = true
 op-alloy-consensus.workspace = true
 
-# kona
-kona-genesis.workspace = true
-kona-protocol.workspace = true
-kona-rpc.workspace = true
-kona-host.workspace = true
-kona-preimage.workspace = true
+# maili
+op-alloy-genesis.workspace = true
+op-alloy-protocol.workspace = true
+
+# revm
+revm.workspace = true
 
 # alloy
 alloy-provider.workspace = true
@@ -34,6 +34,12 @@ alloy-eips.workspace = true
 alloy-rpc-types.workspace = true
 alloy-contract.workspace = true
 
+# kona
+kona-host.workspace = true
+kona-preimage.workspace = true
+kona-client.workspace = true
+kona-proof.workspace = true
+kona-mpt.workspace = true
 # general
 rkyv.workspace = true
 serde_json.workspace = true
