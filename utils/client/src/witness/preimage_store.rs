@@ -99,8 +99,12 @@ impl PreimageStore {
                 eigen_proofs.push(G1Affine::new(p_x, p_y));
             }
             //Verify EigenDa blob
-            verify_blob_kzg_proof_batch(&eigen_blobs, &eigen_commitments, &eigen_proofs)
+            let e_r = verify_blob_kzg_proof_batch(&eigen_blobs, &eigen_commitments, &eigen_proofs)
                 .map_err(|_| PreimageOracleError::Other("blob verification failed for batch".to_string()))?;
+            
+            if !e_r {
+                return Err(PreimageOracleError::Other("EigenDa blob verification failed".to_string()));
+            }
         }
         Ok(())
     }
