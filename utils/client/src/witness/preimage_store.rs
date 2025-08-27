@@ -1,3 +1,4 @@
+use std::hash::Hash;
 use alloy_primitives::{keccak256, map::HashMap};
 use async_trait::async_trait;
 use kona_preimage::{
@@ -48,7 +49,12 @@ impl PreimageStore {
         let mut eigenda_blobs: HashMap<[u8; 64], EigenDaBlob> = HashMap::default();
         for (key, value) in &self.preimage_map {
             if key.key_type() == PreimageKeyType::GlobalGeneric {
-                if let Some(blob_key_data) = self.preimage_map.get(key) {
+                let key_value: [u8; 32] = key.key_value().to_be_bytes();
+                let blob_key = PreimageKey::new(key_value, PreimageKeyType::Keccak256);
+                if let Some(blob_key_data) = self.preimage_map.get(&blob_key) {
+                    if blob_key_data.len() <  64 {
+                        return Err(PreimageOracleError::Other("eigen da blob key data len is wrong".to_string()))
+                    }
                     let commitment = blob_key_data[..64].try_into().unwrap();
                     if blob_key_data.len() == 64 {
                         eigenda_blobs
