@@ -146,6 +146,10 @@ contract OPSuccinctL2OutputOracle is Initializable, Semver {
     /// @param finalizationPeriodSeconds The new finalization period in seconds.
     event OptimisticModeToggled(bool indexed enabled, uint256 finalizationPeriodSeconds);
 
+    /// @notice Emitted when the finalization period seconds is updated.
+    /// @param oldFinalizationPeriodSeconds The old finalization period seconds.
+    /// @param newFinalizationPeriodSeconds The new finalization period seconds.
+    event FinalizationPeriodSecondsUpdated(uint256 oldFinalizationPeriodSeconds, uint256 newFinalizationPeriodSeconds);
     ////////////////////////////////////////////////////////////
     //                         Errors                         //
     ////////////////////////////////////////////////////////////
@@ -158,7 +162,7 @@ contract OPSuccinctL2OutputOracle is Initializable, Semver {
     error L1BlockHashNotCheckpointed();
 
     /// @notice The version of the initializer on the contract. Used for managing upgrades.
-    uint8 public constant initializerVersion = 2;
+    uint8 public constant initializerVersion = 3;
 
     ////////////////////////////////////////////////////////////
     //                        Modifiers                       //
@@ -184,7 +188,7 @@ contract OPSuccinctL2OutputOracle is Initializable, Semver {
     ////////////////////////////////////////////////////////////
 
     /// @notice Constructs the OPSuccinctL2OutputOracle contract. Disables initializers.
-    constructor() Semver(2, 0, 0) {
+    constructor() Semver(2, 0, 1) {
         _disableInitializers();
     }
 
@@ -562,7 +566,9 @@ contract OPSuccinctL2OutputOracle is Initializable, Semver {
 
     /// @notice Enables optimistic mode.
     /// @param _finalizationPeriodSeconds The new finalization window.
-    function enableOptimisticMode(uint256 _finalizationPeriodSeconds) external onlyOwner whenNotOptimistic {
+    function enableOptimisticMode(uint256 _finalizationPeriodSeconds) external whenNotOptimistic {
+        require(msg.sender == challenger, "L2OutputOracle: caller must be the challenger");
+        require(_finalizationPeriodSeconds >= 7 days, "L2OutputOracle: finalization period must be greater than 7 days");
         finalizationPeriodSeconds = _finalizationPeriodSeconds;
         optimisticMode = true;
         emit OptimisticModeToggled(true, _finalizationPeriodSeconds);
@@ -570,9 +576,22 @@ contract OPSuccinctL2OutputOracle is Initializable, Semver {
 
     /// @notice Disables optimistic mode.
     /// @param _finalizationPeriodSeconds The new finalization window.
-    function disableOptimisticMode(uint256 _finalizationPeriodSeconds) external onlyOwner whenOptimistic {
+    function disableOptimisticMode(uint256 _finalizationPeriodSeconds) external whenOptimistic {
+        require(msg.sender == challenger, "L2OutputOracle: caller must be the challenger");
+        require(_finalizationPeriodSeconds >= 1 hours, "L2OutputOracle: finalization period must be greater than 1 hour");
         finalizationPeriodSeconds = _finalizationPeriodSeconds;
         optimisticMode = false;
         emit OptimisticModeToggled(false, _finalizationPeriodSeconds);
+    }
+
+    function updateFinalizationPeriodSeconds(uint256 _finalizationPeriodSeconds) external {
+        require(msg.sender == challenger, "L2OutputOracle: caller must be the challenger");
+        if (optimisticMode) {
+            require(_finalizationPeriodSeconds >= 1 hours, "L2OutputOracle: finalization period must be greater than 1 hour");
+        } else {
+            require(_finalizationPeriodSeconds >= 7 days, "L2OutputOracle: finalization period must be greater than 7 days");
+        }
+        emit FinalizationPeriodSecondsUpdated(finalizationPeriodSeconds, _finalizationPeriodSeconds);
+        finalizationPeriodSeconds = _finalizationPeriodSeconds;
     }
 }
