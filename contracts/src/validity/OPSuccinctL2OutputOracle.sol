@@ -587,9 +587,9 @@ contract OPSuccinctL2OutputOracle is Initializable, Semver {
     function updateFinalizationPeriodSeconds(uint256 _finalizationPeriodSeconds) external {
         require(msg.sender == challenger, "L2OutputOracle: caller must be the challenger");
         if (optimisticMode) {
-            require(_finalizationPeriodSeconds >= 1 hours, "L2OutputOracle: finalization period must be greater than 1 hour");
-        } else {
             require(_finalizationPeriodSeconds >= 7 days, "L2OutputOracle: finalization period must be greater than 7 days");
+        } else {
+            require(_finalizationPeriodSeconds >= 1 hours, "L2OutputOracle: finalization period must be greater than 1 hour");
         }
         emit FinalizationPeriodSecondsUpdated(finalizationPeriodSeconds, _finalizationPeriodSeconds);
         finalizationPeriodSeconds = _finalizationPeriodSeconds;
