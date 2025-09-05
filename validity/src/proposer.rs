@@ -1006,11 +1006,13 @@ where
     /// Fetch and log the proposer metrics.
     async fn log_proposer_metrics(&self) -> Result<()> {
         // Get the latest proposed block number on the contract.
-        let latest_proposed_block_number = get_latest_proposed_block_number(
+        let mut latest_proposed_block_number = get_latest_proposed_block_number(
             self.contract_config.l2oo_address,
             self.driver_config.fetcher.as_ref(),
         )
         .await?;
+
+        latest_proposed_block_number = latest_proposed_block_number.saturating_sub(self.requester_config.range_proof_interval);
 
         // Get all completed range proofs from the database.
         let completed_range_proofs = self
