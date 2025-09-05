@@ -411,9 +411,9 @@ where
         };
 
         // Get the submission interval from the contract.
-        let contract_submission_interval: u64 =
-            self.contract_config.l2oo_contract.submissionInterval().call().await?.to::<u64>();
-
+        // let contract_submission_interval: u64 =
+        //     self.contract_config.l2oo_contract.submissionInterval().call().await?.to::<u64>();
+        let contract_submission_interval = self.requester_config.submission_interval;
         // Use the submission interval from the contract if it's greater than the one in the
         // proposer config.
         let submission_interval =
@@ -1093,15 +1093,15 @@ where
             .set(fetcher.get_l2_header(BlockId::finalized()).await?.number as f64);
 
         // Get submission interval from contract and set gauge
-        let contract_submission_interval: u64 = self
-            .contract_config
-            .l2oo_contract
-            .submissionInterval()
-            .call()
-            .await?
-            .try_into()
-            .unwrap();
-
+        // let contract_submission_interval: u64 = self
+        //     .contract_config
+        //     .l2oo_contract
+        //     .submissionInterval()
+        //     .call()
+        //     .await?
+        //     .try_into()
+        //     .unwrap();
+        let contract_submission_interval = self.requester_config.submission_interval;
         let submission_interval =
             contract_submission_interval.max(self.requester_config.submission_interval);
         ValidityGauge::MinBlockToProveToAgg
