@@ -64,3 +64,9 @@ tasks:
       - task: _script
         vars:
           EXTRA_ARGS: ${ROOT_DIR}/script/OPSuccinctUpgrader.s.sol {{.CLI_ARGS}}
+
+  UpgradeDrill:
+    cmds:
+      - task: _script
+        vars:
+          EXTRA_ARGS: ${ROOT_DIR}/script/OPSuccinctUpgraderDrill.s.sol {{.CLI_ARGS}}
