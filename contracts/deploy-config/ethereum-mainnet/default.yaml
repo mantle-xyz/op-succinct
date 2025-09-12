@@ -14,7 +14,7 @@ envs:
 explorers: {}
 
 config:
-  aggregationVkey: "0x0011f861c8ae88a0a54a5a6ca17752aa0d47c4d02975de1e2551cb0e0db80a9b"
+  aggregationVkey: "0x00bca7947ba758bd6f539f480c6d983cca4bd4387a411a41a71fb953d5df3de7"
   challenger: "0x2F44BD2a54aC3fB20cd7783cF94334069641daC9"
   executeUpgradeCall: false
   finalizationPeriod: 604800
@@ -23,7 +23,7 @@ config:
   owner: "0x4e59e778a0fb77fBb305637435C62FaeD9aED40f"
   proposer: "0x6667961f5e9C98A76a48767522150889703Ed77D"
   proxyAdmin: "0xca35F8338054739D138884685e08b39EE2217794"
-  rangeVkeyCommitment: "0x1cb578c442be39ee74bab2a2062f848b21cad06877e1b3b75037fc4c11378125"
+  rangeVkeyCommitment: "0x2d0dcc4f4a5e59b80239c28a3fb68ab63b8eaf6f132239e95f927da9046f4256"
   rollupConfigHash: "0x46fed49cbaf7272fb44cbd470ac7ee460d5e3b22eed239059bbbf4b356351792"
   startingBlockNumber: 61171946
   startingOutputRoot: "0x0000000000000000000000000000000000000000000000000000000000000000"
