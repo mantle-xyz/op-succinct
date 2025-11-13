@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
+use kona_genesis::L1ChainConfig;
 use kona_proof::{l1::OracleL1ChainProvider, l2::OracleL2ChainProvider};
 use op_succinct_client_utils::{
     boot::BootInfoStruct,
     witness::{
         executor::{get_inputs_for_pipeline, WitnessExecutor},
         preimage_store::PreimageStore,
-        WitnessData,
     },
     BlobStore,
 };
@@ -21,7 +21,7 @@ pub fn setup_tracing() {
     tracing::subscriber::set_global_default(subscriber).map_err(|e| anyhow!(e)).unwrap();
 }
 
-pub async fn run_range_program<E, W>(executor: E, witness_data: W)
+pub async fn run_range_program<E>(executor: E, oracle: Arc<PreimageStore>, beacon: BlobStore)
 where
     E: WitnessExecutor<
             O = PreimageStore,
@@ -30,21 +30,21 @@ where
             L2 = OracleL2ChainProvider<PreimageStore>,
         > + Send
         + Sync,
-    W: WitnessData + Send + Sync,
 {
     ////////////////////////////////////////////////////////////////
     //                          PROLOGUE                          //
     ////////////////////////////////////////////////////////////////
-    let (oracle, beacon) = witness_data.get_oracle_and_blob_provider().await.unwrap();
-
     let (boot_info, input) = get_inputs_for_pipeline(oracle.clone()).await.unwrap();
     let boot_info = match input {
         Some((cursor, l1_provider, l2_provider)) => {
             let rollup_config = Arc::new(boot_info.rollup_config.clone());
-
+            // [Mantle] l1_config is not used in the proof pipeline, but it is needed to create the
+            // pipeline cursor.
+            let l1_config = Arc::new(L1ChainConfig::default());
             let pipeline = executor
                 .create_pipeline(
                     rollup_config,
+                    l1_config,
                     cursor.clone(),
                     oracle,
                     beacon,

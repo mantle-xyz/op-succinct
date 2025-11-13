@@ -1,4 +1,4 @@
-use alloy_primitives::{keccak256, map::HashMap};
+use alloy_primitives::keccak256;
 use async_trait::async_trait;
 use kona_preimage::{
     errors::{PreimageOracleError, PreimageOracleResult},
@@ -11,6 +11,7 @@ use rust_kzg_bn254_verifier::batch::verify_blob_kzg_proof_batch;
 use rust_kzg_bn254_primitives::blob::Blob as EigenBlob;
 use ark_bn254::{Fq, G1Affine};
 use ark_ff::PrimeField;
+use std::collections::HashMap;
 
 
 #[derive(Default)]

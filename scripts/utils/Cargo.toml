@@ -12,10 +12,6 @@ name = "op_succinct_scripts"
 path = "src/lib.rs"
 
 [[bin]]
-name = "fetch-and-save-proof"
-path = "bin/fetch_and_save_proof.rs"
-
-[[bin]]
 name = "config"
 path = "bin/config.rs"
 
@@ -27,17 +23,6 @@ path = "bin/cost_estimator.rs"
 name = "block-data"
 path = "bin/block_data.rs"
 
-[[bin]]
-name = "fetch-l2oo-config"
-path = "bin/fetch_l2oo_config.rs"
-
-[[bin]]
-name = "fetch-fault-dispute-game-config"
-path = "bin/fetch_fault_dispute_game_config.rs"
-
-[[bin]]
-name = "gen-sp1-test-artifacts"
-path = "bin/gen_sp1_test_artifacts.rs"
 
 [dependencies]
 

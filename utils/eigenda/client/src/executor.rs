@@ -4,9 +4,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use hydro_eigenda::EigenDASource;
 use hydro_oracle::OracleEigenDaProvider;
-use kona_derive::traits::BlobProvider;
+use kona_derive::BlobProvider;
 use kona_driver::PipelineCursor;
-use kona_genesis::RollupConfig;
+use kona_genesis::{RollupConfig, L1ChainConfig};
 use kona_preimage::CommsClient;
 use kona_proof::{
     l1::{OracleL1ChainProvider, OraclePipeline},
@@ -50,6 +50,7 @@ where
     async fn create_pipeline(
         &self,
         rollup_config: Arc<RollupConfig>,
+        l1_config: Arc<L1ChainConfig>,
         cursor: Arc<RwLock<PipelineCursor>>,
         oracle: Arc<Self::O>,
         beacon: Self::B,
@@ -65,6 +66,7 @@ where
 
         Ok(OraclePipeline::new(
             rollup_config,
+            l1_config,
             cursor,
             oracle,
             da_provider,

@@ -294,7 +294,8 @@ where
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs();
-            if current_time > status.deadline {
+
+            if current_time > status.deadline() {
                 match self
                     .proof_requester
                     .handle_failed_request(request.clone(), status.execution_status())
@@ -319,7 +320,7 @@ where
 
             // If the proof request has been fulfilled, update the request to status Complete and
             // add the proof bytes to the database.
-            if status.fulfillment_status() == FulfillmentStatus::Fulfilled {
+            if status.fulfillment_status() == FulfillmentStatus::Fulfilled as i32 {
                 let proof: SP1ProofWithPublicValues = proof.unwrap();
 
                 let proof_bytes = match proof.proof {
@@ -337,7 +338,7 @@ where
                     .await?;
                 // Update the prove_duration based on the current time and the proof_request_time.
                 self.driver_config.driver_db_client.update_prove_duration(request.id).await?;
-            } else if status.fulfillment_status() == FulfillmentStatus::Unfulfillable {
+            } else if status.fulfillment_status() == FulfillmentStatus::Unfulfillable as i32 {
                 self.proof_requester
                     .handle_failed_request(request, status.execution_status())
                     .await?;
@@ -802,27 +803,12 @@ where
 
     /// Validate the requester config matches the contract.
     async fn validate_contract_config(&self) -> Result<()> {
-        let contract_rollup_config_hash = self
-            .contract_config
-            .l2oo_contract
-            .rollupConfigHash()
-            .call()
-            .await?
-            .0;
-        let contract_agg_vkey_hash = self
-            .contract_config
-            .l2oo_contract
-            .aggregationVkey()
-            .call()
-            .await?
-            .0;
-        let contract_range_vkey_commitment = self
-            .contract_config
-            .l2oo_contract
-            .rangeVkeyCommitment()
-            .call()
-            .await?
-            .0;
+        let contract_rollup_config_hash =
+            self.contract_config.l2oo_contract.rollupConfigHash().call().await?.0;
+        let contract_agg_vkey_hash =
+            self.contract_config.l2oo_contract.aggregationVkey().call().await?.0;
+        let contract_range_vkey_commitment =
+            self.contract_config.l2oo_contract.rangeVkeyCommitment().call().await?.0;
 
         let rollup_config_hash_match =
             contract_rollup_config_hash == self.program_config.commitments.rollup_config_hash;
@@ -945,7 +931,7 @@ where
                                 .proof_requester
                                 .handle_failed_request(
                                     request,
-                                    ExecutionStatus::UnspecifiedExecutionStatus,
+                                    ExecutionStatus::UnspecifiedExecutionStatus as i32,
                                 )
                                 .await
                             {
@@ -971,7 +957,7 @@ where
                             .proof_requester
                             .handle_failed_request(
                                 request,
-                                ExecutionStatus::UnspecifiedExecutionStatus,
+                                ExecutionStatus::UnspecifiedExecutionStatus as i32,
                             )
                             .await
                         {

@@ -15,9 +15,7 @@ type WitnessExecutor = EigendaDAWitnessExecutor<
     OnlineBlobStore<OracleBlobProvider<DefaultOracleBase>>,
 >;
 
-pub struct EigendaDAWitnessGenerator {
-    pub executor: WitnessExecutor,
-}
+pub struct EigendaDAWitnessGenerator {}
 
 #[async_trait]
 impl WitnessGenerator for EigendaDAWitnessGenerator {
@@ -25,7 +23,7 @@ impl WitnessGenerator for EigendaDAWitnessGenerator {
     type WitnessExecutor = WitnessExecutor;
 
     fn get_executor(&self) -> &Self::WitnessExecutor {
-        &self.executor
+        panic!("get_executor should not be called directly for EigenDAWitnessGenerator")
     }
 
     fn get_sp1_stdin(&self, witness: Self::WitnessData) -> Result<SP1Stdin> {
