@@ -71,7 +71,7 @@ where
 
         #[cfg(target_os = "zkvm")]
         println!("cycle-tracker-report-start: payload-derivation");
-        let mut attributes = match driver.pipeline.produce_payload(tip_cursor.l2_safe_head).await {
+        let attributes = match driver.pipeline.produce_payload(tip_cursor.l2_safe_head).await {
             Ok(attrs) => attrs.take_inner(),
             Err(PipelineErrorKind::Critical(PipelineError::EndOfSource)) => {
                 warn!(target: "client", "Exhausted data source; Halting derivation and using current safe head.");
