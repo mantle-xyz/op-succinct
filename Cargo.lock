@@ -4542,7 +4542,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 [[package]]
 name = "hydro-eigenda"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/hydro?branch=fusaka#7685f6973e52fc1c28b354c32d1cac5c5897f681"
+source = "git+https://github.com/mantle-xyz/hydro?branch=fusaka#75527091f91d767d2156b47030cfb3c582d1b15b"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -4562,7 +4562,7 @@ dependencies = [
 [[package]]
 name = "hydro-host"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/hydro?branch=fusaka#7685f6973e52fc1c28b354c32d1cac5c5897f681"
+source = "git+https://github.com/mantle-xyz/hydro?branch=fusaka#75527091f91d767d2156b47030cfb3c582d1b15b"
 dependencies = [
  "alloy-primitives",
  "alloy-provider",
@@ -4591,7 +4591,7 @@ dependencies = [
 [[package]]
 name = "hydro-oracle"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/hydro?branch=fusaka#7685f6973e52fc1c28b354c32d1cac5c5897f681"
+source = "git+https://github.com/mantle-xyz/hydro?branch=fusaka#75527091f91d767d2156b47030cfb3c582d1b15b"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -4605,7 +4605,7 @@ dependencies = [
 [[package]]
 name = "hydro-proofs"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/hydro?branch=fusaka#7685f6973e52fc1c28b354c32d1cac5c5897f681"
+source = "git+https://github.com/mantle-xyz/hydro?branch=fusaka#75527091f91d767d2156b47030cfb3c582d1b15b"
 dependencies = [
  "alloy-primitives",
  "num",
@@ -5391,7 +5391,7 @@ dependencies = [
 [[package]]
 name = "kona-cli"
 version = "0.3.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-chains",
  "alloy-primitives",
@@ -5411,7 +5411,7 @@ dependencies = [
 [[package]]
 name = "kona-client"
 version = "1.0.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5450,7 +5450,7 @@ dependencies = [
 [[package]]
 name = "kona-derive"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5471,7 +5471,7 @@ dependencies = [
 [[package]]
 name = "kona-disc"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-rlp",
  "backon",
@@ -5490,7 +5490,7 @@ dependencies = [
 [[package]]
 name = "kona-driver"
 version = "0.4.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-consensus",
  "alloy-evm",
@@ -5511,7 +5511,7 @@ dependencies = [
 [[package]]
 name = "kona-engine"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5549,7 +5549,7 @@ dependencies = [
 [[package]]
 name = "kona-executor"
 version = "0.4.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5573,7 +5573,7 @@ dependencies = [
 [[package]]
 name = "kona-genesis"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-chains",
  "alloy-consensus",
@@ -5593,7 +5593,7 @@ dependencies = [
 [[package]]
 name = "kona-gossip"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5626,7 +5626,7 @@ dependencies = [
 [[package]]
 name = "kona-hardforks"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -5637,7 +5637,7 @@ dependencies = [
 [[package]]
 name = "kona-host"
 version = "1.0.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5685,7 +5685,7 @@ dependencies = [
 [[package]]
 name = "kona-interop"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5707,12 +5707,12 @@ dependencies = [
 [[package]]
 name = "kona-macros"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 
 [[package]]
 name = "kona-mpt"
 version = "0.3.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -5724,7 +5724,7 @@ dependencies = [
 [[package]]
 name = "kona-peers"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -5747,7 +5747,7 @@ dependencies = [
 [[package]]
 name = "kona-preimage"
 version = "0.3.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-primitives",
  "async-channel",
@@ -5761,7 +5761,7 @@ dependencies = [
 [[package]]
 name = "kona-proof"
 version = "0.3.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5797,7 +5797,7 @@ dependencies = [
 [[package]]
 name = "kona-proof-interop"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5829,7 +5829,7 @@ dependencies = [
 [[package]]
 name = "kona-protocol"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloc-no-stdlib",
  "alloy-consensus",
@@ -5859,7 +5859,7 @@ dependencies = [
 [[package]]
 name = "kona-providers-alloy"
 version = "0.3.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5890,7 +5890,7 @@ dependencies = [
 [[package]]
 name = "kona-registry"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-chains",
  "alloy-eips",
@@ -5909,7 +5909,7 @@ dependencies = [
 [[package]]
 name = "kona-rpc"
 version = "0.3.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -5939,7 +5939,7 @@ dependencies = [
 [[package]]
 name = "kona-sources"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -5969,7 +5969,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "async-trait",
  "buddy_system_allocator",
@@ -5981,7 +5981,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm-proc"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#8486dae5a6e7bd83816fe685c58223aa8d805508"
+source = "git+https://github.com/mantle-xyz/kona?branch=fusaka#14d8cb893de5cc20db7b85fe211f9a8f78d6406c"
 dependencies = [
  "cfg-if",
  "kona-std-fpvm",
