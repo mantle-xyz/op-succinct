@@ -5,6 +5,7 @@ use alloy_primitives::B256;
 use anyhow::Result;
 use async_trait::async_trait;
 use hydro_host::eigenda::{EigenDACfg, EigenDAChainHost};
+use op_succinct_eigenda_client_utils::executor::EigendaDAWitnessExecutor;
 use op_succinct_host_utils::{fetcher::OPSuccinctDataFetcher, host::OPSuccinctHost};
 
 use crate::witness_generator::EigendaDAWitnessGenerator;
@@ -97,6 +98,11 @@ impl OPSuccinctHost for EigendaOPSuccinctHost {
 
 impl EigendaOPSuccinctHost {
     pub fn new(fetcher: Arc<OPSuccinctDataFetcher>) -> Self {
-        Self { fetcher, witness_generator: Arc::new(EigendaDAWitnessGenerator {}) }
+        Self {
+            fetcher,
+            witness_generator: Arc::new(EigendaDAWitnessGenerator {
+                executor: EigendaDAWitnessExecutor::new(),
+            }),
+        }
     }
 }
