@@ -51,10 +51,11 @@ impl OpZkvmPrecompiles {
             spec @ (OpSpecId::BEDROCK |
             OpSpecId::REGOLITH |
             OpSpecId::CANYON |
-            OpSpecId::ECOTONE) => Precompiles::new(spec.into_eth_spec().into()).clone(),
+            OpSpecId::ECOTONE |
+            OpSpecId::OSAKA) => Precompiles::new(spec.into_eth_spec().into()).clone(),
             OpSpecId::FJORD => fjord().clone(),
             OpSpecId::GRANITE | OpSpecId::HOLOCENE => granite().clone(),
-            OpSpecId::ISTHMUS | OpSpecId::INTEROP | OpSpecId::OSAKA  | OpSpecId::JOVIAN => isthmus().clone(),
+            OpSpecId::ISTHMUS | OpSpecId::INTEROP | OpSpecId::JOVIAN => isthmus().clone(),
         };
         let mut precompiles_owned = precompiles.clone();
         precompiles_owned.extend(get_precompiles());
