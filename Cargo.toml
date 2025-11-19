@@ -74,30 +74,30 @@ strum_macros = "0.27.1"
 tempfile = "3.10.1"
 
 # kona
-kona-mpt = { git = "https://github.com/mantle-xyz/kona", branch="fusaka" }
-kona-derive = { git = "https://github.com/mantle-xyz/kona", branch="fusaka", default-features = false }
-kona-driver = { git = "https://github.com/mantle-xyz/kona", branch="fusaka" }
-kona-preimage = { git = "https://github.com/mantle-xyz/kona", branch="fusaka", features = [
+kona-mpt = { git = "https://github.com/mantle-xyz/kona", branch = "fusaka" }
+kona-derive = { git = "https://github.com/mantle-xyz/kona", branch = "fusaka", default-features = false }
+kona-driver = { git = "https://github.com/mantle-xyz/kona", branch = "fusaka" }
+kona-preimage = { git = "https://github.com/mantle-xyz/kona", branch = "fusaka", features = [
     "rkyv",
     "serde",
 ] }
-kona-executor = { git = "https://github.com/mantle-xyz/kona", branch="fusaka" }
-kona-proof = { git = "https://github.com/mantle-xyz/kona", branch="fusaka" }
+kona-executor = { git = "https://github.com/mantle-xyz/kona", branch = "fusaka" }
+kona-proof = { git = "https://github.com/mantle-xyz/kona", branch = "fusaka" }
 
-kona-client = { git = "https://github.com/mantle-xyz/kona", branch="fusaka" }
-kona-host = { git = "https://github.com/mantle-xyz/kona", branch="fusaka" }
-kona-providers-alloy = { git = "https://github.com/mantle-xyz/kona", branch="fusaka" }
-kona-rpc = { git = "https://github.com/mantle-xyz/kona", branch="fusaka", default-features = false }
-kona-protocol = { git = "https://github.com/mantle-xyz/kona", branch="fusaka", default-features = false }
-kona-registry = { git = "https://github.com/mantle-xyz/kona", branch="fusaka", default-features = false }
-kona-genesis = { git = "https://github.com/mantle-xyz/kona", branch="fusaka", default-features = false }
+kona-client = { git = "https://github.com/mantle-xyz/kona", branch = "fusaka" }
+kona-host = { git = "https://github.com/mantle-xyz/kona", branch = "fusaka" }
+kona-providers-alloy = { git = "https://github.com/mantle-xyz/kona", branch = "fusaka" }
+kona-rpc = { git = "https://github.com/mantle-xyz/kona", branch = "fusaka", default-features = false }
+kona-protocol = { git = "https://github.com/mantle-xyz/kona", branch = "fusaka", default-features = false }
+kona-registry = { git = "https://github.com/mantle-xyz/kona", branch = "fusaka", default-features = false }
+kona-genesis = { git = "https://github.com/mantle-xyz/kona", branch = "fusaka", default-features = false }
 
 # hydro
-hydro-client = { git = "https://github.com/mantle-xyz/hydro", branch="fusaka" }
-hydro-host = { git = "https://github.com/mantle-xyz/hydro", branch="fusaka" }
-hydro-oracle = { git = "https://github.com/mantle-xyz/hydro", branch="fusaka" }
-hydro-eigenda = { git = "https://github.com/mantle-xyz/hydro", branch="fusaka" }
-hydro-proofs = { git = "https://github.com/mantle-xyz/hydro", branch="fusaka" }
+hydro-client = { git = "https://github.com/mantle-xyz/hydro", branch = "fusaka" }
+hydro-host = { git = "https://github.com/mantle-xyz/hydro", branch = "fusaka" }
+hydro-oracle = { git = "https://github.com/mantle-xyz/hydro", branch = "fusaka" }
+hydro-eigenda = { git = "https://github.com/mantle-xyz/hydro", branch = "fusaka" }
+hydro-proofs = { git = "https://github.com/mantle-xyz/hydro", branch = "fusaka" }
 
 # op-succinct
 op-succinct-prove = { path = "scripts/prove" }
@@ -156,25 +156,27 @@ alloy-sol-types = { version = "1.3.1", default-features = false }
 alloy-sol-macro = { version = "1.3.1", default-features = false }
 
 # OP Alloy
-op-alloy-consensus = { git = "https://github.com/mantle-xyz/op-alloy", branch="v220", default-features = false }
-op-alloy-rpc-types = { git = "https://github.com/mantle-xyz/op-alloy", branch="v220", default-features = false }
-op-alloy-rpc-types-engine = { git = "https://github.com/mantle-xyz/op-alloy", branch="v220", default-features = false }
-op-alloy-network = { git = "https://github.com/mantle-xyz/op-alloy", branch="v220", default-features = false }
+op-alloy-consensus = { git = "https://github.com/mantle-xyz/op-alloy", branch = "v220", default-features = false }
+op-alloy-rpc-types = { git = "https://github.com/mantle-xyz/op-alloy", branch = "v220", default-features = false }
+op-alloy-rpc-types-engine = { git = "https://github.com/mantle-xyz/op-alloy", branch = "v220", default-features = false }
+op-alloy-network = { git = "https://github.com/mantle-xyz/op-alloy", branch = "v220", default-features = false }
 
 # Execution
-alloy-evm = { git = "https://github.com/mantle-xyz/evm", branch="fusaka", default-features = false, features = [
+alloy-evm = { git = "https://github.com/mantle-xyz/evm", branch = "fusaka", default-features = false, features = [
     "op",
 ] }
-alloy-op-evm = { git = "https://github.com/mantle-xyz/evm", branch="fusaka", default-features = false }
+alloy-op-evm = { git = "https://github.com/mantle-xyz/evm", branch = "fusaka", default-features = false }
 # Use kzg-rs and substrate-bn for the zkVM.
-revm = { git = "https://github.com/mantle-xyz/revm", branch="fusaka", default-features = false, features = [
+revm = { git = "https://github.com/mantle-xyz/revm", branch = "fusaka", default-features = false, features = [
     "bn",
 ] }
-op-revm = { git = "https://github.com/mantle-xyz/revm", branch="fusaka", default-features = false }
-revm-precompile = { git = "https://github.com/mantle-xyz/revm", branch="fusaka", default-features = false }
+op-revm = { git = "https://github.com/mantle-xyz/revm", branch = "fusaka", default-features = false }
+revm-precompile = { git = "https://github.com/mantle-xyz/revm", branch = "fusaka", default-features = false }
 
 # SP1
-sp1-sdk = { version = "=5.2.2", default-features = false, features = ["network"] }
+sp1-sdk = { version = "=5.2.2", default-features = false, features = [
+    "network",
+] }
 sp1-lib = { version = "=5.2.2", features = ["verify"] }
 sp1-zkvm = { version = "=5.2.2", features = ["verify"] }
 sp1-build = { version = "=5.2.2" }
