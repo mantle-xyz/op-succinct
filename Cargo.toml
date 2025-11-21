@@ -174,9 +174,7 @@ op-revm = { git = "https://github.com/mantle-xyz/revm", branch = "fusaka", defau
 revm-precompile = { git = "https://github.com/mantle-xyz/revm", branch = "fusaka", default-features = false }
 
 # SP1
-sp1-sdk = { version = "=5.2.2", default-features = false, features = [
-    "network",
-] }
+sp1-sdk = { version = "=5.2.2", default-features = true }
 sp1-lib = { version = "=5.2.2", features = ["verify"] }
 sp1-zkvm = { version = "=5.2.2", features = ["verify"] }
 sp1-build = { version = "=5.2.2" }
