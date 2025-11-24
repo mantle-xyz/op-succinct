@@ -16,7 +16,10 @@ use op_succinct_host_utils::{
 use op_succinct_proof_utils::get_range_elf_embedded;
 use op_succinct_signer_utils::Signer;
 use sp1_sdk::{
-    network::proto::types::{ExecutionStatus, FulfillmentStatus},
+    network::{
+        proto::types::{ExecutionStatus, FulfillmentStatus},
+        NetworkMode,
+    },
     HashableKey, NetworkProver, Prover, ProverClient, SP1Proof, SP1ProofWithPublicValues,
 };
 use tokio::sync::Mutex;
@@ -91,9 +94,10 @@ where
             );
             "0x0000000000000000000000000000000000000000000000000000000000000001".to_string()
         });
-
-        let network_prover =
-            Arc::new(ProverClient::builder().network().private_key(&private_key).build());
+        let network_mode = NetworkMode::Reserved;
+        let network_prover = Arc::new(
+            ProverClient::builder().network_for(network_mode).private_key(&private_key).build(),
+        );
 
         let (range_pk, range_vk) = network_prover.setup(get_range_elf_embedded());
 
