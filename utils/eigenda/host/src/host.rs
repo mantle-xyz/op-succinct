@@ -63,11 +63,10 @@ impl OPSuccinctHost for EigendaOPSuccinctHost {
     /// Get the highest L2 block that can be safely proven given EigenDA's commitments.
     /// Returns the maximum L2 block number where all referenced EigenDA data has been committed
     /// to Ethereum and is verifiable in proofs.
-    /// [TODO] CHECK
     async fn get_finalized_l2_block_number(
         &self,
         fetcher: &OPSuccinctDataFetcher,
-        _latest_proposed_block_number: u64,
+        _: u64,
     ) -> Result<Option<u64>> {
         let finalized_l2_block_number = fetcher.get_l2_header(BlockId::finalized()).await?;
         Ok(Some(finalized_l2_block_number.number))
@@ -75,7 +74,6 @@ impl OPSuccinctHost for EigendaOPSuccinctHost {
 
     /// Calculate the safe L1 head hash for EigenDA considering EigenDA commitments.
     /// Finds the latest L1 block containing batches with EigenDA data committed via EigenDA.
-    /// [TODO] CHECK
     async fn calculate_safe_l1_head(
         &self,
         fetcher: &OPSuccinctDataFetcher,

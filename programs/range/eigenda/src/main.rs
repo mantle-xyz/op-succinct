@@ -9,8 +9,8 @@
 #![no_main]
 sp1_zkvm::entrypoint!(main);
 
+use op_succinct_client_utils::witness::{DefaultWitnessData, WitnessData};
 use op_succinct_eigenda_client_utils::executor::EigendaDAWitnessExecutor;
-use op_succinct_client_utils::witness::DefaultWitnessData;
 use op_succinct_range_utils::run_range_program;
 #[cfg(feature = "tracing-subscriber")]
 use op_succinct_range_utils::setup_tracing;
@@ -25,6 +25,11 @@ fn main() {
         let witness_data = rkyv::from_bytes::<DefaultWitnessData, Error>(&witness_rkyv_bytes)
             .expect("Failed to deserialize witness data.");
 
-        run_range_program(EigendaDAWitnessExecutor::new(), witness_data).await;
+        let (oracle, beacon) = witness_data
+            .get_oracle_and_blob_provider()
+            .await
+            .expect("Failed to load oracle and blob provider");
+
+        run_range_program(EigendaDAWitnessExecutor::new(), oracle, beacon).await;
     });
 }

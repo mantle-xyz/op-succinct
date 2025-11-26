@@ -9,8 +9,8 @@ use op_succinct_host_utils::{
 };
 use op_succinct_proof_utils::get_range_elf_embedded;
 use sp1_sdk::{
-    NetworkProver, SP1_CIRCUIT_VERSION, SP1Proof, SP1ProofMode, SP1ProofWithPublicValues, SP1Stdin,
     network::proto::types::{ExecutionStatus, FulfillmentStrategy},
+    NetworkProver, SP1Proof, SP1ProofMode, SP1ProofWithPublicValues, SP1Stdin, SP1_CIRCUIT_VERSION,
 };
 use std::{
     sync::Arc,
@@ -19,8 +19,8 @@ use std::{
 use tracing::{info, warn};
 
 use crate::{
-    OPSuccinctRequest, ProgramConfig, RequestExecutionStatistics, RequestStatus, RequestType,
-    ValidityGauge, db::DriverDBClient,
+    db::DriverDBClient, OPSuccinctRequest, ProgramConfig, RequestExecutionStatistics,
+    RequestStatus, RequestType, ValidityGauge,
 };
 
 pub struct OPSuccinctProofRequester<H: OPSuccinctHost> {
@@ -317,7 +317,7 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
     pub async fn handle_failed_request(
         &self,
         request: OPSuccinctRequest,
-        execution_status: ExecutionStatus,
+        execution_status: i32,
     ) -> Result<()> {
         warn!(
             id = request.id,
@@ -327,7 +327,6 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
             "Setting request to failed"
         );
 
-        // Mark the existing request as failed.
         self.db_client.update_request_status(request.id, RequestStatus::Failed).await?;
 
         let l1_chain_id = self.fetcher.l1_provider.get_chain_id().await?;
@@ -346,7 +345,7 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
                 .await?;
 
             // NOTE: The failed_requests check here can be removed in V5.
-            if num_failed_requests > 2 || execution_status == ExecutionStatus::Unexecutable {
+            if num_failed_requests > 2 || execution_status == ExecutionStatus::Unexecutable as i32 {
                 info!("Splitting failed request into two: {:?}", request.id);
                 let mid_block = (request.start_block + request.end_block) / 2;
                 let new_requests = vec![
@@ -459,6 +458,19 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
                     let proof_id = self.request_range_proof(stdin).await?;
                     self.db_client.update_request_to_prove(request.id, proof_id).await?;
                 }
+
+                info!(
+                    proof_id = request.id,
+                    start_block = request.start_block,
+                    end_block = request.end_block,
+                    proof_request_time = ?request.created_at,
+                    total_tx_fees = %request.total_tx_fees,
+                    total_transactions = request.total_nb_transactions,
+                    witnessgen_duration_s = request.witnessgen_duration,
+                    total_eth_gas_used = request.total_eth_gas_used,
+                    total_l1_fees = %request.total_l1_fees,
+                    "Range proof request submitted to Succinct network"
+                );
             }
             RequestType::Aggregation => {
                 if self.mock {
@@ -468,6 +480,17 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
                     let proof_id = self.request_agg_proof(stdin).await?;
                     self.db_client.update_request_to_prove(request.id, proof_id).await?;
                 }
+
+                info!(
+                    proof_id = request.id,
+                    start_block = request.start_block,
+                    end_block = request.end_block,
+                    proof_request_time = ?request.created_at,
+                    witnessgen_duration_s = request.witnessgen_duration,
+                    checkpointed_l1_block_number = request.checkpointed_l1_block_number,
+                    checkpointed_l1_block_hash = ?request.checkpointed_l1_block_hash,
+                    "Aggregation proof request submitted to Succinct network"
+                );
             }
         }
 
