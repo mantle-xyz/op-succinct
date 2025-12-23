@@ -34,6 +34,17 @@ fn get_precompiles() -> Vec<PrecompileWithAddress> {
     ]
 }
 
+fn get_osaka_precompiles() -> Vec<PrecompileWithAddress> {
+    vec![
+        bn254::add::ISTANBUL,
+        bn254::mul::ISTANBUL,
+        bn254::pair::ISTANBUL,
+        secp256k1::ECRECOVER,
+        secp256r1::P256VERIFY_OSAKA,
+        kzg_point_evaluation::POINT_EVALUATION,
+    ]
+}
+
 /// The ZKVM-cycle-tracking precompiles.
 #[derive(Debug)]
 pub struct OpZkvmPrecompiles {
@@ -58,7 +69,11 @@ impl OpZkvmPrecompiles {
             OpSpecId::ISTHMUS | OpSpecId::INTEROP | OpSpecId::JOVIAN => isthmus().clone(),
         };
         let mut precompiles_owned = precompiles.clone();
-        precompiles_owned.extend(get_precompiles());
+        if spec < OpSpecId::OSAKA {
+            precompiles_owned.extend(get_precompiles());
+        }else{
+            precompiles_owned.extend(get_osaka_precompiles());
+        }
         let precompiles = Box::leak(Box::new(precompiles_owned));
 
         Self { inner: EthPrecompiles { precompiles, spec: SpecId::default() }, spec }
