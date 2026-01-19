@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use kona_genesis::L1ChainConfig;
 use kona_proof::{l1::OracleL1ChainProvider, l2::OracleL2ChainProvider};
 use op_succinct_client_utils::{
     boot::BootInfoStruct,
@@ -38,9 +37,8 @@ where
     let boot_info = match input {
         Some((cursor, l1_provider, l2_provider)) => {
             let rollup_config = Arc::new(boot_info.rollup_config.clone());
-            // [Mantle] l1_config is not used in the proof pipeline, but it is needed to create the
-            // pipeline cursor.
-            let l1_config = Arc::new(L1ChainConfig::default());
+            let l1_config = Arc::new(boot_info.l1_config.clone());
+
             let pipeline = executor
                 .create_pipeline(
                     rollup_config,

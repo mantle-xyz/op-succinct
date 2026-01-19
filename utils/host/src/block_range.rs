@@ -67,7 +67,7 @@ pub async fn get_validated_block_range<H: OPSuccinctHost>(
     Ok((l2_start_block, l2_end_block))
 }
 
-// Get a rolling block range whose end aligns with the host's finalized L2 block.
+/// Get a rolling block range whose end aligns with the host's finalized L2 block.
 ///
 /// The returned tuple represents the last `range` blocks that the host considers finalized
 /// according to its DA-specific logic, making the range safe to use for proof generation.

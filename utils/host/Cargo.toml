@@ -30,9 +30,6 @@ kona-proof.workspace = true
 kona-protocol.workspace = true
 kona-rpc.workspace = true
 
-# hydro
-hydro-host.workspace = true
-
 # alloy
 alloy-consensus.workspace = true
 alloy-contract.workspace = true

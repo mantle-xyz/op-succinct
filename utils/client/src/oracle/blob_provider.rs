@@ -4,7 +4,7 @@ use alloy_consensus::Blob;
 use alloy_eips::eip4844::{kzg_to_versioned_hash, IndexedBlobHash};
 use alloy_primitives::B256;
 use async_trait::async_trait;
-use kona_derive::{BlobProviderError, BlobProvider};
+use kona_derive::{BlobProvider, BlobProviderError};
 use kona_protocol::BlockInfo;
 use kzg_rs::get_kzg_settings;
 
@@ -31,9 +31,9 @@ impl From<BlobData> for BlobStore {
             value.proofs,
             &get_kzg_settings(),
         ) {
-            Ok(true) => {} 
+            Ok(true) => {} // Verification passed
             Ok(false) => panic!("KZG proof verification failed: invalid proofs"),
-            Err(e) => panic!("KZG proof verification error: {e}"),
+            Err(e) => panic!("KZG proof verification error: {}", e),
         }
 
         Self { versioned_blobs }

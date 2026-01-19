@@ -9,7 +9,7 @@ fn build_program(program_name: &str, elf_name: &str, features: Option<Vec<String
         elf_name: Some(elf_name.to_string()),
         output_directory: Some("../../elf".to_string()),
         docker: true,
-        tag: "v5.0.0".to_string(),
+        tag: "v5.2.4".to_string(),
         workspace_directory: Some("../../".to_string()),
         ..Default::default()
     };
@@ -30,16 +30,4 @@ pub fn build_all() {
     // build_program("aggregation", "aggregation-elf", None);
     // build_program("range/ethereum", "range-elf-bump", None);
     // build_program("range/ethereum", "range-elf-embedded", Some(vec!["embedded".to_string()]));
-    // build_program(
-    //     "range/celestia",
-    //     "celestia-range-elf-embedded",
-    //     Some(vec!["embedded".to_string()]),
-    // );
-    // build_program(
-    //     "range/eigenda",
-    //     "eigenda-range-elf-embedded",
-    //     Some(vec!["embedded".to_string()]),
-    // );
-
-    // cargo prove build --elf-name eigenda-range-elf-embedded --docker --tag v5.0.0 --features embedded --output-directory ../../../elf
 }

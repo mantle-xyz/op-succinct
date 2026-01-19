@@ -86,7 +86,7 @@ async fn execute_blocks_and_write_stats_csv<H: OPSuccinctHost>(
 
     // Execute the program for each block range in parallel.
     execution_inputs.par_iter().for_each(|(sp1_stdin, (range, block_data))| {
-        let result = prover.execute(get_range_elf_embedded(), sp1_stdin).run();
+        let result = prover.execute(get_range_elf_embedded(), sp1_stdin).deferred_proof_verification(false).run();
 
         if let Some(err) = result.as_ref().err() {
             log::warn!(
@@ -190,7 +190,7 @@ async fn main() -> Result<()> {
 
     let data_fetcher = OPSuccinctDataFetcher::new_with_rollup_config().await?;
     let l2_chain_id = data_fetcher.get_l2_chain_id().await?;
-    
+
     // Get the host CLIs in order, in parallel.
     let host = initialize_host(Arc::new(data_fetcher.clone()));
 

@@ -9,7 +9,7 @@ use kona_derive::{
 };
 use kona_driver::{Driver, DriverPipeline, PipelineCursor};
 use kona_executor::TrieDBProvider;
-use kona_genesis::{RollupConfig, L1ChainConfig};
+use kona_genesis::{L1ChainConfig, RollupConfig};
 use kona_preimage::CommsClient;
 use kona_proof::{
     executor::KonaExecutor,
