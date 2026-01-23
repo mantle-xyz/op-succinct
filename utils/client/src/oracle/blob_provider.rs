@@ -1,5 +1,5 @@
 use crate::witness::BlobData;
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use alloy_consensus::Blob;
 use alloy_eips::eip4844::{kzg_to_versioned_hash, IndexedBlobHash};
 use alloy_primitives::B256;
@@ -7,10 +7,23 @@ use async_trait::async_trait;
 use kona_derive::{BlobProvider, BlobProviderError};
 use kona_protocol::BlockInfo;
 use kzg_rs::get_kzg_settings;
+use spin::Mutex;
 
-#[derive(Clone, Debug, Default)]
+/// Blob store that shares state across clones.
+/// This is crucial for MantleEthereumDataSource which clones the blob provider
+/// for both mantle_blob_source and blob_source.
+#[derive(Clone, Debug)]
 pub struct BlobStore {
-    versioned_blobs: Vec<(B256, Blob)>,
+    // Shared state across all clones
+    versioned_blobs: Arc<Mutex<Vec<(B256, Blob)>>>,
+}
+
+impl Default for BlobStore {
+    fn default() -> Self {
+        Self {
+            versioned_blobs: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
 }
 
 impl From<BlobData> for BlobStore {
@@ -36,7 +49,9 @@ impl From<BlobData> for BlobStore {
             Err(e) => panic!("KZG proof verification error: {}", e),
         }
 
-        Self { versioned_blobs }
+        Self { 
+            versioned_blobs: Arc::new(Mutex::new(versioned_blobs))
+        }
     }
 }
 
@@ -49,12 +64,31 @@ impl BlobProvider for BlobStore {
         _: &BlockInfo,
         blob_hashes: &[IndexedBlobHash],
     ) -> Result<Vec<Box<Blob>>, Self::Error> {
-        Ok(blob_hashes
-            .iter()
-            .filter_map(|hash| {
-                let (blob_hash, blob) = self.versioned_blobs.pop().unwrap();
-                (hash.hash == blob_hash).then(|| Box::new(blob))
-            })
-            .collect())
+        let mut blobs = self.versioned_blobs.lock();
+        let mut result = Vec::with_capacity(blob_hashes.len());
+        
+        for (idx, requested_hash) in blob_hashes.iter().enumerate() {
+            // Pop from the end (LIFO order due to .rev() in From impl)
+            // All clones share the same state, so pops are visible across clones
+            let Some((blob_hash, blob)) = blobs.pop() else {
+                return Err(BlobProviderError::Backend(format!(
+                    "Insufficient blobs: requested {} but only {} available",
+                    blob_hashes.len(),
+                    idx
+                )));
+            };
+            
+            // Strict hash matching - any mismatch indicates a serious ordering problem
+            if requested_hash.hash != blob_hash {
+                return Err(BlobProviderError::Backend(format!(
+                    "Blob hash mismatch at index {}: expected {:?}, got {:?}",
+                    idx, requested_hash.hash, blob_hash
+                )));
+            }
+            
+            result.push(Box::new(blob));
+        }
+        
+        Ok(result)
     }
 }

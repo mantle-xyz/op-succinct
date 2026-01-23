@@ -122,9 +122,9 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alloy-chains"
-version = "0.2.27"
+version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25db5bcdd086f0b1b9610140a12c59b757397be90bd130d8d836fc8da0815a34"
+checksum = "ef3a72a2247c34a8545ee99e562b1b9b69168e5000567257ae51e91b4e6b1193"
 dependencies = [
  "alloy-primitives",
  "num_enum 0.7.5",
@@ -5289,7 +5289,7 @@ dependencies = [
 [[package]]
 name = "kona-cli"
 version = "0.3.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-chains",
  "alloy-primitives",
@@ -5309,7 +5309,7 @@ dependencies = [
 [[package]]
 name = "kona-client"
 version = "1.0.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5348,7 +5348,7 @@ dependencies = [
 [[package]]
 name = "kona-derive"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5369,7 +5369,7 @@ dependencies = [
 [[package]]
 name = "kona-disc"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-rlp",
  "backon",
@@ -5388,7 +5388,7 @@ dependencies = [
 [[package]]
 name = "kona-driver"
 version = "0.4.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-consensus",
  "alloy-evm",
@@ -5409,7 +5409,7 @@ dependencies = [
 [[package]]
 name = "kona-engine"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5447,7 +5447,7 @@ dependencies = [
 [[package]]
 name = "kona-executor"
 version = "0.4.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5471,7 +5471,7 @@ dependencies = [
 [[package]]
 name = "kona-genesis"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-chains",
  "alloy-consensus",
@@ -5491,7 +5491,7 @@ dependencies = [
 [[package]]
 name = "kona-gossip"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5524,7 +5524,7 @@ dependencies = [
 [[package]]
 name = "kona-hardforks"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -5535,7 +5535,7 @@ dependencies = [
 [[package]]
 name = "kona-host"
 version = "1.0.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5583,7 +5583,7 @@ dependencies = [
 [[package]]
 name = "kona-interop"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5605,12 +5605,12 @@ dependencies = [
 [[package]]
 name = "kona-macros"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 
 [[package]]
 name = "kona-mpt"
 version = "0.3.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -5622,7 +5622,7 @@ dependencies = [
 [[package]]
 name = "kona-peers"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -5645,7 +5645,7 @@ dependencies = [
 [[package]]
 name = "kona-preimage"
 version = "0.3.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-primitives",
  "async-channel",
@@ -5659,7 +5659,7 @@ dependencies = [
 [[package]]
 name = "kona-proof"
 version = "0.3.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5695,7 +5695,7 @@ dependencies = [
 [[package]]
 name = "kona-proof-interop"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5727,7 +5727,7 @@ dependencies = [
 [[package]]
 name = "kona-protocol"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloc-no-stdlib",
  "alloy-consensus",
@@ -5757,7 +5757,7 @@ dependencies = [
 [[package]]
 name = "kona-providers-alloy"
 version = "0.3.3"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5788,7 +5788,7 @@ dependencies = [
 [[package]]
 name = "kona-registry"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-chains",
  "alloy-eips",
@@ -5807,7 +5807,7 @@ dependencies = [
 [[package]]
 name = "kona-rpc"
 version = "0.3.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -5837,7 +5837,7 @@ dependencies = [
 [[package]]
 name = "kona-sources"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -5867,7 +5867,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "async-trait",
  "buddy_system_allocator",
@@ -5879,7 +5879,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm-proc"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#ca8cd6df9f343f8b1cd3f570ef049d118b0e468d"
+source = "git+https://github.com/mantle-xyz/kona?branch=arsia_v122#7ee9dee7b15e178f0907a5f4370ac3de0577ff39"
 dependencies = [
  "cfg-if",
  "kona-std-fpvm",
@@ -6236,18 +6236,18 @@ dependencies = [
 
 [[package]]
 name = "libp2p-swarm"
-version = "0.47.0"
+version = "0.47.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6aa762e5215919a34e31c35d4b18bf2e18566ecab7f8a3d39535f4a3068f8b62"
+checksum = "ce88c6c4bf746c8482480345ea3edfd08301f49e026889d1cbccfa1808a9ed9e"
 dependencies = [
  "either",
  "fnv",
  "futures",
  "futures-timer",
+ "hashlink 0.10.0",
  "libp2p-core",
  "libp2p-identity",
  "libp2p-swarm-derive",
- "lru 0.12.5",
  "multistream-select",
  "rand 0.8.5",
  "smallvec",
@@ -6269,16 +6269,16 @@ dependencies = [
 
 [[package]]
 name = "libp2p-tcp"
-version = "0.44.0"
+version = "0.44.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65b4e030c52c46c8d01559b2b8ca9b7c4185f10576016853129ca1fe5cd1a644"
+checksum = "fb6585b9309699f58704ec9ab0bb102eca7a3777170fa91a8678d73ca9cafa93"
 dependencies = [
  "futures",
  "futures-timer",
  "if-watch",
  "libc",
  "libp2p-core",
- "socket2 0.5.10",
+ "socket2 0.6.1",
  "tokio",
  "tracing",
 ]
@@ -6830,12 +6830,12 @@ dependencies = [
 
 [[package]]
 name = "netlink-sys"
-version = "0.8.7"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16c903aa70590cb93691bf97a767c8d1d6122d2cc9070433deb3bbf36ce8bd23"
+checksum = "cd6c30ed10fa69cc491d491b85cc971f6bdeb8e7367b7cde2ee6cc878d583fae"
 dependencies = [
  "bytes",
- "futures",
+ "futures-util",
  "libc",
  "log",
  "tokio",
@@ -7619,9 +7619,9 @@ checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 
 [[package]]
 name = "openssl-probe"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f50d9b3dabb09ecd771ad0aa242ca6894994c130308ca3d7684634df8037391"
+checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "openssl-src"
@@ -8497,9 +8497,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.105"
+version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "535d180e0ecab6268a3e718bb9fd44db66bbbc256257165fc699dadf70d16fe7"
+checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
 ]
@@ -9480,9 +9480,9 @@ dependencies = [
 
 [[package]]
 name = "rug"
-version = "1.28.0"
+version = "1.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58ad2e973fe3c3214251a840a621812a4f40468da814b1a3d6947d433c2af11f"
+checksum = "de190ec858987c79cad4da30e19e546139b3339331282832af004d0ea7829639"
 dependencies = [
  "az",
  "gmp-mpfr-sys",
@@ -9622,7 +9622,7 @@ version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "612460d5f7bea540c490b2b6395d8e34a953e52b491accd6c86c8164c5932a63"
 dependencies = [
- "openssl-probe 0.2.0",
+ "openssl-probe 0.2.1",
  "rustls-pki-types",
  "schannel",
  "security-framework 3.5.1",
@@ -13170,6 +13170,6 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "1.0.15"
+version = "1.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94f63c051f4fe3c1509da62131a678643c5b6fbdc9273b2b79d4378ebda003d2"
+checksum = "dfcd145825aace48cff44a8844de64bf75feec3080e0aa5cdbde72961ae51a65"

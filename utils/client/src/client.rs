@@ -85,8 +85,10 @@ where
                 // If we are in interop mode, this error must be handled by the caller.
                 // Otherwise, we continue the loop to halt derivation on the next iteration.
                 if cfg.is_interop_active(driver.cursor.read().l2_safe_head().block_info.number) {
+                    println!("is_interop_active: true");
                     return Err(PipelineError::EndOfSource.crit().into());
                 } else {
+                    println!("is_interop_active: false");
                     continue;
                 }
             }
