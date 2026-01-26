@@ -72,23 +72,23 @@ strum_macros = "0.27.1"
 tempfile = "3.10.1"
 
 # kona
-kona-mpt = { git = "https://github.com/mantle-xyz/kona", branch = "arsia_v122" }
-kona-derive = { git = "https://github.com/mantle-xyz/kona", branch = "arsia_v122", default-features = false }
-kona-driver = { git = "https://github.com/mantle-xyz/kona", branch = "arsia_v122" }
-kona-preimage = { git = "https://github.com/mantle-xyz/kona", branch = "arsia_v122", features = [
+kona-mpt = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
+kona-derive = { git = "https://github.com/mantle-xyz/kona", branch = "arsia", default-features = false }
+kona-driver = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
+kona-preimage = { git = "https://github.com/mantle-xyz/kona", branch = "arsia", features = [
     "rkyv",
     "serde",
 ] }
-kona-executor = { git = "https://github.com/mantle-xyz/kona", branch = "arsia_v122" }
-kona-proof = { git = "https://github.com/mantle-xyz/kona", branch = "arsia_v122" }
+kona-executor = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
+kona-proof = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
 
-kona-client = { git = "https://github.com/mantle-xyz/kona", branch = "arsia_v122" }
-kona-host = { git = "https://github.com/mantle-xyz/kona", branch = "arsia_v122" }
-kona-providers-alloy = { git = "https://github.com/mantle-xyz/kona", branch = "arsia_v122" }
-kona-rpc = { git = "https://github.com/mantle-xyz/kona", branch = "arsia_v122", default-features = false }
-kona-protocol = { git = "https://github.com/mantle-xyz/kona", branch = "arsia_v122", default-features = false }
-kona-registry = { git = "https://github.com/mantle-xyz/kona", branch = "arsia_v122", default-features = false }
-kona-genesis = { git = "https://github.com/mantle-xyz/kona", branch = "arsia_v122", default-features = false }
+kona-client = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
+kona-host = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
+kona-providers-alloy = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
+kona-rpc = { git = "https://github.com/mantle-xyz/kona", branch = "arsia", default-features = false }
+kona-protocol = { git = "https://github.com/mantle-xyz/kona", branch = "arsia", default-features = false }
+kona-registry = { git = "https://github.com/mantle-xyz/kona", branch = "arsia", default-features = false }
+kona-genesis = { git = "https://github.com/mantle-xyz/kona", branch = "arsia", default-features = false }
 
 # op-succinct
 op-succinct-prove = { path = "scripts/prove" }
