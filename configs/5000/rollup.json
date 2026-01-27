@@ -14,7 +14,11 @@
             "overhead": "0x00000000000000000000000000000000000000000000000000000000000000bc",
             "scalar": "0x0000000000000000000000000000000000000000000000000000000000002710",
             "gasLimit": 200000000000,
-            "baseFee": 20000000
+            "baseFee": 20000000,
+            "eip1559Params": "0x0000000000000000",
+            "operatorFeeParams": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "minBaseFee": 0,
+            "daFootprintGasScalar": 0
         }
     },
     "block_time": 2,
@@ -24,12 +28,27 @@
     "l1_chain_id": 1,
     "l2_chain_id": 5000,
     "regolith_time": 0,
-    "base_fee_time": 0,
+    "canyon_time": 0,
+    "delta_time": 0,
+    "ecotone_time": 0,
+    "fjord_time": 0,
+    "granite_time": 0,
+    "holocene_time": 1800989988,
+    "isthmus_time": 1800989988,
+    "jovian_time": 1800989988,
+    "mantle_base_fee_time": 0,
+    "mantle_everest_time": 0,
+    "mantle_euboea_time": 0,
     "mantle_skadi_time": 1756278000,
     "mantle_limb_time": 1768374000,
+    "mantle_arsia_time": 1800989988,
     "batch_inbox_address": "0xffeeddccbbaa0000000000000000000000000000",
     "deposit_contract_address": "0xc54cb22944f2be476e02decfcd7e3e7d3e15a8fb",
     "l1_system_config_address": "0x427ea0710fa5252057f0d88274f7aeb308386caf",
-    "mantle_da_switch": true,
-    "datalayr_service_manager_addr": "0x5BD63a7ECc13b955C4F57e3F12A64c10263C14c1"
+    "protocol_versions_address": "0x0000000000000000000000000000000000000000",
+    "chain_op_config": {
+        "eip1559Elasticity": 2,
+        "eip1559Denominator": 8,
+        "eip1559DenominatorCanyon": 8
+    }
 }
