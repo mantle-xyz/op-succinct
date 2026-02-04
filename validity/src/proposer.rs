@@ -94,6 +94,7 @@ where
             );
             "0x0000000000000000000000000000000000000000000000000000000000000001".to_string()
         });
+        // always use reserved mode for now
         let network_mode = NetworkMode::Reserved;
         let network_prover = Arc::new(
             ProverClient::builder().network_for(network_mode).private_key(&private_key).build(),

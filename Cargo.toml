@@ -72,23 +72,23 @@ strum_macros = "0.27.1"
 tempfile = "3.10.1"
 
 # kona
-kona-mpt = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
-kona-derive = { git = "https://github.com/mantle-xyz/kona", branch = "arsia", default-features = false }
-kona-driver = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
-kona-preimage = { git = "https://github.com/mantle-xyz/kona", branch = "arsia", features = [
+kona-mpt = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.0-beta.2" }
+kona-derive = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.0-beta.2", default-features = false }
+kona-driver = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.0-beta.2" }
+kona-preimage = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.0-beta.2", features = [
     "rkyv",
     "serde",
 ] }
-kona-executor = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
-kona-proof = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
+kona-executor = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.0-beta.2" }
+kona-proof = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.0-beta.2" }
 
-kona-client = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
-kona-host = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
-kona-providers-alloy = { git = "https://github.com/mantle-xyz/kona", branch = "arsia" }
-kona-rpc = { git = "https://github.com/mantle-xyz/kona", branch = "arsia", default-features = false }
-kona-protocol = { git = "https://github.com/mantle-xyz/kona", branch = "arsia", default-features = false }
-kona-registry = { git = "https://github.com/mantle-xyz/kona", branch = "arsia", default-features = false }
-kona-genesis = { git = "https://github.com/mantle-xyz/kona", branch = "arsia", default-features = false }
+kona-client = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.0-beta.2" }
+kona-host = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.0-beta.2" }
+kona-providers-alloy = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.0-beta.2" }
+kona-rpc = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.0-beta.2", default-features = false }
+kona-protocol = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.0-beta.2", default-features = false }
+kona-registry = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.0-beta.2", default-features = false }
+kona-genesis = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.0-beta.2", default-features = false }
 
 # op-succinct
 op-succinct-prove = { path = "scripts/prove" }
@@ -151,17 +151,19 @@ op-alloy-rpc-types-engine = { git = "https://github.com/mantle-xyz/op-alloy", br
 op-alloy-network = { git = "https://github.com/mantle-xyz/op-alloy", branch = "v230", default-features = false }
 
 # Execution
-alloy-evm = { git = "https://github.com/mantle-xyz/evm", branch = "mantle_arsia_after", default-features = false }
-alloy-op-evm = { git = "https://github.com/mantle-xyz/evm", branch = "mantle_arsia_after", default-features = false }
+alloy-evm = { git = "https://github.com/mantle-xyz/evm", tag = "v2.2.0-beta.2", default-features = false }
+alloy-op-evm = { git = "https://github.com/mantle-xyz/evm", tag = "v2.2.0-beta.2", default-features = false }
 # Use kzg-rs and substrate-bn for the zkVM.
-revm = { git = "https://github.com/mantle-xyz/revm", branch = "cz/arsia", default-features = false, features = [
+revm = { git = "https://github.com/mantle-xyz/revm", tag = "v2.2.0-beta.2", default-features = false, features = [
     "bn",
 ] }
-op-revm = { git = "https://github.com/mantle-xyz/revm", branch = "cz/arsia", default-features = false }
-revm-precompile = { git = "https://github.com/mantle-xyz/revm", branch = "cz/arsia", default-features = false }
+op-revm = { git = "https://github.com/mantle-xyz/revm", tag = "v2.2.0-beta.2", default-features = false }
+revm-precompile = { git = "https://github.com/mantle-xyz/revm", tag = "v2.2.0-beta.2", default-features = false }
 
 # SP1
-sp1-sdk = { version = "=5.2.4", default-features = false, features = ["network"] }
+sp1-sdk = { version = "=5.2.4", default-features = false, features = [
+    "network",
+] }
 sp1-lib = { version = "=5.2.4", features = ["verify"] }
 sp1-zkvm = { version = "=5.2.4", features = ["verify"] }
 sp1-build = { version = "=5.2.4" }
