@@ -175,7 +175,7 @@ kzg-rs = { version = "=0.2.7", features = ["rkyv", "serde"] }
 c-kzg = { version = "2.0.0", default-features = false }
 
 # Cloud dependencies
-gcloud-sdk = "0.28"
+gcloud-sdk = "=0.28.4"
 
 [profile.release-client-lto]
 inherits = "release"
