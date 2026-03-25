@@ -160,18 +160,19 @@ revm = { git = "https://github.com/mantle-xyz/revm", tag = "v2.2.1", default-fea
 op-revm = { git = "https://github.com/mantle-xyz/revm", tag = "v2.2.1", default-features = false }
 revm-precompile = { git = "https://github.com/mantle-xyz/revm", tag = "v2.2.1", default-features = false }
 
-# SP1
-sp1-sdk = { version = "=5.2.4", default-features = false, features = [
-    "network",
-] }
-sp1-lib = { version = "=5.2.4", features = ["verify"] }
-sp1-zkvm = { version = "=5.2.4", features = ["verify"] }
-sp1-build = { version = "=5.2.4" }
-sp1-prover = { version = "=5.2.4" }
-sp1-core-executor = { version = "=5.2.4" }
+# SP1 v6.0.2 (Hypercube)
+sp1-sdk = { version = "=6.0.2", features = ["network", "blocking", "profiling"] }
+sp1-lib = { version = "=6.0.2", features = ["verify"] }
+sp1-zkvm = { version = "=6.0.2", features = ["verify"] }
+sp1-build = "=6.0.2"
+sp1-prover = "=6.0.2"
+sp1-prover-types = "=6.0.2"
+sp1-core-executor = "=6.0.2"
+sp1-hypercube = "=6.0.2"
+sp1-primitives = "=6.0.2"
 
 # kzg
-kzg-rs = { version = "=0.2.7", features = ["rkyv", "serde"] }
+kzg-rs = { version = "0.2.8", features = ["rkyv", "serde"] }
 c-kzg = { version = "2.0.0", default-features = false }
 
 # Cloud dependencies
@@ -184,9 +185,9 @@ codegen-units = 1
 lto = "fat"
 
 [patch.crates-io]
-tiny-keccak = { git = "https://github.com/sp1-patches/tiny-keccak", tag = "patch-2.0.2-sp1-4.0.0" }
-sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-4.0.0" }
-substrate-bn = { git = "https://github.com/sp1-patches/bn", tag = "patch-0.6.0-sp1-5.0.0" }
-sha3 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha3", tag = "patch-sha3-0.10.8-sp1-4.0.0" }
-p256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-p256-13.2-sp1-5.0.0" }
-k256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-k256-13.4-sp1-5.0.0" }
+sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.0.0" }
+sha3 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha3", tag = "patch-sha3-0.10.8-sp1-6.0.0" }
+substrate-bn = { git = "https://github.com/sp1-patches/bn", tag = "patch-0.6.0-sp1-6.0.0-substrate-bn" }
+p256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-p256-13.2-sp1-6.0.0" }
+k256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-k256-13.4-sp1-6.0.0" }
+tiny-keccak = { git = "https://github.com/sp1-patches/tiny-keccak", tag = "patch-2.0.2-sp1-6.0.0" }
