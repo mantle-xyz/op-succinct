@@ -10,6 +10,7 @@ use op_succinct_client_utils::{boot::hash_rollup_config, types::u32_to_u8};
 use op_succinct_elfs::AGGREGATION_ELF;
 use op_succinct_host_utils::{
     fetcher::OPSuccinctDataFetcher, host::OPSuccinctHost, metrics::MetricsGauge,
+    network::determine_network_mode,
     DisputeGameFactory::DisputeGameFactoryInstance as DisputeGameFactoryContract,
     OPSuccinctL2OutputOracle::OPSuccinctL2OutputOracleInstance as OPSuccinctL2OOContract,
 };
@@ -92,8 +93,9 @@ where
             );
             "0x0000000000000000000000000000000000000000000000000000000000000001".to_string()
         });
+        let network_mode = determine_network_mode(requester_config.range_proof_strategy, requester_config.agg_proof_strategy)?;
         let network_prover = Arc::new(
-            ProverClient::builder().network().private_key(&private_key).build().await,
+            ProverClient::builder().network_for(network_mode).private_key(&private_key).build().await,
         );
 
         let range_pk = network_prover.setup(Elf::Static(get_range_elf_embedded())).await?;
