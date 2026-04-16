@@ -72,23 +72,23 @@ strum_macros = "0.27.1"
 tempfile = "3.10.1"
 
 # kona
-kona-mpt = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1"}
-kona-derive = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1", default-features = false }
-kona-driver = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1" }
-kona-preimage = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1", features = [
+kona-mpt = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.2"}
+kona-derive = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.2", default-features = false }
+kona-driver = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.2" }
+kona-preimage = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.2", features = [
     "rkyv",
     "serde",
 ] }
-kona-executor = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1" }
-kona-proof = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1" }
+kona-executor = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.2" }
+kona-proof = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.2" }
 
-kona-client = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1" }
-kona-host = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1" }
-kona-providers-alloy = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1" }
-kona-rpc = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1", default-features = false }
-kona-protocol = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1", default-features = false }
-kona-registry = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1", default-features = false }
-kona-genesis = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1", default-features = false }
+kona-client = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.2" }
+kona-host = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.2" }
+kona-providers-alloy = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.2" }
+kona-rpc = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.2", default-features = false }
+kona-protocol = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.2", default-features = false }
+kona-registry = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.2", default-features = false }
+kona-genesis = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.2", default-features = false }
 
 # op-succinct
 op-succinct-prove = { path = "scripts/prove" }
@@ -160,16 +160,16 @@ revm = { git = "https://github.com/mantle-xyz/revm", tag = "v2.2.2", default-fea
 op-revm = { git = "https://github.com/mantle-xyz/revm", tag = "v2.2.2", default-features = false }
 revm-precompile = { git = "https://github.com/mantle-xyz/revm", tag = "v2.2.2", default-features = false }
 
-# SP1 v6.0.2 (Hypercube)
-sp1-sdk = { version = "=6.0.2", features = ["network", "blocking", "profiling"] }
-sp1-lib = { version = "=6.0.2", features = ["verify"] }
-sp1-zkvm = { version = "=6.0.2", features = ["verify"] }
-sp1-build = "=6.0.2"
-sp1-prover = "=6.0.2"
-sp1-prover-types = "=6.0.2"
-sp1-core-executor = "=6.0.2"
-sp1-hypercube = "=6.0.2"
-sp1-primitives = "=6.0.2"
+# SP1 v6.1.0 (Hypercube)
+sp1-sdk = { version = "=6.1.0", features = ["network", "blocking", "profiling"] }
+sp1-lib = { version = "=6.1.0", features = ["verify"] }
+sp1-zkvm = { version = "=6.1.0", features = ["verify"] }
+sp1-build = "=6.1.0"
+sp1-prover = "=6.1.0"
+sp1-prover-types = "=6.1.0"
+sp1-core-executor = "=6.1.0"
+sp1-hypercube = "=6.1.0"
+sp1-primitives = "=6.1.0"
 
 # kzg
 kzg-rs = { version = "0.2.8", features = ["rkyv", "serde"] }
