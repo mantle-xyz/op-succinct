@@ -29,15 +29,6 @@ impl WitnessGenerator for ETHDAWitnessGenerator {
     }
 
     fn get_sp1_stdin(&self, witness: Self::WitnessData) -> Result<SP1Stdin> {
-        // Debug: 打印收集到的 preimage key 类型分布
-        let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
-        for key in witness.preimage_store.preimage_map.keys() {
-            *counts.entry(format!("{:?}", key.key_type())).or_insert(0) += 1;
-        }
-        eprintln!("[Debug] PreimageStore total keys: {}", witness.preimage_store.preimage_map.len());
-        eprintln!("[Debug] PreimageStore key types: {:?}", counts);
-        eprintln!("[Debug] BlobData blobs count: {}", witness.blob_data.blobs.len());
-
         let mut stdin = SP1Stdin::new();
         let buffer = to_bytes::<rkyv::rancor::Error>(&witness)?;
         stdin.write_slice(&buffer);

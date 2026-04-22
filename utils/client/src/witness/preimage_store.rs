@@ -69,11 +69,6 @@ impl HintWriterClient for PreimageStore {
 impl PreimageOracleClient for PreimageStore {
     async fn get(&self, key: PreimageKey) -> PreimageOracleResult<Vec<u8>> {
         let Some(value) = self.preimage_map.get(&key) else {
-            eprintln!(
-                "[PreimageStore] Missing key: type={:?}, key={}",
-                key.key_type(),
-                key,
-            );
             return Err(PreimageOracleError::InvalidPreimageKey);
         };
         Ok(value.clone())
