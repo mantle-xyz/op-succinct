@@ -72,23 +72,23 @@ strum_macros = "0.27.1"
 tempfile = "3.10.1"
 
 # kona
-kona-mpt = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1"}
-kona-derive = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1", default-features = false }
-kona-driver = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1" }
-kona-preimage = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1", features = [
+kona-mpt = { git = "https://github.com/mantle-xyz/kona", branch = "hotfix"}
+kona-derive = { git = "https://github.com/mantle-xyz/kona", branch = "hotfix", default-features = false }
+kona-driver = { git = "https://github.com/mantle-xyz/kona", branch = "hotfix" }
+kona-preimage = { git = "https://github.com/mantle-xyz/kona", branch = "hotfix", features = [
     "rkyv",
     "serde",
 ] }
-kona-executor = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1" }
-kona-proof = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1" }
+kona-executor = { git = "https://github.com/mantle-xyz/kona", branch = "hotfix" }
+kona-proof = { git = "https://github.com/mantle-xyz/kona", branch = "hotfix" }
 
-kona-client = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1" }
-kona-host = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1" }
-kona-providers-alloy = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1" }
-kona-rpc = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1", default-features = false }
-kona-protocol = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1", default-features = false }
-kona-registry = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1", default-features = false }
-kona-genesis = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.1", default-features = false }
+kona-client = { git = "https://github.com/mantle-xyz/kona", branch = "hotfix" }
+kona-host = { git = "https://github.com/mantle-xyz/kona", branch = "hotfix" }
+kona-providers-alloy = { git = "https://github.com/mantle-xyz/kona", branch = "hotfix" }
+kona-rpc = { git = "https://github.com/mantle-xyz/kona", branch = "hotfix", default-features = false }
+kona-protocol = { git = "https://github.com/mantle-xyz/kona", branch = "hotfix", default-features = false }
+kona-registry = { git = "https://github.com/mantle-xyz/kona", branch = "hotfix", default-features = false }
+kona-genesis = { git = "https://github.com/mantle-xyz/kona", branch = "hotfix", default-features = false }
 
 # op-succinct
 op-succinct-prove = { path = "scripts/prove" }
