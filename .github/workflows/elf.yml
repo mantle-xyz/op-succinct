@@ -31,8 +31,8 @@ jobs:
       - name: Verify the OP Succinct binaries
         run: |
           # Build the binaries
-          cd programs/range/ethereum/eigenda
-          ~/.sp1/bin/cargo-prove prove build --elf-name eigenda-range-elf-embedded --docker --tag v6.1.0 --features embedded --output-directory ../../../elf
+          cd programs/range/ethereum
+          ~/.sp1/bin/cargo-prove prove build --elf-name range-elf-embedded --docker --tag v6.1.0 --features embedded --output-directory ../../../elf
           cd ../../aggregation
           ~/.sp1/bin/cargo-prove prove build --elf-name aggregation-elf --docker --tag v6.1.0 --output-directory ../../elf
           cd ../../

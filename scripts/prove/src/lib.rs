@@ -27,9 +27,8 @@ pub async fn execute_multi(
             .calculate_gas(true)
             .deferred_proof_verification(false)
             .run()
-            .unwrap()
     })
-    .await?;
+    .await??;
 
     let execution_duration = start_time.elapsed();
 

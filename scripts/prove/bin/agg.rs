@@ -1,5 +1,5 @@
 use alloy_primitives::{Address, B256};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use cargo_metadata::MetadataCommand;
 use clap::Parser;
 use op_succinct_client_utils::{boot::BootInfoStruct, types::u32_to_u8};
@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
     let cpu_prover = CpuProver::new();
     let fetcher = OPSuccinctDataFetcher::new_with_rollup_config().await?;
 
-    let range_pk = cpu_prover.setup(Elf::Static(get_range_elf_embedded())).unwrap();
+    let range_pk = cpu_prover.setup(Elf::Static(get_range_elf_embedded()))?;
     let range_vk = range_pk.verifying_key().clone();
 
     let (proofs, boot_infos) = load_aggregation_proof_data(args.proofs, &range_vk);
@@ -88,9 +88,9 @@ async fn main() -> Result<()> {
     println!("Range ELF Verification Key Commitment: {multi_block_vkey_b256}");
     let stdin =
         get_agg_proof_stdin(proofs, boot_infos, headers, &range_vk, header.hash_slow(), args.prover)
-            .expect("Failed to get agg proof stdin");
+            .context("Failed to get agg proof stdin")?;
 
-    let agg_pk = cpu_prover.setup(Elf::Static(AGGREGATION_ELF)).unwrap();
+    let agg_pk = cpu_prover.setup(Elf::Static(AGGREGATION_ELF))?;
     let agg_vk = agg_pk.verifying_key();
     println!("Aggregate ELF Verification Key: {:?}", agg_vk.bytes32());
 
@@ -99,13 +99,12 @@ async fn main() -> Result<()> {
             .prove(&agg_pk, stdin)
             .mode(SP1ProofMode::Groth16)
             .run()
-            .expect("proving failed");
+            .context("proving failed")?;
     } else {
         let (_, report) = cpu_prover
             .execute(Elf::Static(AGGREGATION_ELF), stdin)
             .deferred_proof_verification(false)
-            .run()
-            .unwrap();
+            .run()?;
         println!("report: {report:?}");
     }
 
