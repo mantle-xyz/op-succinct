@@ -18,7 +18,9 @@ use futures::{stream, StreamExt};
 use kona_genesis::RollupConfig;
 use kona_host::single::SingleChainHost;
 use kona_protocol::L2BlockInfo;
-use kona_rpc::{OutputResponse, SafeHeadResponse};
+use kona_rpc::SafeHeadResponse;
+
+use crate::compat::CompatOutputResponse;
 use op_alloy_consensus::OpBlock;
 use op_alloy_network::{primitives::HeaderResponse, BlockResponse, Network, Optimism};
 use op_succinct_client_utils::boot::BootInfoStruct;
@@ -407,9 +409,9 @@ impl OPSuccinctDataFetcher {
         Ok(headers)
     }
 
-    pub async fn get_l2_output_at_block(&self, block_number: u64) -> Result<OutputResponse> {
+    pub async fn get_l2_output_at_block(&self, block_number: u64) -> Result<CompatOutputResponse> {
         let block_number_hex = format!("0x{block_number:x}");
-        let l2_output_data: OutputResponse = self
+        let l2_output_data: CompatOutputResponse = self
             .fetch_rpc_data_with_mode(
                 RPCMode::L2Node,
                 "optimism_outputAtBlock",
@@ -427,7 +429,7 @@ impl OPSuccinctDataFetcher {
 
         // Get the l1 origin of the l2 end block.
         let l2_end_block_hex = format!("0x{l2_end_block:x}");
-        let optimism_output_data: OutputResponse = self
+        let optimism_output_data: CompatOutputResponse = self
             .fetch_rpc_data_with_mode(
                 RPCMode::L2Node,
                 "optimism_outputAtBlock",

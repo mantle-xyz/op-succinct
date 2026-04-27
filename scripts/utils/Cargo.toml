@@ -58,4 +58,3 @@ op-succinct-build-utils.workspace = true
 [features]
 default = ["ethereum"]
 ethereum = ["op-succinct-proof-utils/ethereum"]
-eigenda = ["op-succinct-proof-utils/eigenda"]

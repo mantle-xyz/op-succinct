@@ -9,7 +9,7 @@ use kona_derive::{
 };
 use kona_driver::{Driver, DriverPipeline, PipelineCursor};
 use kona_executor::TrieDBProvider;
-use kona_genesis::{RollupConfig, L1ChainConfig};
+use kona_genesis::{L1ChainConfig, RollupConfig};
 use kona_preimage::CommsClient;
 use kona_proof::{
     executor::KonaExecutor,
@@ -79,10 +79,12 @@ where
     let cursor = new_oracle_pipeline_cursor(
         rollup_config.as_ref(),
         safe_head,
+        boot.agreed_l2_output_root,
         &mut l1_provider,
         &mut l2_provider,
     )
     .await?;
+
     l2_provider.set_cursor(cursor.clone());
 
     Ok((boot_clone, Some((cursor, l1_provider, l2_provider))))

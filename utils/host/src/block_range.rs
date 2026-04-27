@@ -6,7 +6,9 @@ use std::{
 use alloy_eips::BlockId;
 use anyhow::{bail, Result};
 use futures::StreamExt;
-use kona_rpc::{OutputResponse, SafeHeadResponse};
+use kona_rpc::SafeHeadResponse;
+
+use crate::compat::CompatOutputResponse;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -67,7 +69,7 @@ pub async fn get_validated_block_range<H: OPSuccinctHost>(
     Ok((l2_start_block, l2_end_block))
 }
 
-// Get a rolling block range whose end aligns with the host's finalized L2 block.
+/// Get a rolling block range whose end aligns with the host's finalized L2 block.
 ///
 /// The returned tuple represents the last `range` blocks that the host considers finalized
 /// according to its DA-specific logic, making the range safe to use for proof generation.
@@ -125,7 +127,7 @@ pub async fn split_range_based_on_safe_heads(
 
     // Get the L1 origin of l2_start
     let l2_start_hex = format!("0x{l2_start:x}");
-    let start_output: OutputResponse = data_fetcher
+    let start_output: CompatOutputResponse = data_fetcher
         .fetch_rpc_data_with_mode(
             RPCMode::L2Node,
             "optimism_outputAtBlock",

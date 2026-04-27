@@ -17,7 +17,6 @@ pub struct ExecutionStats {
     pub total_execution_time_sec: u64,
     pub total_instruction_count: u64,
     pub oracle_verify_instruction_count: u64,
-    pub eigen_da_verify_instruction_count: u64,
     pub derivation_instruction_count: u64,
     pub block_execution_instruction_count: u64,
     pub blob_verification_instruction_count: u64,
@@ -56,7 +55,6 @@ impl fmt::Display for ExecutionStats {
         write_stat(f, "Execution Duration (seconds)", self.total_execution_time_sec)?;
         write_stat(f, "Total Instruction Count", self.total_instruction_count)?;
         write_stat(f, "Oracle Verify Cycles", self.oracle_verify_instruction_count)?;
-        write_stat(f, "EigenDA Verify Cycles", self.eigen_da_verify_instruction_count)?;
         write_stat(f, "Derivation Cycles", self.derivation_instruction_count)?;
         write_stat(f, "Block Execution Cycles", self.block_execution_instruction_count)?;
         write_stat(f, "Blob Verification Cycles", self.blob_verification_instruction_count)?;
@@ -106,10 +104,9 @@ impl ExecutionStats {
             batch_start: block_data[0].block_number - 1,
             batch_end: block_data[block_data.len() - 1].block_number,
             total_instruction_count: report.total_instruction_count(),
-            total_sp1_gas: report.gas.unwrap_or(0),
+            total_sp1_gas: report.gas().unwrap_or(0),
             block_execution_instruction_count: get_cycles("block-execution"),
             oracle_verify_instruction_count: get_cycles("oracle-verify"),
-            eigen_da_verify_instruction_count: get_cycles("eigen-da-blob-verification"),
             derivation_instruction_count: get_cycles("payload-derivation"),
             blob_verification_instruction_count: get_cycles("blob-verification"),
             bn_add_cycles: get_cycles("precompile-bn-add"),
@@ -154,7 +151,6 @@ impl fmt::Display for MarkdownExecutionStats {
         write_stat(f, "Execution Duration (seconds)", self.0.total_execution_time_sec)?;
         write_stat(f, "Total Instruction Count", self.0.total_instruction_count)?;
         write_stat(f, "Oracle Verify Cycles", self.0.oracle_verify_instruction_count)?;
-        write_stat(f, "EigenDA Verify Cycles", self.0.eigen_da_verify_instruction_count)?;
         write_stat(f, "Derivation Cycles", self.0.derivation_instruction_count)?;
         write_stat(f, "Block Execution Cycles", self.0.block_execution_instruction_count)?;
         write_stat(f, "Blob Verification Cycles", self.0.blob_verification_instruction_count)?;

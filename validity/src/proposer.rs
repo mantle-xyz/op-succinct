@@ -10,17 +10,16 @@ use op_succinct_client_utils::{boot::hash_rollup_config, types::u32_to_u8};
 use op_succinct_elfs::AGGREGATION_ELF;
 use op_succinct_host_utils::{
     fetcher::OPSuccinctDataFetcher, host::OPSuccinctHost, metrics::MetricsGauge,
+    network::determine_network_mode,
     DisputeGameFactory::DisputeGameFactoryInstance as DisputeGameFactoryContract,
     OPSuccinctL2OutputOracle::OPSuccinctL2OutputOracleInstance as OPSuccinctL2OOContract,
 };
 use op_succinct_proof_utils::get_range_elf_embedded;
 use op_succinct_signer_utils::Signer;
 use sp1_sdk::{
-    network::{
-        proto::types::{ExecutionStatus, FulfillmentStatus},
-        NetworkMode,
-    },
-    HashableKey, NetworkProver, Prover, ProverClient, SP1Proof, SP1ProofWithPublicValues,
+    network::proto::types::{ExecutionStatus, FulfillmentStatus},
+    Elf, HashableKey, NetworkProver, Prover, ProverClient, ProvingKey, SP1Proof,
+    SP1ProofWithPublicValues,
 };
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
@@ -94,14 +93,16 @@ where
             );
             "0x0000000000000000000000000000000000000000000000000000000000000001".to_string()
         });
-        let network_mode = NetworkMode::Reserved;
+        let network_mode = determine_network_mode(requester_config.range_proof_strategy, requester_config.agg_proof_strategy)?;
         let network_prover = Arc::new(
-            ProverClient::builder().network_for(network_mode).private_key(&private_key).build(),
+            ProverClient::builder().network_for(network_mode).private_key(&private_key).build().await,
         );
 
-        let (range_pk, range_vk) = network_prover.setup(get_range_elf_embedded());
+        let range_pk = network_prover.setup(Elf::Static(get_range_elf_embedded())).await?;
+        let range_vk = range_pk.verifying_key().clone();
 
-        let (agg_pk, agg_vk) = network_prover.setup(AGGREGATION_ELF);
+        let agg_pk = network_prover.setup(Elf::Static(AGGREGATION_ELF)).await?;
+        let agg_vk = agg_pk.verifying_key().clone();
         let multi_block_vkey_u8 = u32_to_u8(range_vk.vk.hash_u32());
         let range_vkey_commitment = B256::from(multi_block_vkey_u8);
         let agg_vkey_hash = B256::from_str(&agg_vk.bytes32()).unwrap();

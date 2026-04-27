@@ -63,7 +63,8 @@ impl OpZkvmPrecompiles {
             OpSpecId::REGOLITH |
             OpSpecId::CANYON |
             OpSpecId::ECOTONE |
-            OpSpecId::OSAKA) => Precompiles::new(spec.into_eth_spec().into()).clone(),
+            OpSpecId::OSAKA |
+            OpSpecId::ARSIA) => Precompiles::new(spec.into_eth_spec().into()).clone(),
             OpSpecId::FJORD => fjord().clone(),
             OpSpecId::GRANITE | OpSpecId::HOLOCENE => granite().clone(),
             OpSpecId::ISTHMUS | OpSpecId::INTEROP | OpSpecId::JOVIAN => isthmus().clone(),
@@ -71,7 +72,7 @@ impl OpZkvmPrecompiles {
         let mut precompiles_owned = precompiles.clone();
         if spec < OpSpecId::OSAKA {
             precompiles_owned.extend(get_precompiles());
-        }else{
+        } else {
             precompiles_owned.extend(get_osaka_precompiles());
         }
         let precompiles = Box::leak(Box::new(precompiles_owned));
@@ -123,7 +124,8 @@ where
         // 1. If the precompile has an accelerated version, use that.
         // 2. If the precompile is not accelerated, use the default version.
         // 3. If the precompile is not found, return None.
-        let output = if let Some(precompile) = self.inner.precompiles.get(&inputs.bytecode_address) {
+        let output = if let Some(precompile) = self.inner.precompiles.get(&inputs.bytecode_address)
+        {
             precompile.execute(input_bytes, inputs.gas_limit)
         } else {
             return Ok(None);

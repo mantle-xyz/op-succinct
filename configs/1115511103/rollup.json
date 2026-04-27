@@ -1,20 +1,24 @@
 {
     "genesis": {
         "l1": {
-            "hash": "0x457db86308f582fdaa246ac90e1bee2a048dff10827bb34b2990912553fd3305",
-            "number": 9645341
+            "hash": "0x914de15bead29cc74ac6b1c1788a353ff740ba9d04ccdada77b7245ed34855e5",
+            "number": 10025892
         },
         "l2": {
-            "hash": "0x2e301cc4e0bf76af7035d9a6f910195c224bcd742a53359d1ecaddae725b7bf6",
+            "hash": "0xa3274abdc123c3d9c6d5a5dcb13b725ce22aecdfad5ba51410475a0de15f07b3",
             "number": 0
         },
-        "l2_time": 1763342580,
+        "l2_time": 1768190052,
         "system_config": {
-            "batcherAddr": "0xa738c24ff232eaea6ff2157f8a536bf82b0578cd",
+            "batcherAddr": "0x008424f79c72a81fe32bf09b0d8a10f2617a5b57",
             "overhead": "0x0000000000000000000000000000000000000000000000000000000000000834",
             "scalar": "0x00000000000000000000000000000000000000000000000000000000000f4240",
             "gasLimit": 1125899906842624,
-            "baseFee": 1000000000
+            "baseFee": 1000000000,
+            "eip1559Params": "0x0000000000000000",
+            "operatorFeeParams": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "minBaseFee": 0,
+            "daFootprintGasScalar": 0
         }
     },
     "block_time": 2,
@@ -24,12 +28,27 @@
     "l1_chain_id": 11155111,
     "l2_chain_id": 1115511103,
     "regolith_time": 0,
-    "base_fee_time": 0,
+    "canyon_time": 0,
+    "delta_time": 0,
+    "ecotone_time": 0,
+    "fjord_time": 0,
+    "granite_time": 0,
+    "holocene_time": 1768212000,
+    "isthmus_time": 1768212000,
+    "jovian_time": 1768212000,
+    "mantle_base_fee_time": 0,
+    "mantle_everest_time": 0,
+    "mantle_euboea_time": 0,
     "mantle_skadi_time": 0,
-    "mantle_limb_time": 1763794800,
+    "mantle_limb_time": 0,
+    "mantle_arsia_time": 1768212000,
     "batch_inbox_address": "0xffeeddccbbaa0000000000000000000000000000",
-    "deposit_contract_address": "0x7f77c08e227725a55f53188aca70caa8aea48b8f",
-    "l1_system_config_address": "0xd17d3278b812ea870333fae3581f477fffe64d14",
-    "mantle_da_switch": true,
-    "datalayr_service_manager_addr": "0xFFEEDDCcBbAA0000000000000000000000000000"
+    "deposit_contract_address": "0x874f2e559ae1745cbab572d72fd547a6b826ca43",
+    "l1_system_config_address": "0xa218420a30f7429caf299d5cc29b276f60211a13",
+    "protocol_versions_address": "0x0000000000000000000000000000000000000000",
+    "chain_op_config": {
+        "eip1559Elasticity": 2,
+        "eip1559Denominator": 8,
+        "eip1559DenominatorCanyon": 8
+    }
 }
