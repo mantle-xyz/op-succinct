@@ -16,6 +16,11 @@ jobs:
     runs-on: [self-hosted, Linux, X64, eks, mantle-succinct, "mainnetv2"]
 
     steps:
+      - name: Fix workspace permissions
+        run: |
+          # Docker builds leave root-owned files; fix before checkout so it can clean the workspace.
+          docker run --rm -v "$GITHUB_WORKSPACE:/workspace" alpine \
+            sh -c "chmod -R 777 /workspace || true"
       - name: Checkout code
         uses: actions/checkout@v4
         with:
