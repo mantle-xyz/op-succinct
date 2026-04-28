@@ -27,6 +27,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
       - name: Install Rust and SP1 toolchain
         run: |
+          sudo yum install -y protobuf-compiler
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source $HOME/.cargo/env
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH

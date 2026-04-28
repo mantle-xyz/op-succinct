@@ -11,7 +11,7 @@ runs:
       shell: bash
       run: |
         sudo yum update -y
-        sudo yum install -y gcc gcc-c++ make pkg-config openssl-devel clang llvm llvm-devel clang-devel perl perl-core
+        sudo yum install -y gcc gcc-c++ make pkg-config openssl-devel clang llvm llvm-devel clang-devel perl perl-core protobuf-compiler
         gcc --version
         perl --version
         
