@@ -27,7 +27,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
       - name: Install Rust and SP1 toolchain
         run: |
-          sudo yum install -y protobuf-compiler
+          # Install protoc (newer version than yum provides)
+          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-linux-x86_64.zip
+          unzip -o protoc-25.3-linux-x86_64.zip -d $HOME/.local
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          export PATH="$PATH:$HOME/.local/bin"
+          protoc --version
+          # Install Rust
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source $HOME/.cargo/env
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
