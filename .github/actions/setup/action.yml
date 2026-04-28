@@ -11,9 +11,17 @@ runs:
       shell: bash
       run: |
         sudo yum update -y
-        sudo yum install -y gcc gcc-c++ make pkg-config openssl-devel clang llvm llvm-devel clang-devel perl perl-core
+        sudo yum install -y gcc gcc-c++ make pkg-config openssl-devel clang llvm llvm-devel clang-devel perl perl-core unzip
         gcc --version
         perl --version
+        # Install protoc v25.3 directly to /usr/local/bin (yum version too old)
+        curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-linux-x86_64.zip
+        unzip -o protoc-25.3-linux-x86_64.zip -d /tmp/protoc-install
+        sudo cp /tmp/protoc-install/bin/protoc /usr/local/bin/protoc
+        sudo chmod 755 /usr/local/bin/protoc
+        sudo cp -r /tmp/protoc-install/include/google /usr/local/include/
+        which protoc
+        protoc --version
         
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
