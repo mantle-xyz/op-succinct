@@ -47,3 +47,10 @@ jobs:
           else
             echo "✅ ELF files remained unchanged"
           fi
+      - name: Fix Docker file permissions
+        if: always()
+        run: |
+          # Docker builds create root-owned files; fix permissions so the next
+          # workflow's checkout step can clean the workspace without EACCES errors.
+          docker run --rm -v ${{ github.workspace }}:/workspace alpine \
+            sh -c "chown -R $(id -u):$(id -g) /workspace/target || true"
