@@ -77,25 +77,24 @@ vergen = "=9.0.4"
 vergen-git2 = "=1.0.5"
 
 # kona
-kona-mpt = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
-kona-derive = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13", default-features = false }
-kona-driver = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
-kona-preimage = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13", features = [
+kona-mpt = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
+kona-derive = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f", default-features = false }
+kona-driver = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
+kona-preimage = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f", features = [
     "rkyv",
     "serde",
 ] }
-kona-executor = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
-kona-proof = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
+kona-executor = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
+kona-proof = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
 
-kona-client = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
-kona-host = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
-kona-providers-alloy = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
-# Note: kona-rpc is NOT included to avoid rollup-boost -> reth-optimism-primitives dependency
-# which causes alloy version conflicts with hokulea v1.1.4. RPC types are defined locally in
-# utils/host/src/rpc_types.rs instead.
-kona-protocol = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13", default-features = false }
-kona-registry = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13", default-features = false }
-kona-genesis = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13", default-features = false }
+kona-client = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
+kona-host = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
+kona-providers-alloy = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
+# Note: kona-rpc is NOT included to avoid rollup-boost -> reth-optimism-primitives dependency.
+# RPC types are defined locally in utils/host/src/rpc_types.rs instead.
+kona-protocol = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f", default-features = false }
+kona-registry = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f", default-features = false }
+kona-genesis = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f", default-features = false }
 
 # op-succinct
 op-succinct-prove = { path = "scripts/prove" }
@@ -109,37 +108,36 @@ op-succinct-ethereum-client-utils = { path = "utils/ethereum/client" }
 op-succinct-ethereum-host-utils = { path = "utils/ethereum/host" }
 op-succinct-proof-utils = { path = "utils/proof" }
 op-succinct-signer-utils = { path = "utils/signer" }
-op-succinct-signer-gcp-utils = { path = "utils/signer-gcp" }
 op-succinct-range-utils = { path = "programs/range/utils" }
 op-succinct-bindings = { path = "bindings" }
 
 # Alloy (Network)
-alloy-signer-local = { version = "1.6.3" }
-alloy-provider = { version = "1.6.3" }
-alloy-transport = { version = "1.6.3" }
-alloy-transport-http = { version = "1.6.3" }
-alloy-contract = { version = "1.6.3" }
-alloy-network = { version = "1.6.3" }
+alloy-signer-local = { version = "2.0.4" }
+alloy-provider = { version = "2.0.4" }
+alloy-transport = { version = "2.0.4" }
+alloy-transport-http = { version = "2.0.4" }
+alloy-contract = { version = "2.0.4" }
+alloy-network = { version = "2.0.4" }
 
 # Alloy
 alloy-rlp = { version = "0.3.13", default-features = false }
 alloy-trie = { version = "0.9.4", default-features = false, features = [
     "ethereum",
 ] }
-alloy-eips = { version = "1.6.3", default-features = false }
-alloy-serde = { version = "1.6.3", default-features = false }
-alloy-consensus = { version = "1.6.3", default-features = false }
-alloy-tx-macros = { version = "1.6.3", default-features = false }
-alloy-rpc-types = { version = "1.6.3", default-features = false }
-alloy-rpc-client = { version = "1.6.3", default-features = false }
-alloy-node-bindings = { version = "1.6.3", default-features = false }
-alloy-rpc-types-engine = { version = "1.6.3", default-features = false }
-alloy-rpc-types-beacon = { version = "1.6.3", default-features = false }
-alloy-rpc-types-eth = { version = "1.6.3", default-features = false }
-alloy-rpc-types-trace = { version = "1.6.3", default-features = false }
-alloy-signer = { version = "1.6.3", default-features = false }
-alloy-signer-gcp = { version = "1.6.3", default-features = false }
-alloy = { version = "1.6.3", features = [
+alloy-eips = { version = "2.0.4", default-features = false }
+alloy-serde = { version = "2.0.4", default-features = false }
+alloy-consensus = { version = "2.0.4", default-features = false }
+alloy-tx-macros = { version = "2.0.4", default-features = false }
+alloy-rpc-types = { version = "2.0.4", default-features = false }
+alloy-rpc-client = { version = "2.0.4", default-features = false }
+alloy-node-bindings = { version = "2.0.4", default-features = false }
+alloy-rpc-types-engine = { version = "2.0.4", default-features = false }
+alloy-rpc-types-beacon = { version = "2.0.4", default-features = false }
+alloy-rpc-types-eth = { version = "2.0.4", default-features = false }
+alloy-rpc-types-trace = { version = "2.0.4", default-features = false }
+alloy-signer = { version = "2.0.4", default-features = false }
+alloy-signer-gcp = { version = "2.0.4", default-features = false }
+alloy = { version = "2.0.4", features = [
     "reqwest",
     "network",
     "providers",
@@ -153,24 +151,25 @@ alloy-primitives = { version = "1.5.6", default-features = false, features = [
 ] }
 alloy-sol-types = { version = "1.5.6", default-features = false }
 alloy-sol-macro = { version = "1.5.6", default-features = false }
-alloy-chains = { version = "0.2.30", default-features = false }
+alloy-chains = { version = "0.2.33", default-features = false }
 
-# OP Alloy - from the optimism monorepo to match kona v1.2.13
-op-alloy-consensus = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13", default-features = false }
-op-alloy-rpc-types = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13", default-features = false }
-op-alloy-rpc-types-engine = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13", default-features = false }
-op-alloy-network = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13", default-features = false }
+# OP Alloy - from mantle-v2 rust workspace (aligned with kona develop + alloy 2.0.4)
+op-alloy-consensus = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f", default-features = false }
+op-alloy-rpc-types = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f", default-features = false }
+op-alloy-rpc-types-engine = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f", default-features = false }
+op-alloy-network = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f", default-features = false }
 
 # Execution
-alloy-evm = { version = "0.27.2", default-features = false }
-alloy-op-evm = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13", default-features = false }
-# Use kzg-rs and substrate-bn for the zkVM.
-# Versions aligned with kona v1.2.13
-revm = { version = "34.0.0", default-features = false, features = [
+alloy-evm = { version = "0.34.0", default-features = false }
+alloy-op-evm = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f", default-features = false }
+# [MANTLE] revm sourced from mantle-xyz/revm @ mantle-elysium (revm v38 +
+# Mantle protocol changes: ARSIA/JOVIAN, BVM_ETH, token_ratio, DA footprint,
+# Arsia fee validation). Aligns with mantle-v2 rust workspace.
+revm = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium", default-features = false, features = [
     "bn",
 ] }
-revm-precompile = { version = "32.1.0", default-features = false }
-op-revm = { version = "15.0.0", default-features = false }
+revm-precompile = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium", default-features = false }
+op-revm = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium", default-features = false }
 
 # SP1 v6.1.0 (Hypercube)
 sp1-sdk = { version = "=6.1.0", features = ["network", "blocking", "profiling"] }
@@ -182,13 +181,13 @@ sp1-prover-types = "=6.1.0"
 sp1-core-executor = "=6.1.0"
 sp1-hypercube = "=6.1.0"
 sp1-primitives = "=6.1.0"
-sp1-cluster-artifact = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.1.2" }
-sp1-cluster-common = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.1.2" }
-sp1-cluster-utils = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.1.2" }
+sp1-cluster-artifact = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.1.5" }
+sp1-cluster-common = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.1.5" }
+sp1-cluster-utils = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.1.5" }
 
 # kzg
 kzg-rs = { version = "0.2.8", features = ["rkyv", "serde"] }
-c-kzg = { version = "2.0.0", default-features = false }
+c-kzg = { version = "2.1.5", default-features = false }
 
 # Cloud dependencies
 gcloud-sdk = "0.27"
@@ -207,16 +206,30 @@ p256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-p2
 k256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-k256-13.4-sp1-6.0.0" }
 tiny-keccak = { git = "https://github.com/sp1-patches/tiny-keccak", tag = "patch-2.0.2-sp1-6.0.0" }
 
-# Patch op-alloy and alloy-op-evm to use the optimism monorepo versions
-# Required because kona v1.2.13 uses path deps from the monorepo, and hokulea's
-# own [patch] section doesn't propagate when used as a git dependency.
-op-alloy-consensus = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
-op-alloy-network = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
-op-alloy-rpc-types = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
-op-alloy-rpc-types-engine = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
-op-alloy-provider = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
-alloy-op-evm = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
-alloy-op-hardforks = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
-op-alloy = { git = "https://github.com/ethereum-optimism/optimism", tag = "kona-client/v1.2.13" }
+# Patch op-alloy and alloy-op-evm to use the mantle-v2 versions
+# Required so transitive deps from kona + op-alloy all resolve to the same source.
+op-alloy-consensus = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
+op-alloy-network = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
+op-alloy-rpc-types = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
+op-alloy-rpc-types-engine = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
+op-alloy-provider = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
+alloy-op-evm = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
+alloy-op-hardforks = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
+op-alloy = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "18121380f" }
 
-# Patch old kona (op-rs/kona v1.2.7) used by hana to use the new kona (v1.2.13) from the optimism monorepo
+# [MANTLE] Patch every revm-family crate (including transitively-pulled ones) to
+# mantle-xyz/revm @ mantle-elysium. Matches the pattern in mantle-v2/rust/Cargo.toml.
+revm = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
+revm-bytecode = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
+revm-context = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
+revm-context-interface = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
+revm-database = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
+revm-database-interface = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
+revm-handler = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
+revm-inspector = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
+revm-interpreter = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
+revm-precompile = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
+revm-primitives = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
+revm-state = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
+op-revm = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
+
