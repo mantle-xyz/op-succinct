@@ -65,6 +65,8 @@ where
             da_provider,
             l1_provider,
             l2_provider,
+            // [MANTLE] dependency_set is for interop chains; op-succinct is non-interop.
+            None,
         )
         .await?)
     }

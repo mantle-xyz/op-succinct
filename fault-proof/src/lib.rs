@@ -1,3 +1,7 @@
+// [MANTLE] proposer::prove_game / prover::generate_range_proof nest async generics through
+// sp1-cluster-utils; computing their layout exceeds the default rustc query depth.
+#![recursion_limit = "256"]
+
 pub mod backup;
 pub mod challenger;
 pub mod config;

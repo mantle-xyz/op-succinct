@@ -131,11 +131,14 @@ pub trait WitnessExecutor {
 
         let rollup_config = Arc::new(boot.rollup_config);
 
+        // [MANTLE] Wrap with PostExecEvmFactoryAdapter so the resulting OpBlockExecutorFactory
+        // satisfies BlockExecutorFactory (only PostExecEvmFactoryAdapter<F> and OpEvmFactory<Tx>
+        // are accepted by mantle-v2's alloy-op-evm).
         let executor = KonaExecutor::new(
             rollup_config.as_ref(),
             l2_provider.clone(),
             l2_provider,
-            ZkvmOpEvmFactory::new(),
+            alloy_op_evm::post_exec::PostExecEvmFactoryAdapter::new(ZkvmOpEvmFactory::new()),
             None,
         );
         let mut driver = Driver::new(cursor, executor, pipeline);

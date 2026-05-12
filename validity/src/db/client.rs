@@ -769,7 +769,7 @@ mod tests {
     use super::*;
     use crate::{CommitmentConfig, OPSuccinctRequest, RequestMode, RequestStatus, RequestType};
     use alloy_primitives::B256;
-    use chrono::Local;
+    use chrono::Utc;
     use postgresql_embedded::{PostgreSQL, Settings};
     use sqlx::types::BigDecimal;
     use std::str::FromStr;
@@ -891,7 +891,11 @@ mod tests {
         }
 
         fn build(self) -> OPSuccinctRequest {
-            let now = Local::now().naive_local();
+            // [MANTLE] Use UTC, not Local — the DB column is TIMESTAMP WITHOUT TIME ZONE and
+            // `update_request_status` sets it to PG `NOW()` (UTC). With Local::now().naive_local()
+            // on non-UTC hosts (e.g. UTC+8) the inserted timestamp would be hours ahead of any
+            // DB-side update, breaking `updated > original` assertions.
+            let now = Utc::now().naive_utc();
             OPSuccinctRequest {
                 id: 0,
                 status: self.status,

@@ -961,11 +961,13 @@ impl OPSuccinctDataFetcher {
             ),
             l1_beacon_address,
             data_dir: None, // Use in-memory key-value store.
+            // [MANTLE] data_format replaces the removed enable_experimental_witness_endpoint
+            // field. With data_dir = None it has no effect (in-memory KV), so default is fine.
+            data_format: kona_host::DataFormat::default(),
             native: false,
             server: true,
             rollup_config_path: self.rollup_config_path.clone(),
             l1_config_path: self.l1_config_path.clone(),
-            enable_experimental_witness_endpoint: false,
         })
     }
 }

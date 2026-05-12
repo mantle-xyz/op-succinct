@@ -8,7 +8,7 @@ use revm::{
     context_interface::JournalTr,
     handler::{EthPrecompiles, PrecompileProvider},
     interpreter::{CallInput, CallInputs, Gas, InstructionResult, InterpreterResult},
-    precompile::PrecompileError,
+    precompile::{PrecompileError, PrecompileStatus},
 };
 #[cfg(any(test, target_os = "zkvm"))]
 use revm_precompile::PrecompileId;
@@ -149,7 +149,8 @@ where
                 println!("cycle-tracker-report-start: precompile-{}", name);
             }
 
-            let exec_result = precompile.execute(input_bytes, inputs.gas_limit);
+            // Third argument is the EIP-8037 reservoir; pass 0 in the zkVM (not applicable).
+            let exec_result = precompile.execute(input_bytes, inputs.gas_limit, 0);
 
             #[cfg(target_os = "zkvm")]
             if let Some(name) = tracker_name {
@@ -161,27 +162,40 @@ where
 
         match exec_result {
             Ok(output) => {
+                // Mirrors revm-handler's EthPrecompiles::run gas accounting:
+                // - state/refund are always applied
+                // - success or revert: spend exactly gas_used as regular cost
+                // - halt (incl. OOG): consume ALL remaining gas (spend_all)
+                result.gas.set_state_gas_spent(output.state_gas_used);
                 result.gas.record_refund(output.gas_refunded);
-                let underflow = result.gas.record_cost(output.gas_used);
-                assert!(underflow, "Gas underflow is not possible");
-                result.result = if output.reverted {
-                    InstructionResult::Revert
+                if output.status.is_success_or_revert() {
+                    let _ = result.gas.record_regular_cost(output.gas_used);
                 } else {
-                    InstructionResult::Return
-                };
-                result.output = output.bytes;
-            }
-            Err(PrecompileError::Fatal(e)) => return Err(e),
-            Err(e) => {
-                result.result = if e.is_oog() {
-                    InstructionResult::PrecompileOOG
-                } else {
-                    InstructionResult::PrecompileError
-                };
-                if !e.is_oog() && context.journal().depth() == 1 {
-                    context.local_mut().set_precompile_error_context(e.to_string());
+                    result.gas.spend_all();
+                }
+                match output.status {
+                    PrecompileStatus::Success => {
+                        result.result = InstructionResult::Return;
+                        result.output = output.bytes;
+                    }
+                    PrecompileStatus::Revert => {
+                        result.result = InstructionResult::Revert;
+                        result.output = output.bytes;
+                    }
+                    PrecompileStatus::Halt(halt) => {
+                        result.result = if halt.is_oog() {
+                            InstructionResult::PrecompileOOG
+                        } else {
+                            InstructionResult::PrecompileError
+                        };
+                        if !halt.is_oog() && context.journal().depth() == 1 {
+                            context.local_mut().set_precompile_error_context(halt.to_string());
+                        }
+                    }
                 }
             }
+            Err(PrecompileError::Fatal(e)) => return Err(e),
+            Err(PrecompileError::FatalAny(e)) => return Err(e.to_string()),
         }
 
         Ok(Some(result))
@@ -203,8 +217,10 @@ mod tests {
     use super::*;
     use alloc::vec::Vec;
     use alloy_primitives::U256;
+    use alloy_primitives::B256;
     use op_revm::{precompiles::bn254_pair, DefaultOp as _, OpContext};
     use revm::{
+        bytecode::Bytecode,
         context::LocalContextTr as _,
         database::EmptyDB,
         handler::PrecompileProvider,
@@ -215,7 +231,7 @@ mod tests {
 
     type TestContext = OpContext<EmptyDB>;
 
-    const ALL_OP_SPECS: [OpSpecId; 11] = [
+    const ALL_OP_SPECS: [OpSpecId; 12] = [
         OpSpecId::BEDROCK,
         OpSpecId::REGOLITH,
         OpSpecId::CANYON,
@@ -227,6 +243,7 @@ mod tests {
         OpSpecId::JOVIAN,
         OpSpecId::INTEROP,
         OpSpecId::OSAKA,
+        OpSpecId::ARSIA,
     ];
 
     // Compile-time guard: a new `OpSpecId` variant must be added to
@@ -246,7 +263,8 @@ mod tests {
             OpSpecId::ISTHMUS |
             OpSpecId::JOVIAN |
             OpSpecId::INTEROP |
-            OpSpecId::OSAKA => {}
+            OpSpecId::OSAKA |
+            OpSpecId::ARSIA => {}
         }
     }
 
@@ -256,6 +274,10 @@ mod tests {
         CallInputs {
             input: CallInput::Bytes(input),
             gas_limit,
+            // [MANTLE] revm 38 added the EIP-8037 reservoir + replaced known_bytecode's
+            // Option with a (hash, Bytecode) tuple. The defaults below preserve the
+            // "no known bytecode" semantics the test previously expressed via `None`.
+            reservoir: 0,
             bytecode_address: address,
             target_address: Address::ZERO, // Simulates DELEGATECALL context
             caller: Address::ZERO,
@@ -263,7 +285,7 @@ mod tests {
             scheme: CallScheme::Call,
             is_static: false,
             return_memory_offset: 0..0,
-            known_bytecode: None,
+            known_bytecode: (B256::ZERO, Bytecode::default()),
         }
     }
 
@@ -392,6 +414,8 @@ mod tests {
         let call_inputs = CallInputs {
             input: CallInput::SharedBuffer(0..0),
             gas_limit: u64::MAX,
+            // [MANTLE] revm 38: see create_call_inputs() for reservoir / known_bytecode rationale.
+            reservoir: 0,
             bytecode_address: sha256_addr,
             target_address: Address::ZERO,
             caller: Address::ZERO,
@@ -399,7 +423,7 @@ mod tests {
             scheme: CallScheme::Call,
             is_static: false,
             return_memory_offset: 0..0,
-            known_bytecode: None,
+            known_bytecode: (B256::ZERO, Bytecode::default()),
         };
 
         let result = precompiles.run(&mut ctx, &call_inputs).unwrap();
@@ -605,7 +629,12 @@ mod tests {
 
     #[test]
     fn test_jovian_family_uses_canonical_bn254_pairing_limits() {
-        for spec in [OpSpecId::JOVIAN, OpSpecId::INTEROP, OpSpecId::OSAKA] {
+        // [MANTLE] mantle-elysium op-revm reroutes OSAKA/ARSIA away from jovian() precompiles to
+        // canonical OSAKA precompiles (see op-revm's OpPrecompiles::new_with_spec comment
+        // "[mantle] add osaka to the list of specs that use the osaka precompiles"). So only
+        // JOVIAN and INTEROP enforce the Jovian BN254 pairing input cap; OSAKA/ARSIA accept
+        // oversized inputs (they fall back to the standard bn254::run_pair path).
+        for spec in [OpSpecId::JOVIAN, OpSpecId::INTEROP] {
             let oversized_pairing_input =
                 vec![0; oversized_aligned_pair_input_len(bn254_pair::JOVIAN_MAX_INPUT_SIZE)];
             let call_inputs =

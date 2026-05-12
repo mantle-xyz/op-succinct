@@ -7,13 +7,19 @@ use alloy_primitives::{Address, Bytes, TxKind};
 use alloy_provider::{Provider, ProviderBuilder, Web3Signer};
 use alloy_rpc_types_eth::{TransactionReceipt, TransactionRequest};
 use alloy_signer::Signer as AlloySigner;
-use alloy_signer_gcp::{GcpKeyRingRef, GcpSigner, KeySpecifier};
+use alloy_signer_gcp::{
+    // [MANTLE] Use the gcloud_sdk version re-exported by alloy_signer_gcp 2.x so the
+    // GoogleApiClient type used to construct GcpSigner matches what GcpSigner::new expects.
+    // The workspace's gcloud-sdk = "0.27" pulls a different version that produces incompatible types.
+    gcloud_sdk::{
+        google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient,
+        GoogleApi,
+    },
+    GcpKeyRingRef, GcpSigner, KeySpecifier,
+};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_transport_http::reqwest::Url;
 use anyhow::{Context, Result};
-use gcloud_sdk::{
-    google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient, GoogleApi,
-};
 use tokio::{sync::Mutex, time::Duration};
 
 pub const NUM_CONFIRMATIONS: u64 = 3;

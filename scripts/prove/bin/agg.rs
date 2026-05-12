@@ -1,3 +1,7 @@
+// [MANTLE] Bin entrypoint nests async generics through sp1-cluster-utils; bump the layout query
+// depth here too because this is a separate compilation unit from the lib.
+#![recursion_limit = "256"]
+
 use alloy_primitives::{Address, B256};
 use anyhow::{Context, Result};
 use clap::Parser;

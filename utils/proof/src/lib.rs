@@ -1,3 +1,7 @@
+// [MANTLE] cluster_proof_blocking() nests async generics through sp1-cluster-utils;
+// computing its layout exceeds the default rustc query depth.
+#![recursion_limit = "256"]
+
 use std::{
     sync::Arc,
     time::{Instant, SystemTime},
