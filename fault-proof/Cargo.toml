@@ -82,8 +82,5 @@ rstest = "0.26"
 which = "4.4"
 
 [features]
-default = ["ethereum"]
-celestia = ["op-succinct-proof-utils/celestia"]
-eigenda = ["op-succinct-proof-utils/eigenda"]
-ethereum = ["op-succinct-proof-utils/ethereum"]
+default = []
 integration = []

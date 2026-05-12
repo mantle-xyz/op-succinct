@@ -101,14 +101,8 @@ pub struct ProposerIdentity {
 }
 
 impl ProposerIdentity {
-    /// Returns the DA layer based on compile-time feature flags.
     fn detect_da_layer() -> &'static str {
-        #[cfg(feature = "celestia")]
-        return "celestia";
-        #[cfg(all(feature = "eigenda", not(feature = "celestia")))]
-        return "eigenda";
-        #[cfg(not(any(feature = "celestia", feature = "eigenda")))]
-        return "ethereum";
+        "ethereum"
     }
 
     /// Creates a new ProposerIdentity from computed vkeys and rollup config hash.

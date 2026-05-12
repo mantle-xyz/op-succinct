@@ -1,8 +1,6 @@
 use alloy_primitives::B256;
 use anyhow::Result;
 use async_trait::async_trait;
-use hana_host::celestia::CelestiaChainHost;
-use hokulea_host_bin::cfg::SingleChainHostWithEigenDA;
 use kona_host::single::{SingleChainHost, SingleChainHostError};
 use kona_preimage::{BidirectionalChannel, Channel};
 use tokio::task::JoinHandle;
@@ -22,34 +20,6 @@ pub trait PreimageServerStarter {
 
 #[async_trait]
 impl PreimageServerStarter for SingleChainHost {
-    async fn start_server<C>(
-        &self,
-        hint: C,
-        preimage: C,
-    ) -> Result<JoinHandle<Result<(), SingleChainHostError>>, SingleChainHostError>
-    where
-        C: Channel + Send + Sync + 'static,
-    {
-        self.start_server(hint, preimage).await
-    }
-}
-
-#[async_trait]
-impl PreimageServerStarter for CelestiaChainHost {
-    async fn start_server<C>(
-        &self,
-        hint: C,
-        preimage: C,
-    ) -> Result<JoinHandle<Result<(), SingleChainHostError>>, SingleChainHostError>
-    where
-        C: Channel + Send + Sync + 'static,
-    {
-        self.start_server(hint, preimage).await
-    }
-}
-
-#[async_trait]
-impl PreimageServerStarter for SingleChainHostWithEigenDA {
     async fn start_server<C>(
         &self,
         hint: C,
@@ -108,14 +78,7 @@ pub trait OPSuccinctHost: Send + Sync + 'static {
     /// Get the L1 head hash from the host args.
     fn get_l1_head_hash(&self, args: &Self::Args) -> Option<B256>;
 
-    /// Get the finalized L2 block number. This is used to determine the highest block that can be
-    /// included in a range proof.
-    ///
-    /// For ETH DA, this is the finalized L2 block number.
-    /// For Celestia, this is the highest L2 block included in the latest Blobstream commitment.
-    ///
-    /// The latest proposed block number is assumed to be the highest block number that has been
-    /// successfully processed by the host.
+    /// Get the finalized L2 block number.
     async fn get_finalized_l2_block_number(
         &self,
         fetcher: &OPSuccinctDataFetcher,
@@ -123,16 +86,6 @@ pub trait OPSuccinctHost: Send + Sync + 'static {
     ) -> Result<Option<u64>>;
 
     /// Calculate a safe L1 head hash for the given L2 end block.
-    ///
-    /// This method is DA-specific:
-    /// - For ETH DA: Uses simple offset logic.
-    /// - For Celestia DA: Uses blobstream commitment logic to ensure data availability.
-    ///
-    /// Parameters:
-    /// - `fetcher`: The data fetcher for accessing blockchain data.
-    /// - `l2_end_block`: The ending L2 block number for the range.
-    /// - `safe_db_fallback`: Whether to fallback to timestamp-based estimation when SafeDB is
-    ///   unavailable.
     async fn calculate_safe_l1_head(
         &self,
         fetcher: &OPSuccinctDataFetcher,
