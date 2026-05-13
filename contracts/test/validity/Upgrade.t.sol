@@ -15,6 +15,9 @@ contract UpgradeTest is Test, Utils {
         vm.warp(12345678);
         uint256 exampleTimestamp = block.timestamp - 1;
 
+        // [MANTLE] v117's `Config` struct (in test/helpers/JSONDecoder.sol) carries 17 fields;
+        // this test only initialised 15. Add the two missing ones: `executeUpgradeCall` and
+        // `l2OutputOracleProxy`, both inert under this code path.
         Config memory config = Config({
             challenger: address(0),
             finalizationPeriod: 0,
@@ -30,7 +33,9 @@ contract UpgradeTest is Test, Utils {
             aggregationVkey: bytes32(0x00ea4171dbd0027768055bee7f6d64e17e9cec99b29aad5d18e5d804b967775b),
             rangeVkeyCommitment: bytes32(0x1a4ebe5c47d55436319c425951eb1a7e04f560945e29eb454215d30b30987bbb),
             proxyAdmin: address(0x0000000000000000000000000000000000000000),
-            opSuccinctL2OutputOracleImpl: address(0x0000000000000000000000000000000000000000)
+            opSuccinctL2OutputOracleImpl: address(0x0000000000000000000000000000000000000000),
+            executeUpgradeCall: false,
+            l2OutputOracleProxy: address(0x0000000000000000000000000000000000000000)
         });
 
         // This is never called, so we just need to add some code to the address so the check passes.
