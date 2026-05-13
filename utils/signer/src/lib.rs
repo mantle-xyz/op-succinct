@@ -13,7 +13,7 @@ use alloy_signer_gcp::{
     // The workspace's gcloud-sdk = "0.27" pulls a different version that produces incompatible types.
     gcloud_sdk::{
         google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient,
-        GoogleApi,
+        GoogleApi, TokenSourceType, GCP_DEFAULT_SCOPES,
     },
     GcpKeyRingRef, GcpSigner, KeySpecifier,
 };
@@ -58,6 +58,40 @@ impl Signer {
     }
 
     pub async fn from_env() -> Result<Self> {
+        // [MANTLE compat] Existing Mantle deployments configure GCP KMS via two env vars:
+        //   HSM_API_NAME      — full GCP resource path
+        //                       projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>[/cryptoKeyVersions/<V>]
+        //   HSM_CREDENTIALS   — hex-encoded JSON service account key
+        // Production posture forbids writing service-account JSON to disk, so this path
+        // pipes the decoded JSON straight into gcloud-sdk's TokenSourceType::Json — the
+        // credential never touches the filesystem.
+        if let Ok(hsm_api_name) = std::env::var("HSM_API_NAME") {
+            let creds_json_hex = std::env::var("HSM_CREDENTIALS")
+                .context("HSM_CREDENTIALS required when HSM_API_NAME is set")?;
+            let creds_json_bytes = alloy_primitives::hex::decode(&creds_json_hex)
+                .context("HSM_CREDENTIALS is not valid hex")?;
+            let creds_json = String::from_utf8(creds_json_bytes)
+                .context("HSM_CREDENTIALS hex did not decode to UTF-8 JSON")?;
+
+            let GcpKeyPath { project_id, location, keyring, key_name, key_version } =
+                parse_gcp_key_resource_path(&hsm_api_name)?;
+
+            let keyring_ref = GcpKeyRingRef::new(&project_id, &location, &keyring);
+            let key_specifier = KeySpecifier::new(keyring_ref, &key_name, key_version);
+
+            let client = GoogleApi::from_function_with_token_source(
+                KeyManagementServiceClient::new,
+                "https://cloudkms.googleapis.com",
+                None,
+                GCP_DEFAULT_SCOPES.clone(),
+                TokenSourceType::Json(creds_json),
+            )
+            .await?;
+            let signer = GcpSigner::new(client, key_specifier, None).await?;
+
+            return Ok(Signer::CloudHsmSigner(signer));
+        }
+
         if let (Ok(project_id), Ok(location), Ok(keyring_name)) = (
             std::env::var("GOOGLE_PROJECT_ID"),
             std::env::var("GOOGLE_LOCATION"),
@@ -92,7 +126,8 @@ impl Signer {
         } else {
             anyhow::bail!(
                 "None of the required signer configurations are set in environment:\n\
-                - For Cloud HSM: GOOGLE_PROJECT_ID, GOOGLE_LOCATION, GOOGLE_KEYRING\n\
+                - For Cloud HSM (Mantle compat): HSM_API_NAME + HSM_CREDENTIALS (hex JSON)\n\
+                - For Cloud HSM (upstream): GOOGLE_PROJECT_ID, GOOGLE_LOCATION, GOOGLE_KEYRING\n\
                 - For Web3Signer: SIGNER_URL and SIGNER_ADDRESS\n\
                 - For Local: PRIVATE_KEY"
             )
@@ -204,6 +239,54 @@ impl Signer {
             }
         }
     }
+}
+
+/// Parsed components of a GCP KMS crypto key resource path.
+///
+/// Accepted shapes (as set in Mantle's HSM_API_NAME env var):
+/// - `projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>` — version defaults to `1`
+/// - `projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>/cryptoKeyVersions/<V>`
+struct GcpKeyPath {
+    project_id: String,
+    location: String,
+    keyring: String,
+    key_name: String,
+    key_version: u64,
+}
+
+fn parse_gcp_key_resource_path(s: &str) -> Result<GcpKeyPath> {
+    let parts: Vec<&str> = s.split('/').collect();
+    let invalid = || {
+        anyhow::anyhow!(
+            "HSM_API_NAME `{s}` is not a valid GCP KMS key resource path; expected \
+             `projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>[/cryptoKeyVersions/<V>]`"
+        )
+    };
+    if parts.len() != 8 && parts.len() != 10 {
+        return Err(invalid());
+    }
+    if parts[0] != "projects"
+        || parts[2] != "locations"
+        || parts[4] != "keyRings"
+        || parts[6] != "cryptoKeys"
+    {
+        return Err(invalid());
+    }
+    let key_version = if parts.len() == 10 {
+        if parts[8] != "cryptoKeyVersions" {
+            return Err(invalid());
+        }
+        parts[9].parse().context("HSM_API_NAME cryptoKeyVersions segment is not a u64")?
+    } else {
+        1
+    };
+    Ok(GcpKeyPath {
+        project_id: parts[1].to_string(),
+        location: parts[3].to_string(),
+        keyring: parts[5].to_string(),
+        key_name: parts[7].to_string(),
+        key_version,
+    })
 }
 
 /// Wrapper around Signer that provides thread-safe transaction sending.

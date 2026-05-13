@@ -187,7 +187,7 @@ async fn main() -> Result<()> {
                 .mode(agg_proof_mode)
                 .strategy(agg_proof_strategy)
                 .await
-                .expect("proving failed");
+                .context("proving failed")?;
 
             let proof_name = proof_names.join("_");
             let path = save_agg_proof(chain_id, &proof_name, &proof)?;
