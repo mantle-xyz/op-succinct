@@ -14,10 +14,16 @@
 # shadow that pin in confusing ways (we hit exactly this with mantle-v2's
 # mise.toml earlier).
 
+# forge / cast / anvil are pinned to 1.4.3 (not mantle-v2/mise.toml's 1.2.3).
+# Reason: this repo's `bindings/build.rs` calls `forge bind`, and `forge bind`
+# from 1.2.x generates alloy-0.x-flavoured Rust (3-arg `RawCallBuilder`, the
+# old `Transport` trait, etc.) — which won't compile against this workspace's
+# alloy 2.0.4 deps. 1.4.0+ generates alloy-2.x-flavoured bindings. mantle-v2
+# can stay on 1.2.3 because mantle-v2 has no `bindings/` crate / no `forge bind`.
 [tools]
-forge = "1.2.3"
-cast = "1.2.3"
-anvil = "1.2.3"
+forge = "1.4.3"
+cast = "1.4.3"
+anvil = "1.4.3"
 svm-rs = "0.5.19"
 
 [tool_alias]
