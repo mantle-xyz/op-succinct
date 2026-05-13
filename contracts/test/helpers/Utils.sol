@@ -7,8 +7,12 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {Proxy} from "@optimism/contracts/universal/Proxy.sol";
 import {ProxyAdmin} from "@optimism/contracts/universal/ProxyAdmin.sol";
 import {OPSuccinctL2OutputOracle} from "../../src/validity/OPSuccinctL2OutputOracle.sol";
-import {Safe} from "@safe-contracts/contracts/Safe.sol";
-import {Enum} from "@safe-contracts/contracts/common/Enum.sol";
+// [MANTLE] Dropped two unused imports (`@safe-contracts/contracts/Safe.sol`,
+// `@safe-contracts/contracts/common/Enum.sol`). v117 carried them but the
+// types `Safe` and `Enum` are never referenced in this file. The repo has no
+// safe-contracts submodule / remapping, so `forge bind` on a fresh checkout
+// was failing to parse this file even though `bindings/build.rs` passes
+// `--skip 'test/**'` to forge — forge still parses the tree during bind.
 
 contract Utils is Test, JSONDecoder {
     function deployWithConfig(Config memory cfg) public returns (address) {
