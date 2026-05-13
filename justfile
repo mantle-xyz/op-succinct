@@ -432,24 +432,31 @@ vkeys:
 build-elfs: build-range-elfs build-agg-elf
 
 # Build ELF files for range programs.
+#
+# [MANTLE] Two adjustments vs. upstream Succinct Labs v3.8.1's justfile:
+#   1. Drop the `celestia` and `eigenda` blocks — Phase 2 deleted those crates
+#      (Validity-Oracle-only runtime). Only `ethereum` remains.
+#   2. Pass `--ignore-rust-version` to `cargo-prove`. SP1 v6.1.0 ships rustc
+#      1.93.0-dev inside its docker image; our mantle-v2 deps (kona-genesis,
+#      alloy-op-evm, etc.) declare `rust-version = "1.94"`. The 1.93 build
+#      compiles those crates fine — the 1.94 floor is a policy declaration,
+#      not a hard requirement — so we tell cargo to skip the MSRV check.
+#      Remove the flag once SP1 ships a docker image with rustc >= 1.94.
 build-range-elfs:
     #!/usr/bin/env bash
 
     cd programs/range/ethereum
-    ~/.sp1/bin/cargo-prove prove build --elf-name range-elf-embedded --docker --tag v6.1.0 --output-directory ../../../elf
-
-    cd ../celestia
-    ~/.sp1/bin/cargo-prove prove build --elf-name celestia-range-elf-embedded --docker --tag v6.1.0 --output-directory ../../../elf
-
-    cd ../eigenda
-    ~/.sp1/bin/cargo-prove prove build --elf-name eigenda-range-elf-embedded --docker --tag v6.1.0 --output-directory ../../../elf
+    ~/.sp1/bin/cargo-prove prove build --elf-name range-elf-embedded --docker --tag v6.1.0 --output-directory ../../../elf --ignore-rust-version
 
 # Build ELF file for aggregation program.
+#
+# [MANTLE] `--ignore-rust-version` for the same SP1-1.93 vs mantle-v2-1.94
+# reason documented on `build-range-elfs` above.
 build-agg-elf:
     #!/usr/bin/env bash
 
     cd programs/aggregation
-    ~/.sp1/bin/cargo-prove prove build --elf-name aggregation-elf --docker --tag v6.1.0 --output-directory ../../elf
+    ~/.sp1/bin/cargo-prove prove build --elf-name aggregation-elf --docker --tag v6.1.0 --output-directory ../../elf --ignore-rust-version
 
 # Run all unit tests except for the specified ones.
 tests:

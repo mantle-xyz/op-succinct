@@ -188,7 +188,17 @@ The current solution: maintain them at `~/Projects/mantle-rollup-configs/` (out-
 sourced from `mantle-xyz/op-succinct origin/main` HEAD `664a1bd4`. See that directory's
 `README.md` for the chain-id list and refresh procedure.
 
-### 3.7 Toolchain pins — `rust-toolchain.toml` + `mise.toml`
+### 3.7 SP1 ELF build (`justfile` + `--ignore-rust-version`)
+
+`just build-elfs` runs `cargo-prove prove build --docker` for the range and
+aggregation SP1 programs. Two Mantle-specific tweaks:
+
+| File | Change |
+|---|---|
+| `justfile` (`build-range-elfs`) | Drop the `programs/range/celestia` and `programs/range/eigenda` invocations — Phase 2 deleted those crates (Validity-Oracle-only runtime). Only the `ethereum` block remains. |
+| `justfile` (`build-range-elfs` + `build-agg-elf`) | Pass `--ignore-rust-version` to `cargo-prove`. SP1 v6.1.0's docker image ships rustc 1.93.0-dev inside, but our mantle-v2 deps declare `rust-version = "1.94"`. The 1.93 build compiles those crates fine — the 1.94 floor is the dep authors' MSRV declaration, not a hard requirement — so we tell cargo to skip the check. **Remove the flag once SP1 ships a docker image with rustc ≥ 1.94.** |
+
+### 3.8 Toolchain pins — `rust-toolchain.toml` + `mise.toml`
 
 | File | Pin | Why |
 |---|---|---|
@@ -307,6 +317,8 @@ Subsequent incrementals are seconds.
 | `git submodule update --init` prompts for `Username for 'https://github.com'` | One of the submodule URLs points at a private repo and the machine has no GitHub credentials. Phase 5 removed `mantle-xyz/mantle-cdk` (the only private one) — if you see this on a fresh clone of `mantle/op-succinct-v3.8.1` post-Phase-5, you're on an older commit. `git pull` first. | `git pull` to land Phase 5 cleanup, or set up a GitHub PAT in `~/.netrc` / git credential helper if you intentionally re-added a private submodule |
 | `Error (6275): Source "@safe-contracts/contracts/common/Enum.sol" not found` from `forge bind` | v117 left dangling imports in `contracts/test/helpers/Utils.sol`. Phase 5 dropped the two unused imports; this only resurfaces if someone edits that file and re-adds them. | Drop `Safe` / `Enum` imports from `Utils.sol` (they're never used); see §3.2 row. |
 | `bindings/src/codegen/*.rs` won't compile — errors like `cannot find trait 'Transport' in module 'alloy_contract::private'`, `RawCallBuilder` takes 2 generics not 3, `abi_decode_returns` has 1 parameter not 2 | `forge bind` from forge 1.2.x generates alloy-0.x-flavoured Rust; workspace uses alloy 2.0.4. PATH has a forge older than 1.4. | `mise install forge@1.4.3` (mise.toml already pins 1.4.3 — typically caused by a system Foundry from `~/.foundry/bin` shadowing mise's pin: `which forge` to confirm); then `cargo clean -p op-succinct-bindings && cargo build --workspace` |
+| `just build-elfs` fails inside docker with `error: rustc 1.93.0-dev is not supported by the following packages: alloy-op-evm@0.32.0 requires rustc 1.94 …` | SP1 v6.1.0's docker image bundles rustc 1.93.0-dev, but mantle-v2 deps declare `rust-version = "1.94"` as a policy floor | `justfile` already passes `--ignore-rust-version` to `cargo-prove prove build` (§3.7). If you see this anyway, you're calling `cargo-prove` directly — add the flag, or `git pull` to land the §3.7 justfile fix |
+| `just build-elfs` exits with `cd: ../celestia: No such file or directory` | Stale justfile recipe referencing `programs/range/celestia` / `eigenda` paths that Phase 2 deleted | `git pull` to land the §3.7 justfile fix (cleanup committed in the same commit as the `--ignore-rust-version` flag) |
 | `mise: command not found` after running the installer | mise binary lives at `~/.local/bin/mise` but PATH doesn't include it yet | `eval "$(~/.local/bin/mise activate bash)"` for the current shell; the `echo … >> ~/.bashrc` line above seeds future shells |
 | `mise install` finishes instantly with "all tools are installed" but `forge --version` returns the wrong version | Shell didn't pick up mise's PATH shim, so an older `forge` from `~/.foundry/bin/` or system pkg manager is winning | re-source rc files; check `which forge` vs `mise which forge`; `mise exec -- forge --version` to bypass PATH and confirm mise's copy works |
 | `git submodule update` hangs or errors out on github.com | network / proxy / firewall on the server can't reach github.com | configure git http proxy or pull through an internal mirror |
