@@ -32,16 +32,8 @@ name = "fetch-l2oo-config"
 path = "bin/fetch_l2oo_config.rs"
 
 [[bin]]
-name = "fetch-fault-dispute-game-config"
-path = "bin/fetch_fault_dispute_game_config.rs"
-
-[[bin]]
 name = "gen-sp1-test-artifacts"
 path = "bin/gen_sp1_test_artifacts.rs"
-
-[[bin]]
-name = "preflight"
-path = "bin/preflight.rs"
 
 [dependencies]
 
@@ -76,7 +68,6 @@ op-succinct-host-utils.workspace = true
 op-succinct-client-utils.workspace = true
 op-succinct-proof-utils.workspace = true
 op-succinct-elfs.workspace = true
-op-succinct-fp.workspace = true
 
 # sp1
 sp1-sdk.workspace = true

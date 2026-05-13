@@ -27,7 +27,12 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Use 'forge bind' to generate bindings for only the contracts we need for E2E tests
+    // Use 'forge bind' to generate bindings for only the contracts we need for E2E tests.
+    // [MANTLE] Skip the `test/` directory: v117's test files reference older versions of
+    // OPSuccinctL2OutputOracle's API (different argument counts on checkpointBlockHash and
+    // the Config struct) and won't compile against the v117 production contracts. They were
+    // not part of v117's actually-built artifact set. Skipping them keeps `forge bind` clean
+    // while preserving v117's tests verbatim for future fixup.
     let mut forge_command = Command::new("forge");
     forge_command.args([
         "bind",
@@ -36,23 +41,23 @@ fn main() -> anyhow::Result<()> {
         "--module",
         "--overwrite",
         "--skip-extra-derives",
+        "--skip",
+        "test/**",
     ]);
 
-    // Only generate bindings for the contracts we actually need for E2E testing
+    // Only generate bindings for the contracts we actually need for E2E testing.
+    // [MANTLE] FP-only contracts (MockOptimismPortal2, AccessManager, OPSuccinctFaultDisputeGame,
+    // MockPermissionedDisputeGame, IFaultDisputeGame) are dropped — Mantle uses the Validity
+    // Oracle path only.
     let required_contracts = [
         "DisputeGameFactory",
         "SuperchainConfig",
-        "MockOptimismPortal2",
         "AnchorStateRegistry",
-        "AccessManager",
         "SP1MockVerifier",
-        "OPSuccinctFaultDisputeGame",
         "ERC1967Proxy",
-        "MockPermissionedDisputeGame",
         // Also include interfaces that we need
         "IDisputeGameFactory",
         "IDisputeGame",
-        "IFaultDisputeGame",
     ];
 
     // Create a regex pattern that matches any of our required contracts
