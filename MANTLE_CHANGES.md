@@ -218,7 +218,7 @@ git merge v<X.Y.Z>
 
 Resolve order:
 
-1. Hot-spot files in §5 first (proposer / fetcher / contract.rs / signer/lib.rs).
+1. Hot-spot files in §6 first (proposer / fetcher / contract.rs / signer/lib.rs).
 2. Hunks inside `[MANTLE]` comment blocks: keep ours unless upstream's intent is clearly
    a superset (e.g. upstream now also covers our bug fix — drop ours then).
 3. `Cargo.toml` + `[patch.crates-io]`: deps refresh is a separate decision; usually
@@ -252,9 +252,78 @@ git push -u origin mantle/op-succinct-v<X.Y.Z>
 # Mantle branch is), get review, then update §1 baseline in this file and merge.
 ```
 
-## 5. Conflict hot spots and time bombs
+## 5. Cold-build checklist (fresh machine)
 
-### 5.1 High-churn hot spots
+Setup checklist for a brand-new dev box / CI runner / production server. Steps 5.1
+are one-time per machine; 5.2 is per-clone; 5.3 is the build itself; 5.4 collects
+the symptoms we've actually hit on fresh Linux servers + how to clear each one.
+
+### 5.1 One-time machine setup
+
+```bash
+# mise — version manager that drives forge / cast / anvil / svm-rs from mise.toml
+curl https://mise.run | sh
+echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc    # or zsh / fish
+source ~/.bashrc                                                 # or re-login
+
+# rustup — auto-installs the nightly pinned by rust-toolchain.toml on first cargo
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source $HOME/.cargo/env
+```
+
+### 5.2 Per-clone setup
+
+```bash
+git clone --recursive https://github.com/mantle-xyz/op-succinct.git
+cd op-succinct
+git checkout mantle/op-succinct-v3.8.1
+
+# If you forgot --recursive on clone:
+git submodule update --init --recursive --depth 1
+
+mise trust
+mise install        # forge 1.2.3 / cast 1.2.3 / anvil 1.2.3 / svm-rs 0.5.19
+```
+
+### 5.3 Build
+
+```bash
+cargo build --workspace
+```
+
+First build pulls every crate and may take 15-30 min depending on network and CPU.
+Subsequent incrementals are seconds.
+
+### 5.4 Symptoms we've hit on fresh Linux servers + fixes
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| `rustc 1.92.0-nightly is not supported by ... requires rustc 1.94` (mantle-v2 deps) | The pinned nightly (`nightly-2026-02-15`) was never installed locally and rustup auto-install didn't run | `rustup toolchain install nightly-2026-02-15 -c llvm-tools,rustc-dev,rustfmt,clippy` |
+| Build succeeds locally but fails on fresh machine with the same Cargo.toml | Some `rustup override` was set on your local box at some point and silently bypassed `rust-toolchain.toml` | `rustup override list` to inspect; `rustup override unset --path <dir>` to fix |
+| `error[E0583]: file not found for module 'codegen'` + warning `Forge not found in PATH. Skipping bindings generation.` | mise not installed or `mise install` not run; `forge` missing | install mise per §5.1, then `cd op-succinct && mise install` |
+| `Error: failed to resolve file: ".../contracts/lib/sp1-contracts/contracts/src/SP1MockVerifier.sol": No such file or directory` (or similar for `solady`, `openzeppelin-contracts`, etc.) | git submodules never initialised on this clone | `git submodule update --init --recursive --depth 1` |
+| `mise: command not found` after running the installer | mise binary lives at `~/.local/bin/mise` but PATH doesn't include it yet | `eval "$(~/.local/bin/mise activate bash)"` for the current shell; the `echo … >> ~/.bashrc` line above seeds future shells |
+| `mise install` finishes instantly with "all tools are installed" but `forge --version` returns the wrong version | Shell didn't pick up mise's PATH shim, so an older `forge` from `~/.foundry/bin/` or system pkg manager is winning | re-source rc files; check `which forge` vs `mise which forge`; `mise exec -- forge --version` to bypass PATH and confirm mise's copy works |
+| `git submodule update` hangs or errors out on github.com | network / proxy / firewall on the server can't reach github.com | configure git http proxy or pull through an internal mirror |
+
+### 5.5 Optional: SP1 program builds
+
+The Rust workspace builds without SP1; you only need SP1 if you intend to regenerate
+the on-chain ELFs (`programs/range/*`, `programs/aggregation/*`).
+
+```bash
+curl -L https://sp1.succinct.xyz | bash
+sp1up --version v6.1.0      # matches the SP1 version v3.8.1 was tagged against
+cargo prove --version
+```
+
+ELF rebuilds run inside Docker (`cargo prove build --docker --tag v6.1.0`), so the
+host's nightly doesn't need to match the toolchain inside the Docker image —
+the host just needs `cargo` and the SP1 CLI on PATH.
+
+## 6. Conflict hot spots and time bombs
+
+### 6.1 High-churn hot spots
 
 | Location | Why it churns | Post-sync checks |
 |---|---|---|
@@ -265,7 +334,7 @@ git push -u origin mantle/op-succinct-v<X.Y.Z>
 | `validity/src/proposer.rs` | The proposer flow is the most-edited file in this repo. | Look for any spot where upstream replaced our checkpoint-validation logic — `historicBlockHashes` cross-check must stay. |
 | `contracts/foundry.toml` remappings | Upstream may rename or split source dirs. | Re-run `forge build`; missing-import errors point at the broken remap. |
 
-### 5.2 Time bombs
+### 6.2 Time bombs
 
 | Risk | Trigger | Mitigation |
 |---|---|---|
@@ -275,21 +344,21 @@ git push -u origin mantle/op-succinct-v<X.Y.Z>
 | **Contracts protocol change** | Mantle network upgrade lands new on-chain contracts. | New v117-style port from the canonical Mantle contracts release into `contracts/`. The contracts side is decoupled from the Rust workspace; bump independently. |
 | **GCP HSM auth model shift** | Mantle adopts Workload Identity Federation; ops stops setting `HSM_CREDENTIALS`. | The upstream 4-env branch and metadata-service fallback are already in place — no code change needed; just stop setting `HSM_API_NAME` and configure the cluster identity instead. |
 
-## 6. Maintaining this file
+## 7. Maintaining this file
 
 When you add, modify, or remove a Mantle change:
 
 1. Add a `[MANTLE]` comment in the source explaining intent.
 2. Register the change under the appropriate subsection of §3.
 3. If the change is structural (new env-var convention, new dep redirect, new contract
-   carve-out), evaluate whether §5.1 needs a new hot-spot entry.
+   carve-out), evaluate whether §6.1 needs a new hot-spot entry.
 4. If you *remove* a Mantle workaround after concluding upstream now does it natively,
    log that removal here so the next sync engineer does not reintroduce it from the
    old fork's history.
 5. Reference this file in the commit message so future contributors can find their way
    back.
 
-## 7. Related artifacts
+## 8. Related artifacts
 
 | Resource | Purpose |
 |---|---|
