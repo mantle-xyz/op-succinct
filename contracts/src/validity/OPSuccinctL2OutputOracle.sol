@@ -2,14 +2,11 @@
 pragma solidity ^0.8.15;
 
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
-import {ISemver} from "interfaces/universal/ISemver.sol";
-import {Types} from "@optimism/src/libraries/Types.sol";
+import {Semver} from "@optimism/contracts/universal/Semver.sol";
+import {Types} from "@optimism/contracts/libraries/Types.sol";
 import {AggregationOutputs} from "../lib/Types.sol";
-import {Constants} from "@optimism/src/libraries/Constants.sol";
+import {Constants} from "@optimism/contracts/libraries/Constants.sol";
 import {ISP1Verifier} from "@sp1-contracts/src/ISP1Verifier.sol";
-import {GameType, GameTypes, Claim} from "@optimism/src/dispute/lib/Types.sol";
-import {IDisputeGame} from "interfaces/dispute/IDisputeGame.sol";
-import {IDisputeGameFactory} from "interfaces/dispute/IDisputeGameFactory.sol";
 
 /// @custom:proxied
 /// @title OPSuccinctL2OutputOracle
@@ -17,20 +14,7 @@ import {IDisputeGameFactory} from "interfaces/dispute/IDisputeGameFactory.sol";
 ///         commitment to the state of the L2 chain. Other contracts like the OptimismPortal use
 ///         these outputs to verify information about the state of L2. The outputs posted to this contract
 ///         are proved to be valid with `op-succinct`.
-contract OPSuccinctL2OutputOracle is Initializable, ISemver {
-    /// @notice Configuration parameters for OP Succinct verification.
-    struct OpSuccinctConfig {
-        /// @notice The verification key of the aggregation SP1 program.
-        bytes32 aggregationVkey;
-        /// @notice The 32 byte commitment to the BabyBear representation of the verification key of
-        /// the range SP1 program. Specifically, this verification key is the output of converting
-        /// the [u32; 8] range BabyBear verification key to a [u8; 32] array.
-        bytes32 rangeVkeyCommitment;
-        /// @notice The hash of the chain's rollup config, which ensures the proofs submitted are for
-        /// the correct chain. This is used to prevent replay attacks.
-        bytes32 rollupConfigHash;
-    }
-
+contract OPSuccinctL2OutputOracle is Initializable, Semver {
     /// @notice Parameters to initialize the OPSuccinctL2OutputOracle contract.
     struct InitParams {
         address challenger;
@@ -46,10 +30,10 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
         uint256 startingTimestamp;
         uint256 submissionInterval;
         address verifier;
-        uint256 fallbackTimeout;
     }
 
     /// @notice The number of the first L2 block recorded in this contract.
+
     uint256 public startingBlockNumber;
 
     /// @notice The timestamp of the first L2 block recorded in this contract.
@@ -80,19 +64,16 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
     uint256 public finalizationPeriodSeconds;
 
     /// @notice The verification key of the aggregation SP1 program.
-    /// @custom:deprecated
     bytes32 public aggregationVkey;
 
     /// @notice The 32 byte commitment to the BabyBear representation of the verification key of the range SP1 program. Specifically,
     /// this verification is the output of converting the [u32; 8] range BabyBear verification key to a [u8; 32] array.
-    /// @custom:deprecated
     bytes32 public rangeVkeyCommitment;
 
     /// @notice The deployed SP1Verifier contract to verify proofs.
     address public verifier;
 
     /// @notice The hash of the chain's rollup config, which ensures the proofs submitted are for the correct chain.
-    /// @custom:deprecated
     bytes32 public rollupConfigHash;
 
     /// @notice The owner of the contract, who has admin permissions.
@@ -106,25 +87,6 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
 
     /// @notice Activate optimistic mode. When true, the contract will accept outputs without verification.
     bool public optimisticMode;
-
-    /// @notice The time threshold (in seconds) after which anyone can submit a proposal if no proposal has been submitted.
-    ///         Only applies in permissioned mode.
-    /// @custom:network-specific
-    uint256 public fallbackTimeout;
-
-    /// @notice Mapping of configuration names to OpSuccinctConfig structs.
-    mapping(bytes32 => OpSuccinctConfig) public opSuccinctConfigs;
-
-    /// @notice The genesis configuration name.
-    bytes32 public constant GENESIS_CONFIG_NAME = keccak256("opsuccinct_genesis");
-
-    /// @notice The dispute game factory contract.
-    /// If running with the L2OutputOracle directly, without the OPSuccinctDisputeGame wrapper,
-    /// this is set to the zero address.
-    address public disputeGameFactory;
-
-    /// @notice Whether or not we are inside a call to DisputeGameFactory.create.
-    bool internal _enteredDGFCreate;
 
     ////////////////////////////////////////////////////////////
     //                         Events                         //
@@ -144,23 +106,25 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
     /// @param newNextOutputIndex  Next L2 output index after the deletion.
     event OutputsDeleted(uint256 indexed prevNextOutputIndex, uint256 indexed newNextOutputIndex);
 
-    /// @notice Emitted when an OP Succinct configuration is updated.
-    /// @param configName The name of the configuration.
-    /// @param aggregationVkey The aggregation verification key.
-    /// @param rangeVkeyCommitment The range verification key commitment.
-    /// @param rollupConfigHash The rollup config hash.
-    event OpSuccinctConfigUpdated(
-        bytes32 indexed configName, bytes32 aggregationVkey, bytes32 rangeVkeyCommitment, bytes32 rollupConfigHash
-    );
+    /// @notice Emitted when the aggregation verification key is updated.
+    /// @param oldAggregationVkey The old aggregation verification key.
+    /// @param newAggregationVkey The new aggregation verification key.
+    event AggregationVkeyUpdated(bytes32 indexed oldAggregationVkey, bytes32 indexed newAggregationVkey);
 
-    /// @notice Emitted when an OP Succinct configuration is deleted.
-    /// @param configName The name of the configuration that was deleted.
-    event OpSuccinctConfigDeleted(bytes32 indexed configName);
+    /// @notice Emitted when the range verification key commitment is updated.
+    /// @param oldRangeVkeyCommitment The old range verification key commitment.
+    /// @param newRangeVkeyCommitment The new range verification key commitment.
+    event RangeVkeyCommitmentUpdated(bytes32 indexed oldRangeVkeyCommitment, bytes32 indexed newRangeVkeyCommitment);
 
     /// @notice Emitted when the verifier address is updated.
     /// @param oldVerifier The old verifier address.
     /// @param newVerifier The new verifier address.
     event VerifierUpdated(address indexed oldVerifier, address indexed newVerifier);
+
+    /// @notice Emitted when the rollup config hash is updated.
+    /// @param oldRollupConfigHash The old rollup config hash.
+    /// @param newRollupConfigHash The new rollup config hash.
+    event RollupConfigHashUpdated(bytes32 indexed oldRollupConfigHash, bytes32 indexed newRollupConfigHash);
 
     /// @notice Emitted when the owner address is updated.
     /// @param previousOwner The previous owner address.
@@ -182,10 +146,10 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
     /// @param finalizationPeriodSeconds The new finalization period in seconds.
     event OptimisticModeToggled(bool indexed enabled, uint256 finalizationPeriodSeconds);
 
-    /// @notice Emitted when the dispute game factory address is set.
-    /// @param disputeGameFactory The dispute game factory address.
-    event DisputeGameFactorySet(address indexed disputeGameFactory);
-
+    /// @notice Emitted when the finalization period seconds is updated.
+    /// @param oldFinalizationPeriodSeconds The old finalization period seconds.
+    /// @param newFinalizationPeriodSeconds The new finalization period seconds.
+    event FinalizationPeriodSecondsUpdated(uint256 oldFinalizationPeriodSeconds, uint256 newFinalizationPeriodSeconds);
     ////////////////////////////////////////////////////////////
     //                         Errors                         //
     ////////////////////////////////////////////////////////////
@@ -196,10 +160,6 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
 
     /// @notice The L1 block hash is not checkpointed.
     error L1BlockHashNotCheckpointed();
-
-    /// @notice Semantic version.
-    /// @custom:semver v3.0.0
-    string public constant version = "v3.0.0";
 
     /// @notice The version of the initializer on the contract. Used for managing upgrades.
     uint8 public constant initializerVersion = 3;
@@ -228,7 +188,7 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
     ////////////////////////////////////////////////////////////
 
     /// @notice Constructs the OPSuccinctL2OutputOracle contract. Disables initializers.
-    constructor() {
+    constructor() Semver(2, 0, 1) {
         _disableInitializers();
     }
 
@@ -266,35 +226,60 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
         // Add the initial proposer.
         approvedProposers[_initParams.proposer] = true;
 
-        // Initialize the permissionless fallback timeout.
-        fallbackTimeout = _initParams.fallbackTimeout;
-
-        // Initialize genesis configuration
-        opSuccinctConfigs[GENESIS_CONFIG_NAME] = OpSuccinctConfig({
-            aggregationVkey: _initParams.aggregationVkey,
-            rangeVkeyCommitment: _initParams.rangeVkeyCommitment,
-            rollupConfigHash: _initParams.rollupConfigHash
-        });
-
+        // OP Succinct initialization parameters.
+        aggregationVkey = _initParams.aggregationVkey;
+        rangeVkeyCommitment = _initParams.rangeVkeyCommitment;
         verifier = _initParams.verifier;
-
+        rollupConfigHash = _initParams.rollupConfigHash;
         owner = _initParams.owner;
+    }
 
-        _enteredDGFCreate = false;
+    /// @notice Getter for the submissionInterval.
+    ///         Public getter is legacy and will be removed in the future. Use `submissionInterval` instead.
+    /// @return Submission interval.
+    /// @custom:legacy
+    function SUBMISSION_INTERVAL() external view returns (uint256) {
+        return submissionInterval;
+    }
 
-        // This is set to the zero address by default.
-        disputeGameFactory = address(0);
+    /// @notice Getter for the l2BlockTime.
+    ///         Public getter is legacy and will be removed in the future. Use `l2BlockTime` instead.
+    /// @return L2 block time.
+    /// @custom:legacy
+    function L2_BLOCK_TIME() external view returns (uint256) {
+        return l2BlockTime;
+    }
+
+    /// @notice Getter for the challenger address.
+    ///         Public getter is legacy and will be removed in the future. Use `challenger` instead.
+    /// @return Address of the challenger.
+    /// @custom:legacy
+    function CHALLENGER() external view returns (address) {
+        return challenger;
+    }
+
+    /// @notice Getter for the proposer address.
+    ///         Public getter is legacy and will be removed in the future. Use `proposer` instead.
+    /// @return Address of the proposer.
+    /// @custom:legacy
+    function PROPOSER() external view returns (address) {
+        return proposer;
+    }
+
+    /// @notice Getter for the finalizationPeriodSeconds.
+    ///         Public getter is legacy and will be removed in the future. Use `finalizationPeriodSeconds` instead.
+    /// @return Finalization period in seconds.
+    /// @custom:legacy
+    function FINALIZATION_PERIOD_SECONDS() external view returns (uint256) {
+        return finalizationPeriodSeconds;
     }
 
     /// @notice Deletes all output proposals after and including the proposal that corresponds to
     ///         the given output index. Only the challenger address can delete outputs.
-    ///         The genesis output (index 0) cannot be deleted.
-    /// @param _l2OutputIndex Index of the first L2 output to be deleted. Must be greater than 0.
+    /// @param _l2OutputIndex Index of the first L2 output to be deleted.
     ///                       All outputs after this output will also be deleted.
     function deleteL2Outputs(uint256 _l2OutputIndex) external {
         require(msg.sender == challenger, "L2OutputOracle: only the challenger address can delete outputs");
-
-        require(_l2OutputIndex > 0, "L2OutputOracle: cannot delete genesis output");
 
         // Make sure we're not *increasing* the length of the array.
         require(
@@ -320,39 +305,19 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
     /// @notice Accepts an outputRoot and the timestamp of the corresponding L2 block.
     ///         The timestamp must be equal to the current value returned by `nextTimestamp()` in
     ///         order to be accepted. This function may only be called by the Proposer.
-    /// @param _configName The name of the OP Succinct configuration to use.
     /// @param _outputRoot    The L2 output of the checkpoint block.
     /// @param _l2BlockNumber The L2 block number that resulted in _outputRoot.
     /// @param _l1BlockNumber The block number with the specified block hash.
-    /// @param _proof The aggregation proof that proves the transition from the latest L2 output to the new L2 output.
-    /// @param _proverAddress The address of the prover that submitted the proof. Note: proverAddress is not required to be the tx.origin as there is no reason to front-run the prover in the full validity setting.
     /// @dev Modified the function signature to exclude the `_l1BlockHash` parameter, as it's redundant
-    ///      for OP Succinct given the `_l1BlockNumber` parameter.
-    /// @dev Security Note: This contract uses `tx.origin` for proposer permission control due to usage of this contract
-    ///      in the OPSuccinctDisputeGame, created via DisputeGameFactory using the Clone With Immutable Arguments (CWIA) pattern.
-    ///
-    ///      In this setup:
-    ///      - `msg.sender` is the newly created game contract, not an approved proposer.
-    ///      - `tx.origin` identifies the actual user initiating the transaction.
-    ///
-    ///      While `tx.origin` can be vulnerable in general, it is safe here because:
-    ///      - Only trusted proposers/relayers call this contract.
-    ///      - Proposers are expected to interact solely with trusted contracts.
-    ///
-    ///      As long as proposers avoid untrusted contracts, `tx.origin` is as secure as `msg.sender` in this context.
-    function proposeL2Output(
-        bytes32 _configName,
-        bytes32 _outputRoot,
-        uint256 _l2BlockNumber,
-        uint256 _l1BlockNumber,
-        bytes memory _proof,
-        address _proverAddress
-    ) external whenNotOptimistic {
-        // The proposer must be explicitly approved, or the zero address must be approved (permissionless proposing),
-        // or the fallback timeout has been exceeded allowing anyone to propose.
+    /// for OP Succinct given the `_l1BlockNumber` parameter.
+    function proposeL2Output(bytes32 _outputRoot, uint256 _l2BlockNumber, uint256 _l1BlockNumber, bytes memory _proof)
+        external
+        payable
+        whenNotOptimistic
+    {
+        // The proposer must be explicitly approved, or the zero address must be approved (permissionless proposing).
         require(
-            approvedProposers[tx.origin] || approvedProposers[address(0)]
-                || (block.timestamp - lastProposalTimestamp() > fallbackTimeout),
+            approvedProposers[msg.sender] || approvedProposers[address(0)],
             "L2OutputOracle: only approved proposers can propose new outputs"
         );
 
@@ -366,24 +331,7 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
             "L2OutputOracle: cannot propose L2 output in the future"
         );
 
-        // If the dispute game factory is set, make sure that we are calling this function from within
-        // DisputeGameFactory.create.
-        if (disputeGameFactory != address(0)) {
-            require(
-                _enteredDGFCreate,
-                "L2OutputOracle: cannot propose L2 output from outside DisputeGameFactory.create while disputeGameFactory is set"
-            );
-        } else {
-            require(
-                !_enteredDGFCreate,
-                "L2OutputOracle: cannot propose L2 output from inside DisputeGameFactory.create without setting disputeGameFactory"
-            );
-        }
-
         require(_outputRoot != bytes32(0), "L2OutputOracle: L2 output proposal cannot be the zero hash");
-
-        OpSuccinctConfig memory config = opSuccinctConfigs[_configName];
-        require(isValidOpSuccinctConfig(config), "L2OutputOracle: invalid OP Succinct configuration");
 
         bytes32 l1BlockHash = historicBlockHashes[_l1BlockNumber];
         if (l1BlockHash == bytes32(0)) {
@@ -395,18 +343,19 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
             l2PreRoot: l2Outputs[latestOutputIndex()].outputRoot,
             claimRoot: _outputRoot,
             claimBlockNum: _l2BlockNumber,
-            rollupConfigHash: config.rollupConfigHash,
-            rangeVkeyCommitment: config.rangeVkeyCommitment,
-            proverAddress: _proverAddress
+            rollupConfigHash: rollupConfigHash,
+            rangeVkeyCommitment: rangeVkeyCommitment
         });
 
-        ISP1Verifier(verifier).verifyProof(config.aggregationVkey, abi.encode(publicValues), _proof);
+        ISP1Verifier(verifier).verifyProof(aggregationVkey, abi.encode(publicValues), _proof);
 
         emit OutputProposed(_outputRoot, nextOutputIndex(), _l2BlockNumber, block.timestamp);
 
         l2Outputs.push(
             Types.OutputProposal({
-                outputRoot: _outputRoot, timestamp: uint128(block.timestamp), l2BlockNumber: uint128(_l2BlockNumber)
+                outputRoot: _outputRoot,
+                timestamp: uint128(block.timestamp),
+                l2BlockNumber: uint128(_l2BlockNumber)
             })
         );
     }
@@ -419,17 +368,12 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
     /// @param _l1BlockHash   A block hash which must be included in the current chain.
     /// @param _l1BlockNumber The block number with the specified block hash.
     /// @dev This function is sourced from the original L2OutputOracle contract. The only modification is that the proposer address must be in the approvedProposers mapping, or permissionless proposing is enabled.
-    /// @dev This function is not compatible with the `OPSuccinctDisputeGame` contract as it uses `msg.sender` for proposer permission control.
-    ///      See `whenNotOptimistic` implementation of `proposeL2Output` for more details.
-    ///      If the functionality for optimistic mode is needed in the `OPSuccinctDisputeGame` contract, use mock mode instead.
     function proposeL2Output(bytes32 _outputRoot, uint256 _l2BlockNumber, bytes32 _l1BlockHash, uint256 _l1BlockNumber)
         external
         payable
         whenOptimistic
     {
         // The proposer must be explicitly approved, or the zero address must be approved (permissionless proposing).
-        // In optimistic mode, there is NO permissionless fallback timeout. That is, no matter how long it has been since the last proposal,
-        // non-permissioned proposers cannot propose in optimistic mode.
         require(
             approvedProposers[msg.sender] || approvedProposers[address(0)],
             "L2OutputOracle: only approved proposers can propose new outputs"
@@ -466,38 +410,11 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
 
         l2Outputs.push(
             Types.OutputProposal({
-                outputRoot: _outputRoot, timestamp: uint128(block.timestamp), l2BlockNumber: uint128(_l2BlockNumber)
+                outputRoot: _outputRoot,
+                timestamp: uint128(block.timestamp),
+                l2BlockNumber: uint128(_l2BlockNumber)
             })
         );
-    }
-
-    /// @notice Proposes an L2 output through the dispute game factory.
-    /// @dev We can only invoke `disputeGameFactory.create` through this function, ensuring that
-    ///      no one can interact with `proposeL2Output` directly when the dispute game factory is set.
-    /// @param _configName The name of the OpSuccinctConfig to use.
-    /// @param _outputRoot The root of the L2 output to propose.
-    /// @param _l2BlockNumber The L2 block number of the output to propose.
-    /// @param _l1BlockNumber The L1 block number of the output to propose.
-    /// @param _proof The proof of the output to propose.
-    /// @param _proverAddress The address of the prover to use.
-    /// @return _game The dispute game created.
-    function dgfProposeL2Output(
-        bytes32 _configName,
-        bytes32 _outputRoot,
-        uint256 _l2BlockNumber,
-        uint256 _l1BlockNumber,
-        bytes memory _proof,
-        address _proverAddress
-    ) external payable whenNotOptimistic returns (IDisputeGame _game) {
-        require(disputeGameFactory != address(0), "L2OutputOracle: dispute game factory is not set");
-
-        _enteredDGFCreate = true;
-        _game = IDisputeGameFactory(disputeGameFactory).create{value: msg.value}(
-            GameTypes.OP_SUCCINCT,
-            Claim.wrap(_outputRoot),
-            abi.encodePacked(_l2BlockNumber, _l1BlockNumber, _proverAddress, _configName, _proof)
-        );
-        _enteredDGFCreate = false;
     }
 
     /// @notice Checkpoints a block hash at a given block number.
@@ -584,13 +501,6 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
         return latestBlockNumber() + submissionInterval;
     }
 
-    /// @notice Returns the timestamp of the last submitted L2 output proposal.
-    ///         If no proposals have been submitted yet, returns the starting timestamp.
-    /// @return Timestamp of the latest submitted L2 output proposal.
-    function lastProposalTimestamp() public view returns (uint256) {
-        return l2Outputs.length == 0 ? startingTimestamp : l2Outputs[l2Outputs.length - 1].timestamp;
-    }
-
     /// @notice Returns the L2 timestamp corresponding to a given L2 block number.
     /// @param _l2BlockNumber The L2 block number of the target block.
     /// @return L2 timestamp of the given block.
@@ -598,54 +508,25 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
         return startingTimestamp + ((_l2BlockNumber - startingBlockNumber) * l2BlockTime);
     }
 
-    /// @notice Validates that an OpSuccinctConfig has all non-zero parameters.
-    /// @param _config The OpSuccinctConfig to validate.
-    /// @return True if all parameters are non-zero, false otherwise.
-    function isValidOpSuccinctConfig(OpSuccinctConfig memory _config) public pure returns (bool) {
-        return _config.aggregationVkey != bytes32(0) && _config.rangeVkeyCommitment != bytes32(0)
-            && _config.rollupConfigHash != bytes32(0);
-    }
-
     /// @notice Update the submission interval.
     /// @param _submissionInterval The new submission interval.
     function updateSubmissionInterval(uint256 _submissionInterval) external onlyOwner {
-        require(_submissionInterval > 0, "L2OutputOracle: submission interval must be greater than 0");
         emit SubmissionIntervalUpdated(submissionInterval, _submissionInterval);
         submissionInterval = _submissionInterval;
     }
 
-    /// @notice Updates or creates an OP Succinct configuration.
-    /// @param _configName The name of the configuration.
-    /// @param _rollupConfigHash The rollup config hash.
-    /// @param _aggregationVkey The aggregation verification key.
-    /// @param _rangeVkeyCommitment The range verification key commitment.
-    function addOpSuccinctConfig(
-        bytes32 _configName,
-        bytes32 _rollupConfigHash,
-        bytes32 _aggregationVkey,
-        bytes32 _rangeVkeyCommitment
-    ) external onlyOwner {
-        require(_configName != bytes32(0), "L2OutputOracle: config name cannot be empty");
-        require(!isValidOpSuccinctConfig(opSuccinctConfigs[_configName]), "L2OutputOracle: config already exists");
-
-        OpSuccinctConfig memory newConfig = OpSuccinctConfig({
-            aggregationVkey: _aggregationVkey,
-            rangeVkeyCommitment: _rangeVkeyCommitment,
-            rollupConfigHash: _rollupConfigHash
-        });
-
-        require(isValidOpSuccinctConfig(newConfig), "L2OutputOracle: invalid OP Succinct configuration parameters");
-
-        opSuccinctConfigs[_configName] = newConfig;
-
-        emit OpSuccinctConfigUpdated(_configName, _aggregationVkey, _rangeVkeyCommitment, _rollupConfigHash);
+    /// @notice Updates the aggregation verification key.
+    /// @param _aggregationVkey The new aggregation verification key.
+    function updateAggregationVkey(bytes32 _aggregationVkey) external onlyOwner {
+        emit AggregationVkeyUpdated(aggregationVkey, _aggregationVkey);
+        aggregationVkey = _aggregationVkey;
     }
 
-    /// @notice Deletes an OP Succinct configuration.
-    /// @param _configName The name of the configuration to delete.
-    function deleteOpSuccinctConfig(bytes32 _configName) external onlyOwner {
-        delete opSuccinctConfigs[_configName];
-        emit OpSuccinctConfigDeleted(_configName);
+    /// @notice Updates the range verification key commitment.
+    /// @param _rangeVkeyCommitment The new range verification key commitment.
+    function updateRangeVkeyCommitment(bytes32 _rangeVkeyCommitment) external onlyOwner {
+        emit RangeVkeyCommitmentUpdated(rangeVkeyCommitment, _rangeVkeyCommitment);
+        rangeVkeyCommitment = _rangeVkeyCommitment;
     }
 
     /// @notice Updates the verifier address.
@@ -655,7 +536,14 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
         verifier = _verifier;
     }
 
-    /// @notice Updates the owner address.
+    /// @notice Updates the rollup config hash.
+    /// @param _rollupConfigHash The new rollup config hash.
+    function updateRollupConfigHash(bytes32 _rollupConfigHash) external onlyOwner {
+        emit RollupConfigHashUpdated(rollupConfigHash, _rollupConfigHash);
+        rollupConfigHash = _rollupConfigHash;
+    }
+
+    /// Updates the owner address.
     /// @param _owner The new owner address.
     function transferOwnership(address _owner) external onlyOwner {
         emit OwnershipTransferred(owner, _owner);
@@ -678,24 +566,32 @@ contract OPSuccinctL2OutputOracle is Initializable, ISemver {
 
     /// @notice Enables optimistic mode.
     /// @param _finalizationPeriodSeconds The new finalization window.
-    function enableOptimisticMode(uint256 _finalizationPeriodSeconds) external onlyOwner whenNotOptimistic {
+    function enableOptimisticMode(uint256 _finalizationPeriodSeconds) external whenNotOptimistic {
+        require(msg.sender == challenger, "L2OutputOracle: caller must be the challenger");
+        require(_finalizationPeriodSeconds >= 7 days, "L2OutputOracle: finalization period must be greater than 7 days");
         finalizationPeriodSeconds = _finalizationPeriodSeconds;
         optimisticMode = true;
         emit OptimisticModeToggled(true, _finalizationPeriodSeconds);
     }
 
-    /// @notice Sets the dispute game factory address.
-    /// @param _disputeGameFactory The dispute game factory address.
-    function setDisputeGameFactory(address _disputeGameFactory) external onlyOwner {
-        disputeGameFactory = _disputeGameFactory;
-        emit DisputeGameFactorySet(_disputeGameFactory);
-    }
-
     /// @notice Disables optimistic mode.
     /// @param _finalizationPeriodSeconds The new finalization window.
-    function disableOptimisticMode(uint256 _finalizationPeriodSeconds) external onlyOwner whenOptimistic {
+    function disableOptimisticMode(uint256 _finalizationPeriodSeconds) external whenOptimistic {
+        require(msg.sender == challenger, "L2OutputOracle: caller must be the challenger");
+        require(_finalizationPeriodSeconds >= 1 hours, "L2OutputOracle: finalization period must be greater than 1 hour");
         finalizationPeriodSeconds = _finalizationPeriodSeconds;
         optimisticMode = false;
         emit OptimisticModeToggled(false, _finalizationPeriodSeconds);
+    }
+
+    function updateFinalizationPeriodSeconds(uint256 _finalizationPeriodSeconds) external {
+        require(msg.sender == challenger, "L2OutputOracle: caller must be the challenger");
+        if (optimisticMode) {
+            require(_finalizationPeriodSeconds >= 7 days, "L2OutputOracle: finalization period must be greater than 7 days");
+        } else {
+            require(_finalizationPeriodSeconds >= 1 hours, "L2OutputOracle: finalization period must be greater than 1 hour");
+        }
+        emit FinalizationPeriodSecondsUpdated(finalizationPeriodSeconds, _finalizationPeriodSeconds);
+        finalizationPeriodSeconds = _finalizationPeriodSeconds;
     }
 }

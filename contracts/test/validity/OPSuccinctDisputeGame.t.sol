@@ -1,186 +1,57 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.15;
 
-// Testing
-import "forge-std/Test.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-
-// Libraries
-import {Claim, GameStatus, GameType, GameTypes, Hash, OutputRoot, Timestamp} from "src/dispute/lib/Types.sol";
-import {AlreadyInitialized, GameNotInProgress, NoCreditToClaim, GameNotFinalized} from "src/dispute/lib/Errors.sol";
+import {Test, console} from "forge-std/Test.sol";
 import {Utils} from "../helpers/Utils.sol";
+import {OPSuccinctL2OutputOracle} from "../../src/validity/OPSuccinctL2OutputOracle.sol";
+import {OPSuccinctDisputeGame} from "../../src/validity/OPSuccinctDisputeGame.sol";
+import {IDisputeGame} from "@optimism/src/dispute/interfaces/IDisputeGame.sol";
+import {LibCWIA} from "@solady-v0.0.281/utils/legacy/LibCWIA.sol";
 
-// Contracts
-import {DisputeGameFactory} from "src/dispute/DisputeGameFactory.sol";
-import {OPSuccinctDisputeGame} from "src/validity/OPSuccinctDisputeGame.sol";
-import {OPSuccinctL2OutputOracle} from "src/validity/OPSuccinctL2OutputOracle.sol";
-import {AnchorStateRegistry} from "src/dispute/AnchorStateRegistry.sol";
-import {SuperchainConfig} from "src/L1/SuperchainConfig.sol";
-import {Proxy} from "@optimism/src/universal/Proxy.sol";
+contract OPSuccinctL2OutputOracleTest is Test, Utils {
+    using LibCWIA for address;
 
-// Interfaces
-import {IDisputeGame} from "interfaces/dispute/IDisputeGame.sol";
-import {IDisputeGameFactory} from "interfaces/dispute/IDisputeGameFactory.sol";
-import {ISuperchainConfig} from "interfaces/L1/ISuperchainConfig.sol";
-import {IOptimismPortal2} from "interfaces/L1/IOptimismPortal2.sol";
-import {IAnchorStateRegistry} from "interfaces/dispute/IAnchorStateRegistry.sol";
-
-// Utils
-import {MockOptimismPortal2} from "../../src/utils/MockOptimismPortal2.sol";
-
-contract OPSuccinctDisputeGameTest is Test, Utils {
-    // Event definitions matching those in OPSuccinctDisputeGame.
-    event Resolved(GameStatus indexed status);
-
-    DisputeGameFactory factory;
-    ERC1967Proxy factoryProxy;
-
-    OPSuccinctDisputeGame gameImpl;
-    OPSuccinctDisputeGame game;
-
-    OPSuccinctL2OutputOracle l2OutputOracle;
-
-    address proposer = address(0x123);
-
-    // Fixed parameters.
-    GameType gameType = GameTypes.OP_SUCCINCT;
-    bytes32 rootClaim = keccak256("rootClaim");
-
-    // Game creation parameters.
-    uint256 l2BlockNumber = 2000;
-    uint256 l1BlockNumber = 1000;
+    // Example proof data for the BoB testnet. Tx: https://sepolia.etherscan.io/tx/0x35df99dce5db3d7644a005bd582af2d66533b56fdb01970f248d96e8053fc0ba
+    uint256 checkpointedL1BlockNum = 7438547;
+    bytes32 claimedOutputRoot = 0x974323e1f533bf40923f6a5f9d8752d42743bb5b784d9a6d1ce223a5cc368ae6;
+    uint256 claimedL2BlockNum = 6940641;
+    bytes proof =
+        hex"09069090289d338bbce470b324757ae21b8846ba36d88feb8fc9e32aa477d193153db2bc1ffead4fb681196de556343a1cd61954d5e6863327d35e0f2e0b9781278b58231af27bb83226d60c1573639e400130ed49318f28dddb9768c8a71f20de8bc07d0355ef76ec0661b0d720d36943e7d8660b6e603733afb549ffba8773cec52097011525d1239e39b8da29bec5fb18d6f4bdfd84890fedd6c0cf67342a6843bb2a28e9ceae9069e52312b7b79d4a39b7d5527bbcfefd66de3887cea63f76b672081dd49279796f07bfdb04e9c5284dd0565ac923bc2c5c01be28a22c314402280001a7aa13b9a8a1c92850ae89fcede9142542fbc13298ecab89ad8fbfbdabbee3";
 
     function setUp() public {
-        // Deploy the implementation contract for DisputeGameFactory.
-        DisputeGameFactory factoryImpl = new DisputeGameFactory();
+        // Note: L1_RPC should be a valid Sepolia RPC.
+        vm.createSelectFork(vm.envString("L1_RPC"), checkpointedL1BlockNum + 1);
+    }
 
-        // Deploy a proxy pointing to the factory implementation.
-        factoryProxy = new ERC1967Proxy(
-            address(factoryImpl), abi.encodeWithSelector(DisputeGameFactory.initialize.selector, address(this))
-        );
+    // Test the DisputeGame contract.
+    function testOPSuccinctDisputeGame() public {
+        vm.startBroadcast();
 
-        // Cast the proxy to the factory contract.
-        factory = DisputeGameFactory(address(factoryProxy));
+        Config memory cfg = readJson("opsuccinctl2ooconfig-test.json");
 
-        // Deploy L2OutputOracle using Utils helper functions.
-        (l2OutputOracle,) = deployL2OutputOracleWithStandardParams(proposer, address(0), address(this));
+        cfg.owner = msg.sender;
 
-        // Deploy the implementation of OPSuccinctDisputeGame.
-        gameImpl = new OPSuccinctDisputeGame(address(l2OutputOracle));
+        address l2ooProxy = deployWithConfig(cfg);
 
-        // Register our reference implementation under the specified gameType.
-        factory.setImplementation(gameType, IDisputeGame(address(gameImpl)));
+        OPSuccinctL2OutputOracle l2oo = OPSuccinctL2OutputOracle(l2ooProxy);
+        OPSuccinctDisputeGame game = new OPSuccinctDisputeGame(l2ooProxy);
 
-        // Set the dispute game factory address.
-        l2OutputOracle.setDisputeGameFactory(address(factory));
+        l2oo.addProposer(address(0));
+        l2oo.checkpointBlockHash(checkpointedL1BlockNum);
 
-        // Create a game
-        vm.startBroadcast(proposer);
-
-        // Warp time forward to ensure the game is created after the respectedGameTypeUpdatedAt timestamp.
-        warpRollAndCheckpoint(l2OutputOracle, 4001, l1BlockNumber);
-
-        bytes memory proof = bytes("");
-
-        game = OPSuccinctDisputeGame(
-            address(
-                l2OutputOracle.dgfProposeL2Output(
-                    l2OutputOracle.GENESIS_CONFIG_NAME(), rootClaim, l2BlockNumber, l1BlockNumber, proof, proposer
+        IDisputeGame proxy = IDisputeGame(
+            address(game).clone(
+                abi.encodePacked(
+                    msg.sender,
+                    claimedOutputRoot,
+                    bytes32(0), // TODO: This should be parentHash
+                    abi.encode(claimedL2BlockNum, checkpointedL1BlockNum, proof)
                 )
             )
         );
 
         vm.stopBroadcast();
-    }
 
-    // =========================================
-    // Test: Basic initialization checks
-    // =========================================
-    function testInitialization() public view {
-        // Test that the factory is correctly initialized.
-        assertEq(address(factory.owner()), address(this));
-        assertEq(address(factory.gameImpls(gameType)), address(gameImpl));
-        assertEq(factory.gameCount(), 1);
-
-        // Check that the game matches the 'gameAtIndex(0)'.
-        (,, IDisputeGame proxy_) = factory.gameAtIndex(0);
-        assertEq(address(game), address(proxy_));
-
-        // Check the game fields.
-        assertEq(game.gameType().raw(), gameType.raw());
-        assertEq(game.gameCreator(), address(l2OutputOracle));
-        assertEq(game.rootClaim().raw(), rootClaim);
-        assertEq(game.l2BlockNumber(), l2BlockNumber);
-        assertEq(game.l1BlockNumber(), l1BlockNumber);
-        assertEq(game.proverAddress(), proposer);
-        assertEq(game.configName(), l2OutputOracle.GENESIS_CONFIG_NAME());
-        assertEq(keccak256(game.proof()), keccak256(bytes("")));
-        assertEq(uint8(game.status()), uint8(GameStatus.DEFENDER_WINS));
-    }
-
-    // =========================================
-    // Test: Cannot resolve game twice
-    // =========================================
-    function testCannotResolveTwice() public {
-        vm.expectRevert(GameNotInProgress.selector);
-        game.resolve();
-    }
-
-    // =========================================
-    // Test: Cannot re-initialize game
-    // =========================================
-    function testCannotReInitializeGame() public {
-        vm.startBroadcast(proposer);
-        vm.expectRevert("L2OutputOracle: block number must be greater than or equal to next expected block number");
-        game.initialize();
-        vm.stopBroadcast();
-    }
-
-    // =========================================
-    // Test: Cannot create game without permission
-    // =========================================
-    function testCannotCreateGameWithoutPermission() public {
-        address maliciousProposer = address(0x1234);
-
-        vm.startPrank(maliciousProposer);
-        vm.deal(maliciousProposer, 1 ether);
-
-        // Warp forward to the block we want to propose and checkpoint
-        uint256 newL1BlockNumber = l1BlockNumber + 500;
-        warpRollAndCheckpoint(l2OutputOracle, 2000, newL1BlockNumber);
-
-        bytes memory proof = bytes("");
-        bytes32 configName = l2OutputOracle.GENESIS_CONFIG_NAME();
-        vm.expectRevert("L2OutputOracle: only approved proposers can propose new outputs");
-        factory.create(
-            gameType,
-            Claim.wrap(keccak256("new-claim")),
-            abi.encodePacked(l2BlockNumber + 1000, newL1BlockNumber, maliciousProposer, configName, proof)
-        );
-
-        vm.stopPrank();
-    }
-
-    // =========================================
-    // Test: Cannot propose output directly when dispute game is active
-    // =========================================
-    function testCannotProposeOutputDirectlyWhenDisputeGameIsActive() public {
-        vm.startBroadcast(proposer);
-        vm.deal(proposer, 1 ether);
-
-        // Warp forward to the block we want to propose and checkpoint
-        uint256 newL1BlockNumber = l1BlockNumber + 500;
-        warpRollAndCheckpoint(l2OutputOracle, 2000, newL1BlockNumber);
-
-        bytes memory proof = bytes("");
-        bytes32 configName = l2OutputOracle.GENESIS_CONFIG_NAME();
-        vm.expectRevert(
-            "L2OutputOracle: cannot propose L2 output from outside DisputeGameFactory.create while disputeGameFactory is set"
-        );
-        l2OutputOracle.proposeL2Output(
-            configName, keccak256("outputRoot"), l2BlockNumber + 1000, newL1BlockNumber, proof, proposer
-        );
-
-        vm.stopBroadcast();
+        proxy.initialize{value: 10}();
     }
 }
