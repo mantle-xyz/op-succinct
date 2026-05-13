@@ -1,0 +1,30 @@
+# [MANTLE] Tool-version pins for op-succinct. Aligned with mantle-v2/mise.toml so
+# a single `mise install` in the repo root brings up the same Foundry version
+# across every Mantle Rust monorepo workspace.
+#
+# Why this file exists: upstream Succinct Labs v3.8.1 introduced a
+# `bindings/` crate whose `build.rs` calls `forge bind` to generate
+# `bindings/src/codegen/`. The generated dir is in `.gitignore`, so every
+# fresh checkout needs a working `forge` on PATH at first build. Without
+# mise, every new dev/server is a tutorial in "install Foundry first";
+# with mise, it's `mise install` and done.
+#
+# Rust is intentionally NOT pinned here — `rust-toolchain.toml` already
+# drives the rustc/cargo version and adding `rust = "..."` here would
+# shadow that pin in confusing ways (we hit exactly this with mantle-v2's
+# mise.toml earlier).
+
+[tools]
+forge = "1.2.3"
+cast = "1.2.3"
+anvil = "1.2.3"
+svm-rs = "0.5.19"
+
+[tool_alias]
+forge = "github:foundry-rs/foundry[exe=forge]"
+cast = "github:foundry-rs/foundry[exe=cast]"
+anvil = "github:foundry-rs/foundry[exe=anvil]"
+svm-rs = "github:alloy-rs/svm-rs[exe=svm]"
+
+[settings]
+experimental = true

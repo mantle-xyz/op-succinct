@@ -186,6 +186,13 @@ The current solution: maintain them at `~/Projects/mantle-rollup-configs/` (out-
 sourced from `mantle-xyz/op-succinct origin/main` HEAD `664a1bd4`. See that directory's
 `README.md` for the chain-id list and refresh procedure.
 
+### 3.7 Toolchain pins — `rust-toolchain.toml` + `mise.toml`
+
+| File | Pin | Why |
+|---|---|---|
+| `rust-toolchain.toml` | `nightly-2026-02-15` (rustc 1.95-nightly) | Upstream v3.8.1 pinned `nightly-2025-09-15` (rustc 1.92-nightly). After Phase 2 swapped deps to mantle-v2, those crates' `rust-version = "1.94"` declaration started rejecting 1.92-nightly. Bumped to 1.95-nightly which keeps the `rustc-dev` component build scripts need. |
+| `mise.toml` | `forge = cast = anvil = "1.2.3"`, `svm-rs = "0.5.19"` | Upstream v3.8.1's `bindings/build.rs` calls `forge bind` to generate `bindings/src/codegen/` (gitignored). Without forge on PATH, build.rs prints a warning and skips generation, then `lib.rs:7 mod codegen;` fails to find the module. Pinning forge via mise mirrors mantle-v2/mise.toml so a fresh machine just needs `mise install` rather than a manual Foundry install. `rust` is intentionally NOT pinned here — `rust-toolchain.toml` already drives it and a mise rust pin would silently override (we hit exactly this with mantle-v2's mise.toml earlier). |
+
 ## 4. Sync workflow
 
 When a new upstream Succinct Labs release lands (e.g. v3.9.0, v4.0.0):
