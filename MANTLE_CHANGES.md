@@ -14,7 +14,7 @@ synchronizing future upstream changes.
 | Mantle branch | `mantle/op-succinct-v3.8.1` (this repo, `origin` = `mantle-xyz/op-succinct`) |
 | Older Mantle fork (deprecated) | `origin/main` HEAD `664a1bd4` (≈ v3.4.1 era + 68 ad-hoc commits; superseded by this branch) |
 | Rust toolchain | 1.94 (see `rust-toolchain.toml`) |
-| Dependency source: kona / op-alloy / alloy-op-evm | `mantlenetworkio/mantle-v2` rust subtree @ `58c0204c5` (post kona-client/v1.5.1 sync + alloy-evm fork wiring) |
+| Dependency source: kona / op-alloy / alloy-op-evm | `mantlenetworkio/mantle-v2` rust subtree @ `b4eece288` (adds `L1BlockInfoArsia` variant on top of `58c0204c5`) |
 | Dependency source: revm family | `mantle-xyz/revm @ mantle-elysium` via `[patch.crates-io]` |
 | Dependency source: alloy-evm | `mantle-xyz/evm @ mantle-v0.34.0` via `[patch.crates-io]` |
 | Contracts baseline | `mantle-xyz/op-succinct` tag `v1.1.7-2` (a.k.a. "v117"); ported into `contracts/` |
@@ -30,6 +30,23 @@ synchronizing future upstream changes.
 | Phase 5 ports | SP1 error propagation (1 line) + GCP HSM Mantle env-var compat (60 lines) | ✅ |
 | op-node compat layer | `5efd6ead` from old fork — deferred | ⏸️ |
 | Upstream sync to v4.x | upstream is at v4.3.1; v3.8.1 → v4.x is its own phase | ⏸️ |
+
+### 1.1 Supported L2 block range — Arsia and later only
+
+> ⚠️ **op-succinct (cost-estimator, range proofs, validity proposer) only supports L2 blocks at or after the Mantle Arsia activation. Anything before Arsia will fail derivation.**
+
+| Network | Arsia activation timestamp | First supported L2 block |
+|---|---|---|
+| Mantle mainnet (chain id 5000) | `1776841200` (2026-04-22 UTC) | **94355444** |
+
+Why this hard floor:
+
+- Before Arsia, Mantle ran in BVM mode with a Mantle-private batch encoding. EIP-4844 blobs were still posted to the same `batch_inbox = 0xffeeddccbbaa0000000000000000000000000000`, but the **blob payload layout is not the OP-Stack v0 encoding** (`BLOB_ENCODING_VERSION = 0` in `kona-derive/src/sources/blob_data.rs`).
+- Arsia is the cut-over: from the activation block onward, the rollup config switches every OP-Stack hardfork (canyon / delta / ecotone / fjord / granite / holocene / isthmus / jovian / arsia) on at the same timestamp. Only from there does the chain produce OP-Stack-compliant frames, channels, and batches.
+- `kona-derive` is OP-Stack only — it has no BVM legacy path and adding one would mean forking `BlobData::decode` / `FrameQueue` / `ChannelBank` / `BatchQueue` in parallel to the OP-Stack path. Out of scope for this repo.
+- Symptom when ignored: `ERROR Failed to parse frames from data.` followed by `Failed to prefetch hint: ... header not found`, then a host panic. The frame-parse error is logged but swallowed in `frame_queue.rs:127`, so the first user-visible failure is the prefetch one.
+
+Pick `--start` / `--end` ≥ 94355444 (mainnet) for any cost-estimator or proof run. For safety, skip the activation block itself and start at 94355445 — the activation block carries the Arsia upgrade-tx bundle (L1 Block / GPO / Operator Fee Vault redeploy + enable call) and has different shape than a steady-state block.
 
 ## 2. Architecture decisions
 
@@ -360,6 +377,7 @@ the host just needs `cargo` and the SP1 CLI on PATH.
 | **mantle-xyz/op-succinct origin/main divergence** | Someone lands new Mantle features directly on `origin/main` instead of this v3.8.1 branch. | Treat this branch as the source of truth going forward; pull-and-port new origin/main commits the way Phase 5 did. Add an entry to §3 for each port. |
 | **Contracts protocol change** | Mantle network upgrade lands new on-chain contracts. | New v117-style port from the canonical Mantle contracts release into `contracts/`. The contracts side is decoupled from the Rust workspace; bump independently. |
 | **GCP HSM auth model shift** | Mantle adopts Workload Identity Federation; ops stops setting `HSM_CREDENTIALS`. | The upstream 4-env branch and metadata-service fallback are already in place — no code change needed; just stop setting `HSM_API_NAME` and configure the cluster identity instead. |
+| **Pre-Arsia historical proofs requested** | Product asks for proofs / cost estimates on L2 < 94355444 (mainnet). | Not solvable in this repo. Pre-Arsia blocks were produced under BVM mode with a non-OP-Stack blob encoding. Would require a parallel BVM-mode derivation pipeline (fork `BlobData::decode` / `FrameQueue` / `ChannelBank` / `BatchQueue` in `kona-derive`) plus a BVM batch-format spec — both upstream of this repo. See §1.1. |
 
 ## 7. Maintaining this file
 
