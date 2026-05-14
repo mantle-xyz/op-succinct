@@ -574,7 +574,7 @@ impl OPSuccinctDataFetcher {
         T: serde::de::DeserializeOwned,
     {
         let client = reqwest::Client::new();
-        let response = client
+        let http_response = client
             .post(url.clone())
             .json(&json!({
                 "jsonrpc": "2.0",
@@ -583,9 +583,22 @@ impl OPSuccinctDataFetcher {
                 "id": 1
             }))
             .send()
-            .await?
-            .json::<serde_json::Value>()
             .await?;
+
+        let status = http_response.status();
+        let body_text = http_response.text().await?;
+
+        if !status.is_success() {
+            let snippet: String = body_text.chars().take(256).collect();
+            return Err(anyhow::anyhow!(
+                "HTTP {status} calling {method}: {snippet}"
+            ));
+        }
+
+        let response: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| {
+            let snippet: String = body_text.chars().take(256).collect();
+            anyhow::anyhow!("Failed to parse JSON response for {method}: {e} (body: {snippet:?})")
+        })?;
 
         // Check for RPC error from the JSON RPC response.
         if let Some(error) = response.get("error") {

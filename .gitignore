@@ -13,6 +13,9 @@ data
 # vscode
 .vscode
 
+# JetBrains IDE
+.idea/
+
 # .env files
 .env*
 !.env.example
