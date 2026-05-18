@@ -29,7 +29,7 @@ synchronizing future upstream changes.
 | Phase 5 audit | systematic audit of all 68 `mantle-xyz/op-succinct origin/main` Mantle commits vs v3.8.1 baseline | ✅ |
 | Phase 5 ports | SP1 error propagation (1 line) + GCP HSM Mantle env-var compat (60 lines) | ✅ |
 | Phase 5 follow-up | Rust ABI realignment to v117 contracts (`utils/host/src/contract.rs` + proposer) — caught when re-auditing for the PR-to-main merge | ✅ |
-| op-node compat layer | `5efd6ead` from old fork — deferred | ⏸️ |
+| Phase 5 follow-up | op-node pre-Interop compat — relax `rpc_types::SyncStatus` post-Interop fields to `Option<>` so the host can deserialize prod op-node responses (equivalent of `5efd6ead`) | ✅ |
 | Upstream sync to v4.x | upstream is at v4.3.1; v3.8.1 → v4.x is its own phase | ⏸️ |
 
 ### 1.1 Supported L2 block range — Arsia and later only
@@ -200,6 +200,27 @@ The `op_succinct_config_name_hash` field on `RequesterConfig` and its env-var
 contract call. They're effectively dead config on this build — a separate
 cleanup pass can remove them, but doing so now would expand the blast radius
 beyond what's needed to fix the ABI mismatch.
+
+### 3.4c op-node pre-Interop compat (Phase 5 follow-up — Mantle `5efd6ead`-equivalent)
+
+Mantle production op-node predates OP-Stack Interop and does **not** emit
+`cross_unsafe_l2` / `local_safe_l2` in `optimism_outputAtBlock` responses. kona-rpc's
+`SyncStatus` declares those two fields as non-optional `L2BlockInfo`, so serde
+rejects the prod response at the first RPC call — the host can never advance.
+
+origin/main's `5efd6ead` solved this by adding a parallel `utils/host/src/compat.rs`
+with mirror types and swapping the call sites. This repo already maintains a local
+schema copy (`utils/host/src/rpc_types.rs`, originally introduced to avoid pulling
+rollup-boost / its alloy version conflict), so we **fold the relaxation into the
+existing module** instead of adding a second one.
+
+| File | Change |
+|---|---|
+| `utils/host/src/rpc_types.rs` | Replaced the `kona_protocol::SyncStatus` re-export with a locally-declared `SyncStatus` struct that's identical except for the two post-Interop fields: `cross_unsafe_l2: Option<L2BlockInfo>` and `local_safe_l2: Option<L2BlockInfo>`, both with `#[serde(default, skip_serializing_if = "Option::is_none")]`. `OutputResponse::sync_status` now refers to the local relaxed `SyncStatus`. No call sites needed updating — `OutputResponse::sync_status` is declared for completeness of the response shape but never read after deserialization. |
+
+**Rollback (when Mantle ops bumps prod op-node past Interop):** swap the local
+`SyncStatus` back to `kona_protocol::SyncStatus` (single import change + delete the
+local struct definition). Update §7 of this file when doing so.
 
 ### 3.5 GCP HSM env-var compat (Phase 5 — Mantle `b31a31e8`/`e37cfd5a`-equivalent)
 
