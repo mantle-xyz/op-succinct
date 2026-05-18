@@ -1,26 +1,23 @@
-use crate::OPSuccinctL2OutputOracle::opSuccinctConfigsReturn;
-use alloy_primitives::B256;
 use alloy_sol_types::sol;
 
-// Sourced from op-succinct/contracts/src/validity/OPSuccinctL2OutputOracle.sol
+// Sourced from contracts/src/validity/OPSuccinctL2OutputOracle.sol (v117 baseline).
+// [MANTLE] Aligned with the v117 ABI: 4-param `proposeL2Output`, direct vkey/config
+// storage fields (no `opSuccinctConfigs` mapping), and no `dgfProposeL2Output` —
+// Phase 3 dropped Fault Proof wholesale so the OP Succinct dispute-game contracts
+// (game type 6) are not present in this build. See MANTLE_CHANGES.md §3.2 / §3.3.
 sol! {
     #[sol(rpc)]
     contract OPSuccinctL2OutputOracle {
-        struct OpSuccinctConfig {
-            bytes32 aggregationVkey;
-            bytes32 rangeVkeyCommitment;
-            bytes32 rollupConfigHash;
-        }
-
-        mapping(bytes32 => OpSuccinctConfig) public opSuccinctConfigs;
-
+        bytes32 public aggregationVkey;
+        bytes32 public rangeVkeyCommitment;
+        bytes32 public rollupConfigHash;
         uint256 public submissionInterval;
 
         function latestBlockNumber() public view returns (uint256);
 
         function historicBlockHashes(uint256 _blockNumber) external view returns (bytes32);
 
-        function updateAggregationVKey(bytes32 _aggregationVKey) external onlyOwner;
+        function updateAggregationVkey(bytes32 _aggregationVkey) external onlyOwner;
 
         function updateRangeVkeyCommitment(bytes32 _rangeVkeyCommitment) external onlyOwner;
 
@@ -28,33 +25,10 @@ sol! {
         function checkpointBlockHash(uint256 _blockNumber) external;
 
         // Proposing outputs when the output oracle is set to ZK mode.
-        function proposeL2Output(bytes32 _configName, bytes32 _outputRoot, uint256 _l2BlockNumber, uint256 _l1BlockNumber, bytes memory _proof, address _proverAddress)
+        function proposeL2Output(bytes32 _outputRoot, uint256 _l2BlockNumber, uint256 _l1BlockNumber, bytes memory _proof)
         external
         payable
         whenNotOptimistic;
-
-        function dgfProposeL2Output(
-            bytes32 _configName,
-            bytes32 _outputRoot,
-            uint256 _l2BlockNumber,
-            uint256 _l1BlockNumber,
-            bytes memory _proof,
-            address _proverAddress
-        ) external payable whenNotOptimistic returns (address _game);
-    }
-}
-
-impl opSuccinctConfigsReturn {
-    pub fn aggregation_vkey(&self) -> B256 {
-        self._0
-    }
-
-    pub fn range_vkey_commitment(&self) -> B256 {
-        self._1
-    }
-
-    pub fn rollup_config_hash(&self) -> B256 {
-        self._2
     }
 }
 

@@ -28,6 +28,7 @@ synchronizing future upstream changes.
 | Phase 4 follow-up | redirect `alloy-evm` to `mantle-xyz/evm @ mantle-v0.34.0` fork (in this repo's `[patch.crates-io]`) | ✅ |
 | Phase 5 audit | systematic audit of all 68 `mantle-xyz/op-succinct origin/main` Mantle commits vs v3.8.1 baseline | ✅ |
 | Phase 5 ports | SP1 error propagation (1 line) + GCP HSM Mantle env-var compat (60 lines) | ✅ |
+| Phase 5 follow-up | Rust ABI realignment to v117 contracts (`utils/host/src/contract.rs` + proposer) — caught when re-auditing for the PR-to-main merge | ✅ |
 | op-node compat layer | `5efd6ead` from old fork — deferred | ⏸️ |
 | Upstream sync to v4.x | upstream is at v4.3.1; v3.8.1 → v4.x is its own phase | ⏸️ |
 
@@ -121,7 +122,13 @@ baseline (≈ v3.4.1 era) and v3.8.1, independently absorbed:
 - GCP KMS signing via official `alloy-signer-gcp` v2.0.4 (replaces Mantle's bespoke `utils/signer-gcp/` 233-line crate)
 
 The bridge between mantle-v2/rust deps + v3.8.1 baseline therefore covers ~95% of
-Mantle's protocol/business-logic deltas. Only a couple of small ports remained — see §3.
+Mantle's protocol/business-logic deltas. Only a handful of small ports remained — see §3.
+
+> ⚠️ The original Phase 5 audit *missed* one thing: Phase 3 swapped the on-chain
+> contracts to v117 but left the Rust `sol!` bindings on the **pre-v117 ABI**
+> shape (6-param `proposeL2Output`, `opSuccinctConfigs` mapping). Caught when
+> re-auditing before opening the PR-to-main. Ported via the `7aae8cf1` +
+> `57d1cbaa` + `be5354a1` triplet — see §3.4b.
 
 ## 3. Mantle changes registry
 
@@ -171,6 +178,28 @@ When bumping the mantle-v2 rev, refresh **every** `rev = "..."` in this file (a
 | File | Change |
 |---|---|
 | `scripts/prove/bin/agg.rs` | Line ~190 (network-prover prove call): `.expect("proving failed")` → `.context("proving failed")?`. The matching `cpu_prover.setup` + `cpu_prover.execute` + `spawn_blocking` paths were already converted upstream in v3.8.1; only this one call site remained. |
+
+### 3.4b Rust ABI realignment to v117 (Phase 5 follow-up — Mantle `7aae8cf1` + `57d1cbaa` + `be5354a1`-equivalent)
+
+Phase 3 ported the v1.1.7-2 contracts into `contracts/` but the hand-written
+`sol!` bindings in `utils/host/src/contract.rs` were left on the **pre-v117 ABI**
+that v3.8.1's upstream Rust code expected (6-param `proposeL2Output` with
+`_configName` + `_proverAddress`, plus an `opSuccinctConfigs` mapping for vkey
+storage). The two would have compiled but every aggregation proof submission
+would have reverted on-chain with a function-selector mismatch. Caught during
+the pre-PR audit when comparing the Rust callers to `contracts/src/validity/OPSuccinctL2OutputOracle.sol`.
+
+| File | Change |
+|---|---|
+| `utils/host/src/contract.rs` | Rewrote the `OPSuccinctL2OutputOracle` `sol!` block: dropped the `OpSuccinctConfig` struct + `opSuccinctConfigs(bytes32)` mapping in favour of three direct `bytes32 public` fields (`aggregationVkey`, `rangeVkeyCommitment`, `rollupConfigHash`); `proposeL2Output` changed from 6 params to 4 (no `_configName`, no `_proverAddress`); removed the `dgfProposeL2Output` declaration entirely — v117 ships no such function and Phase 3 removed the dispute-game implementations it would have targeted. Also fixed the casing of `updateAggregationVkey` (was `updateAggregationVKey`) and dropped the now-unused `impl opSuccinctConfigsReturn` helper. |
+| `validity/src/proposer.rs` (propose path) | DGF branch (`dgf_address != Address::ZERO`) replaced with a fail-fast error: v117 contracts ship no dispute-game implementation for game type 6, so leaving the branch reachable would route real deployments into a guaranteed revert. The else-branch's `proposeL2Output` call now passes the 4-param tuple. |
+| `validity/src/proposer.rs` (`validate_contract_config`) | Replaced the single `opSuccinctConfigs(config_name_hash)` mapping read with three direct field reads (`aggregationVkey()` / `rangeVkeyCommitment()` / `rollupConfigHash()`), each `.call().await?.0`. |
+
+The `op_succinct_config_name_hash` field on `RequesterConfig` and its env-var
+`OP_SUCCINCT_CONFIG_NAME` are left in place but are no longer threaded into any
+contract call. They're effectively dead config on this build — a separate
+cleanup pass can remove them, but doing so now would expand the blast radius
+beyond what's needed to fix the ABI mismatch.
 
 ### 3.5 GCP HSM env-var compat (Phase 5 — Mantle `b31a31e8`/`e37cfd5a`-equivalent)
 

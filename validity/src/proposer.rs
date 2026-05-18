@@ -1325,68 +1325,41 @@ where
             .get_l2_output_at_block(completed_agg_proof.end_block as u64)
             .await?;
 
-        // If the DisputeGameFactory address is set, use it to create a new validity dispute game
-        // that will resolve with the proof. Note: In the DGF setting, the proof immediately
-        // resolves the game. Otherwise, propose the L2 output.
-        let receipt = if self.contract_config.dgf_address != Address::ZERO {
-            // Validity game type: https://github.com/ethereum-optimism/optimism/blob/develop/packages/contracts-bedrock/src/dispute/lib/Types.sol#L64.
-            const OP_SUCCINCT_VALIDITY_DISPUTE_GAME_TYPE: u32 = 6;
+        // [MANTLE] v117 contracts ship no dispute-game implementation (Phase 3 dropped
+        // Fault Proof + the OPSuccinctValidityDisputeGame type 6 contract). The DGF
+        // path is unreachable on this build; surface a clear config error rather than
+        // letting the call revert with an opaque "no implementation for game type" on
+        // chain. Clear `DGF_ADDRESS` to use the L2OutputOracle directly.
+        if self.contract_config.dgf_address != Address::ZERO {
+            return Err(anyhow!(
+                "DGF_ADDRESS is set ({}) but the v117 contract baseline ships no \
+                 dispute-game contracts; clear DGF_ADDRESS to propose via the \
+                 L2OutputOracle directly",
+                self.contract_config.dgf_address,
+            ));
+        }
 
-            // Get the initialization bond for the validity dispute game.
-            let init_bond = self
-                .contract_config
-                .dgf_contract
-                .initBonds(OP_SUCCINCT_VALIDITY_DISPUTE_GAME_TYPE)
-                .call()
-                .await?;
+        // Propose the L2 output to the L2OutputOracle directly.
+        let transaction_request = self
+            .contract_config
+            .l2oo_contract
+            .proposeL2Output(
+                output.output_root,
+                U256::from(completed_agg_proof.end_block),
+                U256::from(completed_agg_proof.checkpointed_l1_block_number.unwrap()),
+                completed_agg_proof.proof.clone().unwrap().into(),
+            )
+            .into_transaction_request();
 
-            let transaction_request = self
-                .contract_config
-                .l2oo_contract
-                .dgfProposeL2Output(
-                    self.requester_config.op_succinct_config_name_hash,
-                    output.output_root,
-                    U256::from(completed_agg_proof.end_block),
-                    U256::from(completed_agg_proof.checkpointed_l1_block_number.unwrap()),
-                    completed_agg_proof.proof.clone().unwrap().into(),
-                    self.driver_config.signer.address(),
-                )
-                .value(init_bond)
-                .into_transaction_request();
-
-            self.driver_config
-                .signer
-                .send_transaction_request_with_timeout(
-                    self.driver_config.fetcher.as_ref().rpc_config.l1_rpc.clone(),
-                    transaction_request,
-                    self.requester_config.tx_confirmation_timeout,
-                )
-                .await
-                .map_err(|e| anyhow!("Failed to relay aggregation proof onchain. end_block: {}, checkpointed_l1_block_number: {}, error: {}", completed_agg_proof.end_block, completed_agg_proof.checkpointed_l1_block_number.unwrap(), e))?
-        } else {
-            // Propose the L2 output to the L2OutputOracle directly.
-            let transaction_request = self
-                .contract_config
-                .l2oo_contract
-                .proposeL2Output(
-                    self.requester_config.op_succinct_config_name_hash,
-                    output.output_root,
-                    U256::from(completed_agg_proof.end_block),
-                    U256::from(completed_agg_proof.checkpointed_l1_block_number.unwrap()),
-                    completed_agg_proof.proof.clone().unwrap().into(),
-                    self.driver_config.signer.address(),
-                )
-                .into_transaction_request();
-
-            self.driver_config
-                .signer
-                .send_transaction_request_with_timeout(
-                    self.driver_config.fetcher.as_ref().rpc_config.l1_rpc.clone(),
-                    transaction_request,
-                    self.requester_config.tx_confirmation_timeout,
-                )
-                .await?
-        };
+        let receipt = self
+            .driver_config
+            .signer
+            .send_transaction_request_with_timeout(
+                self.driver_config.fetcher.as_ref().rpc_config.l1_rpc.clone(),
+                transaction_request,
+                self.requester_config.tx_confirmation_timeout,
+            )
+            .await?;
 
         // If the transaction reverted, log the error.
         if !receipt.status() {
@@ -1398,15 +1371,15 @@ where
 
     /// Validate the requester config matches the contract.
     async fn validate_contract_config(&self) -> Result<()> {
-        let config_name = self.requester_config.op_succinct_config_name_hash;
-
-        let contract_config =
-            self.contract_config.l2oo_contract.opSuccinctConfigs(config_name).call().await?;
-
-        // Extract the OpSuccinctConfig fields with meaningful names.
-        let contract_agg_vkey_hash = contract_config.aggregation_vkey();
-        let contract_range_vkey_commitment = contract_config.range_vkey_commitment();
-        let contract_rollup_config_hash = contract_config.rollup_config_hash();
+        // [MANTLE] v117 stores vkeys/rollup-config-hash as direct fields rather than
+        // behind an `opSuccinctConfigs(_configName)` mapping — read them as three
+        // separate calls. See contracts/src/validity/OPSuccinctL2OutputOracle.sol.
+        let contract_agg_vkey_hash =
+            self.contract_config.l2oo_contract.aggregationVkey().call().await?.0;
+        let contract_range_vkey_commitment =
+            self.contract_config.l2oo_contract.rangeVkeyCommitment().call().await?.0;
+        let contract_rollup_config_hash =
+            self.contract_config.l2oo_contract.rollupConfigHash().call().await?.0;
 
         let rollup_config_hash_match =
             contract_rollup_config_hash == self.program_config.commitments.rollup_config_hash;
