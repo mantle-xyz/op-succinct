@@ -561,7 +561,7 @@ dependencies = [
 [[package]]
 name = "alloy-op-evm"
 version = "0.32.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
@@ -578,7 +578,7 @@ dependencies = [
 [[package]]
 name = "alloy-op-hardforks"
 version = "0.5.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-chains",
  "alloy-hardforks 0.4.7",
@@ -5406,7 +5406,7 @@ dependencies = [
 [[package]]
 name = "kona-cli"
 version = "0.3.2"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-chains",
  "alloy-primitives",
@@ -5426,7 +5426,7 @@ dependencies = [
 [[package]]
 name = "kona-client"
 version = "1.0.2"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
@@ -5465,7 +5465,7 @@ dependencies = [
 [[package]]
 name = "kona-derive"
 version = "0.4.5"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
@@ -5487,7 +5487,7 @@ dependencies = [
 [[package]]
 name = "kona-driver"
 version = "0.4.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-evm",
@@ -5508,7 +5508,7 @@ dependencies = [
 [[package]]
 name = "kona-executor"
 version = "0.4.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
@@ -5532,7 +5532,7 @@ dependencies = [
 [[package]]
 name = "kona-genesis"
 version = "0.4.5"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-chains",
  "alloy-consensus 2.0.4",
@@ -5553,7 +5553,7 @@ dependencies = [
 [[package]]
 name = "kona-hardforks"
 version = "0.4.5"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-eips 2.0.4",
  "alloy-primitives",
@@ -5568,7 +5568,7 @@ dependencies = [
 [[package]]
 name = "kona-host"
 version = "1.0.2"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
@@ -5618,7 +5618,7 @@ dependencies = [
 [[package]]
 name = "kona-interop"
 version = "0.4.5"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
@@ -5640,12 +5640,12 @@ dependencies = [
 [[package]]
 name = "kona-macros"
 version = "0.1.2"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 
 [[package]]
 name = "kona-mpt"
 version = "0.3.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -5657,7 +5657,7 @@ dependencies = [
 [[package]]
 name = "kona-preimage"
 version = "0.3.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-primitives",
  "async-channel",
@@ -5671,7 +5671,7 @@ dependencies = [
 [[package]]
 name = "kona-proof"
 version = "0.3.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
@@ -5708,7 +5708,7 @@ dependencies = [
 [[package]]
 name = "kona-proof-interop"
 version = "0.2.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
@@ -5740,7 +5740,7 @@ dependencies = [
 [[package]]
 name = "kona-protocol"
 version = "0.4.5"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloc-no-stdlib",
  "alloy-consensus 2.0.4",
@@ -5771,7 +5771,7 @@ dependencies = [
 [[package]]
 name = "kona-providers-alloy"
 version = "0.3.3"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
@@ -5804,7 +5804,7 @@ dependencies = [
 [[package]]
 name = "kona-registry"
 version = "0.4.5"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-chains",
  "alloy-eips 2.0.4",
@@ -5823,7 +5823,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm"
 version = "0.2.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "async-trait",
  "buddy_system_allocator",
@@ -5835,7 +5835,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm-proc"
 version = "0.2.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "cfg-if",
  "kona-std-fpvm",
@@ -6626,7 +6626,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "op-alloy"
 version = "2.0.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "op-alloy-consensus",
  "op-alloy-network",
@@ -6638,7 +6638,7 @@ dependencies = [
 [[package]]
 name = "op-alloy-consensus"
 version = "2.0.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
@@ -6659,7 +6659,7 @@ dependencies = [
 [[package]]
 name = "op-alloy-network"
 version = "2.0.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-network 2.0.4",
@@ -6672,7 +6672,7 @@ dependencies = [
 [[package]]
 name = "op-alloy-provider"
 version = "2.0.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-network 2.0.4",
  "alloy-primitives",
@@ -6686,7 +6686,7 @@ dependencies = [
 [[package]]
 name = "op-alloy-rpc-types"
 version = "2.0.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
@@ -6706,7 +6706,7 @@ dependencies = [
 [[package]]
 name = "op-alloy-rpc-types-engine"
 version = "2.0.0"
-source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=b4eece28878a8650d80fba9043724be83646ad25#b4eece28878a8650d80fba9043724be83646ad25"
+source = "git+https://github.com/mantlenetworkio/mantle-v2?rev=29e41dad7cdda2e7dddad6552b42d274287e77aa#29e41dad7cdda2e7dddad6552b42d274287e77aa"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",

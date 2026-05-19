@@ -14,7 +14,7 @@ synchronizing future upstream changes.
 | Mantle branch | `mantle/op-succinct-v3.8.1` (this repo, `origin` = `mantle-xyz/op-succinct`) |
 | Older Mantle fork (deprecated) | `origin/main` HEAD `664a1bd4` (≈ v3.4.1 era + 68 ad-hoc commits; superseded by this branch) |
 | Rust toolchain | 1.94 (see `rust-toolchain.toml`) |
-| Dependency source: kona / op-alloy / alloy-op-evm | `mantlenetworkio/mantle-v2` rust subtree @ `b4eece288` (adds `L1BlockInfoArsia` variant on top of `58c0204c5`) |
+| Dependency source: kona / op-alloy / alloy-op-evm | `mantlenetworkio/mantle-v2` rust subtree @ `29e41dad` (op-alloy `token_ratio` backfill + alloy-evm fork-architecture doc on top of `b4eece28`, which itself added `L1BlockInfoArsia` decoder on top of `58c0204c5`) |
 | Dependency source: revm family | `mantle-xyz/revm @ mantle-elysium` via `[patch.crates-io]` |
 | Dependency source: alloy-evm | `mantle-xyz/evm @ mantle-v0.34.0` via `[patch.crates-io]` |
 | Contracts baseline | `mantle-xyz/op-succinct` tag `v1.1.7-2` (a.k.a. "v117"); ported into `contracts/` |
