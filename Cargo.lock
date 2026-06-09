@@ -292,7 +292,7 @@ dependencies = [
 [[package]]
 name = "alloy-evm"
 version = "0.25.2"
-source = "git+https://github.com/mantle-xyz/evm?tag=v0.25.2-mantle-arsia.2#00211cd21e42109167cf7a728bbae8c13a0d8e2b"
+source = "git+https://github.com/mantle-xyz/evm?tag=v0.25.2-mantle-arsia.3#132895008e72737297b9b572bc76d7c119cd71e4"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -408,7 +408,7 @@ dependencies = [
 [[package]]
 name = "alloy-op-evm"
 version = "0.25.2"
-source = "git+https://github.com/mantle-xyz/evm?tag=v0.25.2-mantle-arsia.2#00211cd21e42109167cf7a728bbae8c13a0d8e2b"
+source = "git+https://github.com/mantle-xyz/evm?tag=v0.25.2-mantle-arsia.3#132895008e72737297b9b572bc76d7c119cd71e4"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5370,7 +5370,7 @@ dependencies = [
 [[package]]
 name = "kona-cli"
 version = "0.3.2"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-chains",
  "alloy-primitives",
@@ -5390,7 +5390,7 @@ dependencies = [
 [[package]]
 name = "kona-client"
 version = "1.0.2"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5429,7 +5429,7 @@ dependencies = [
 [[package]]
 name = "kona-derive"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5450,7 +5450,7 @@ dependencies = [
 [[package]]
 name = "kona-disc"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-rlp",
  "backon",
@@ -5469,7 +5469,7 @@ dependencies = [
 [[package]]
 name = "kona-driver"
 version = "0.4.0"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-consensus",
  "alloy-evm",
@@ -5490,7 +5490,7 @@ dependencies = [
 [[package]]
 name = "kona-engine"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5528,7 +5528,7 @@ dependencies = [
 [[package]]
 name = "kona-executor"
 version = "0.4.0"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5552,7 +5552,7 @@ dependencies = [
 [[package]]
 name = "kona-genesis"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-chains",
  "alloy-consensus",
@@ -5572,7 +5572,7 @@ dependencies = [
 [[package]]
 name = "kona-gossip"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5605,7 +5605,7 @@ dependencies = [
 [[package]]
 name = "kona-hardforks"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -5616,7 +5616,7 @@ dependencies = [
 [[package]]
 name = "kona-host"
 version = "1.0.2"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5664,7 +5664,7 @@ dependencies = [
 [[package]]
 name = "kona-interop"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5686,12 +5686,12 @@ dependencies = [
 [[package]]
 name = "kona-macros"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 
 [[package]]
 name = "kona-mpt"
 version = "0.3.0"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -5703,7 +5703,7 @@ dependencies = [
 [[package]]
 name = "kona-peers"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -5726,7 +5726,7 @@ dependencies = [
 [[package]]
 name = "kona-preimage"
 version = "0.3.0"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-primitives",
  "async-channel",
@@ -5740,7 +5740,7 @@ dependencies = [
 [[package]]
 name = "kona-proof"
 version = "0.3.0"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5776,7 +5776,7 @@ dependencies = [
 [[package]]
 name = "kona-proof-interop"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5808,7 +5808,7 @@ dependencies = [
 [[package]]
 name = "kona-protocol"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloc-no-stdlib",
  "alloy-consensus",
@@ -5838,7 +5838,7 @@ dependencies = [
 [[package]]
 name = "kona-providers-alloy"
 version = "0.3.3"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5869,7 +5869,7 @@ dependencies = [
 [[package]]
 name = "kona-registry"
 version = "0.4.5"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-chains",
  "alloy-eips",
@@ -5888,7 +5888,7 @@ dependencies = [
 [[package]]
 name = "kona-rpc"
 version = "0.3.2"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -5918,7 +5918,7 @@ dependencies = [
 [[package]]
 name = "kona-sources"
 version = "0.1.2"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -5948,7 +5948,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "async-trait",
  "buddy_system_allocator",
@@ -5960,7 +5960,7 @@ dependencies = [
 [[package]]
 name = "kona-std-fpvm-proc"
 version = "0.2.0"
-source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.2#6eb0aba82003a360eefdd8b2216f442818b988fc"
+source = "git+https://github.com/mantle-xyz/kona?tag=v2.2.4-testnet.3#a14c28f245457ce89afde6308917c4dd20d78278"
 dependencies = [
  "cfg-if",
  "kona-std-fpvm",
@@ -7382,7 +7382,7 @@ dependencies = [
 [[package]]
 name = "op-revm"
 version = "12.0.2"
-source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.2#c13503ef692229168892b5a4ff021b72d5d95a5a"
+source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.3#82da470cd73be4874186b92d394f9d87dccac68b"
 dependencies = [
  "alloy-sol-types",
  "auto_impl",
@@ -9288,7 +9288,7 @@ checksum = "1e061d1b48cb8d38042de4ae0a7a6401009d6143dc80d2e2d6f31f0bdd6470c7"
 [[package]]
 name = "revm"
 version = "31.0.2"
-source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.2#c13503ef692229168892b5a4ff021b72d5d95a5a"
+source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.3#82da470cd73be4874186b92d394f9d87dccac68b"
 dependencies = [
  "revm-bytecode",
  "revm-context",
@@ -9306,7 +9306,7 @@ dependencies = [
 [[package]]
 name = "revm-bytecode"
 version = "7.1.1"
-source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.2#c13503ef692229168892b5a4ff021b72d5d95a5a"
+source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.3#82da470cd73be4874186b92d394f9d87dccac68b"
 dependencies = [
  "bitvec",
  "phf",
@@ -9317,7 +9317,7 @@ dependencies = [
 [[package]]
 name = "revm-context"
 version = "11.0.2"
-source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.2#c13503ef692229168892b5a4ff021b72d5d95a5a"
+source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.3#82da470cd73be4874186b92d394f9d87dccac68b"
 dependencies = [
  "bitvec",
  "cfg-if",
@@ -9333,7 +9333,7 @@ dependencies = [
 [[package]]
 name = "revm-context-interface"
 version = "12.0.1"
-source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.2#c13503ef692229168892b5a4ff021b72d5d95a5a"
+source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.3#82da470cd73be4874186b92d394f9d87dccac68b"
 dependencies = [
  "alloy-eip2930",
  "alloy-eip7702",
@@ -9348,7 +9348,7 @@ dependencies = [
 [[package]]
 name = "revm-database"
 version = "9.0.5"
-source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.2#c13503ef692229168892b5a4ff021b72d5d95a5a"
+source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.3#82da470cd73be4874186b92d394f9d87dccac68b"
 dependencies = [
  "alloy-eips",
  "revm-bytecode",
@@ -9361,7 +9361,7 @@ dependencies = [
 [[package]]
 name = "revm-database-interface"
 version = "8.0.5"
-source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.2#c13503ef692229168892b5a4ff021b72d5d95a5a"
+source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.3#82da470cd73be4874186b92d394f9d87dccac68b"
 dependencies = [
  "auto_impl",
  "either",
@@ -9373,7 +9373,7 @@ dependencies = [
 [[package]]
 name = "revm-handler"
 version = "12.0.2"
-source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.2#c13503ef692229168892b5a4ff021b72d5d95a5a"
+source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.3#82da470cd73be4874186b92d394f9d87dccac68b"
 dependencies = [
  "auto_impl",
  "derive-where",
@@ -9391,7 +9391,7 @@ dependencies = [
 [[package]]
 name = "revm-inspector"
 version = "12.0.2"
-source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.2#c13503ef692229168892b5a4ff021b72d5d95a5a"
+source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.3#82da470cd73be4874186b92d394f9d87dccac68b"
 dependencies = [
  "auto_impl",
  "either",
@@ -9408,7 +9408,7 @@ dependencies = [
 [[package]]
 name = "revm-interpreter"
 version = "29.0.1"
-source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.2#c13503ef692229168892b5a4ff021b72d5d95a5a"
+source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.3#82da470cd73be4874186b92d394f9d87dccac68b"
 dependencies = [
  "revm-bytecode",
  "revm-context-interface",
@@ -9420,7 +9420,7 @@ dependencies = [
 [[package]]
 name = "revm-precompile"
 version = "29.0.1"
-source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.2#c13503ef692229168892b5a4ff021b72d5d95a5a"
+source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.3#82da470cd73be4874186b92d394f9d87dccac68b"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -9445,7 +9445,7 @@ dependencies = [
 [[package]]
 name = "revm-primitives"
 version = "21.0.2"
-source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.2#c13503ef692229168892b5a4ff021b72d5d95a5a"
+source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.3#82da470cd73be4874186b92d394f9d87dccac68b"
 dependencies = [
  "alloy-primitives",
  "num_enum 0.7.5",
@@ -9456,7 +9456,7 @@ dependencies = [
 [[package]]
 name = "revm-state"
 version = "8.1.1"
-source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.2#c13503ef692229168892b5a4ff021b72d5d95a5a"
+source = "git+https://github.com/mantle-xyz/revm?tag=v98-mantle-arsia.3#82da470cd73be4874186b92d394f9d87dccac68b"
 dependencies = [
  "bitflags 2.10.0",
  "revm-bytecode",
