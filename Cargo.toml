@@ -72,23 +72,23 @@ strum_macros = "0.27.1"
 tempfile = "3.10.1"
 
 # kona
-kona-mpt = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.4"}
-kona-derive = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.4", default-features = false }
-kona-driver = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.4" }
-kona-preimage = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.4", features = [
+kona-mpt = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.5-rc1"}
+kona-derive = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.5-rc1", default-features = false }
+kona-driver = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.5-rc1" }
+kona-preimage = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.5-rc1", features = [
     "rkyv",
     "serde",
 ] }
-kona-executor = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.4" }
-kona-proof = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.4" }
+kona-executor = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.5-rc1" }
+kona-proof = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.5-rc1" }
 
-kona-client = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.4" }
-kona-host = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.4" }
-kona-providers-alloy = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.4" }
-kona-rpc = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.4", default-features = false }
-kona-protocol = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.4", default-features = false }
-kona-registry = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.4", default-features = false }
-kona-genesis = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.4", default-features = false }
+kona-client = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.5-rc1" }
+kona-host = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.5-rc1" }
+kona-providers-alloy = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.5-rc1" }
+kona-rpc = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.5-rc1", default-features = false }
+kona-protocol = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.5-rc1", default-features = false }
+kona-registry = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.5-rc1", default-features = false }
+kona-genesis = { git = "https://github.com/mantle-xyz/kona", tag = "v2.2.4-testnet.5-rc1", default-features = false }
 
 # op-succinct
 op-succinct-prove = { path = "scripts/prove" }
@@ -191,3 +191,9 @@ substrate-bn = { git = "https://github.com/sp1-patches/bn", tag = "patch-0.6.0-s
 p256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-p256-13.2-sp1-6.0.0" }
 k256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-k256-13.4-sp1-6.0.0" }
 tiny-keccak = { git = "https://github.com/sp1-patches/tiny-keccak", tag = "patch-2.0.2-sp1-6.0.0" }
+
+# Security fix for GHSA-5vfr-x84h-hmvf (revm advisory).
+[patch."https://github.com/mantle-xyz/revm"]
+revm = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "3d0fc1543d86bf61c091f68dace45e104de9686f" }
+op-revm = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "3d0fc1543d86bf61c091f68dace45e104de9686f" }
+revm-precompile = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "3d0fc1543d86bf61c091f68dace45e104de9686f" }
