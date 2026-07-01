@@ -14,9 +14,9 @@ synchronizing future upstream changes.
 | Mantle branch | `mantle/op-succinct-v3.8.1` (this repo, `origin` = `mantle-xyz/op-succinct`) |
 | Older Mantle fork (deprecated) | `origin/main` HEAD `664a1bd4` (≈ v3.4.1 era + 68 ad-hoc commits; superseded by this branch) |
 | Rust toolchain | 1.94 (see `rust-toolchain.toml`) |
-| Dependency source: kona / op-alloy / alloy-op-evm | `mantlenetworkio/mantle-v2` rust subtree @ `29e41dad` (op-alloy `token_ratio` backfill + alloy-evm fork-architecture doc on top of `b4eece28`, which itself added `L1BlockInfoArsia` decoder on top of `58c0204c5`) |
+| Dependency source: kona / op-alloy / alloy-op-evm | `mantlenetworkio/mantle-v2` rust subtree @ `d2e4ebea` (**mantle-elysium branch tip**). Bumped from `29e41dad` to pick up `05b2cca3e` (alloy-op-evm: route Mantle chains to the ARSIA spec in `spec_by_timestamp_after_bedrock` — before this they resolved to JOVIAN and executed with **pre-Arsia** fee rules) and `05079251c` (op-alloy: preserve `eth_value`/`eth_tx_value` in the `TxDeposit` Compact codec). Without these the host derives L2 blocks that diverge from canonical — every root (`transactions_root`/`state_root`/`receipts_root`) differs. See §3.1a. |
 | Dependency source: revm family | `mantle-xyz/revm @ mantle-elysium` via `[patch.crates-io]` |
-| Dependency source: alloy-evm | `mantle-xyz/evm @ mantle-v0.34.0` via `[patch.crates-io]` |
+| Dependency source: alloy-evm | **upstream `alloy-rs/evm` v0.34.0 from crates.io — NOT patched.** The former `mantle-xyz/evm @ mantle-v0.34.0` fork only added a dead-code `token_ratio` trait method; mantle-v2/rust dropped it at `d2e4ebea` (commit `75d90fc71`), so the `[patch.crates-io]` redirect was removed here to stay in lockstep. |
 | Contracts baseline | `mantle-xyz/op-succinct` tag `v1.1.7-2` (a.k.a. "v117"); ported into `contracts/` |
 
 ### Migration status
@@ -76,10 +76,13 @@ SP1 program glue, validity proposer/requester, contracts, and CLI tooling live h
 revm, revm-bytecode, revm-context, revm-context-interface, revm-database,
 revm-database-interface, revm-handler, revm-inspector, revm-interpreter,
 revm-precompile, revm-primitives, revm-state, op-revm
-
-# alloy-evm → mantle-xyz/evm @ mantle-v0.34.0
-alloy-evm
 ```
+
+`alloy-evm` is **intentionally not patched** — it resolves from crates.io = upstream
+`alloy-rs/evm` v0.34.0. The old `mantle-xyz/evm @ mantle-v0.34.0` fork existed only to add a
+dead-code `token_ratio` method; mantle-v2/rust dropped the fork at `d2e4ebea`, so we dropped
+the patch here too. `alloy-op-evm` and the `op-alloy*` crates are still patched to the
+`mantlenetworkio/mantle-v2 @ d2e4ebea` git source (they live inside that subtree, not crates.io).
 
 Workspace-level `[patch.crates-io]` only applies when this repo is the workspace root.
 mantle-v2/rust has its own `[patch.crates-io]` with the same entries — those don't
@@ -145,12 +148,41 @@ grep -rn "\[MANTLE\]" . --include="*.rs" --include="*.toml" --include="*.sol" \
 |---|---|
 | `Cargo.toml` | All `kona-*`, `op-alloy*`, `alloy-op-evm*` deps switched from crates.io / official kona repo to `mantlenetworkio/mantle-v2` git at the pinned `rev = "58c0204c5"`. |
 | `Cargo.toml` `[patch.crates-io]` | All 13 revm-family crates redirected to `mantle-xyz/revm @ mantle-elysium`. |
-| `Cargo.toml` `[patch.crates-io]` | `alloy-evm` redirected to `mantle-xyz/evm @ mantle-v0.34.0`. |
+| `Cargo.toml` `[patch.crates-io]` | ~~`alloy-evm` redirected to `mantle-xyz/evm @ mantle-v0.34.0`.~~ **Dropped at the `d2e4ebea` bump** — `alloy-evm` now resolves from crates.io (upstream `alloy-rs/evm` v0.34.0). See §3.1a. |
 | `Cargo.toml` | EigenDA and Celestia DA-backend crates dropped (`utils/eigenda/*`, `programs/range/*/celestia`, `programs/range/*/eigenda`, etc.). Validity-Oracle-only path. |
 
 When bumping the mantle-v2 rev, refresh **every** `rev = "..."` in this file (a
-`replace_all` of the old → new SHA is the canonical move). Phase 5 confirmed there are
-25 such pins.
+`replace_all` of the old → new SHA is the canonical move). There are 25 such pins.
+
+### 3.1a mantle-v2 rev bump `29e41dad` → `d2e4ebea` (derivation-divergence fix)
+
+**Symptom.** On QA/Sepolia Mantle chains the proposer/cost-estimator failed with a
+repeating `Failed to prefetch hint: ... header ... not found` (a non-canonical L1 hash),
+and the host-derived L2 blocks did **not** match canonical — `transactions_root`,
+`state_root`, and `receipts_root` all differed on a single-system-tx block. The
+`header not found` was only a downstream symptom: the host requested L1/L2 data keyed by
+hashes computed from its own **wrong** derived state.
+
+**Root cause.** `29e41dad`'s `alloy-op-evm::spec_by_timestamp_after_bedrock` only checked
+OP forks, so Mantle chains resolved to the **JOVIAN** spec instead of **ARSIA** and executed
+with pre-Arsia fee rules (L1-cost/`token_ratio` handling). Combined with a `TxDeposit`
+Compact-codec bug that dropped `eth_value`/`eth_tx_value`, every derived block diverged.
+
+**Fix.** Bump the `mantlenetworkio/mantle-v2` pin to `d2e4ebea` (mantle-elysium tip), which
+includes:
+- `05b2cca3e` — `fix(alloy-op-evm): add Mantle spec routing to spec_by_timestamp_after_bedrock`
+- `05079251c` — `fix(op-alloy): preserve eth_value/eth_tx_value in TxDeposit Compact codec`
+
+and drop the `alloy-evm` `[patch.crates-io]` redirect (the `mantle-xyz/evm @ mantle-v0.34.0`
+fork was removed upstream at `75d90fc71`; its only addition was a dead-code `token_ratio`).
+
+**How it was found.** The kona/op-alloy source at `d2e4ebea` (in `rde-v3`) derived the same
+L2 range correctly, while op-succinct at `29e41dad` diverged; diffing `29e41dad..d2e4ebea`
+showed `rust/kona` unchanged but `rust/alloy-op-evm` + `rust/op-alloy` carried the two fixes.
+
+**⚠️ vkey / ELF.** This changes guest-program execution, so the SP1 range/agg vkeys change.
+`just build-elfs` must be re-run on x64 and the regenerated `elf/*` committed alongside this
+bump; the Cargo.toml/Cargo.lock bump is committed first, ELFs follow.
 
 ### 3.2 Contracts — v117 baseline (Phase 3)
 

@@ -76,24 +76,24 @@ vergen = "=9.0.4"
 vergen-git2 = "=1.0.5"
 
 # kona
-kona-mpt = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
-kona-derive = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa", default-features = false }
-kona-driver = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
-kona-preimage = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa", features = [
+kona-mpt = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
+kona-derive = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef", default-features = false }
+kona-driver = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
+kona-preimage = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef", features = [
     "rkyv",
     "serde",
 ] }
-kona-executor = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
-kona-proof = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
+kona-executor = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
+kona-proof = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
 
-kona-client = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
-kona-host = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
-kona-providers-alloy = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
+kona-client = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
+kona-host = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
+kona-providers-alloy = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
 # Note: kona-rpc is NOT included to avoid rollup-boost -> reth-optimism-primitives dependency.
 # RPC types are defined locally in utils/host/src/rpc_types.rs instead.
-kona-protocol = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa", default-features = false }
-kona-registry = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa", default-features = false }
-kona-genesis = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa", default-features = false }
+kona-protocol = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef", default-features = false }
+kona-registry = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef", default-features = false }
+kona-genesis = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef", default-features = false }
 
 # op-succinct
 op-succinct-prove = { path = "scripts/prove" }
@@ -152,14 +152,14 @@ alloy-sol-macro = { version = "1.5.6", default-features = false }
 alloy-chains = { version = "0.2.33", default-features = false }
 
 # OP Alloy - from mantle-v2 rust workspace (aligned with kona develop + alloy 2.0.4)
-op-alloy-consensus = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa", default-features = false }
-op-alloy-rpc-types = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa", default-features = false }
-op-alloy-rpc-types-engine = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa", default-features = false }
-op-alloy-network = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa", default-features = false }
+op-alloy-consensus = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef", default-features = false }
+op-alloy-rpc-types = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef", default-features = false }
+op-alloy-rpc-types-engine = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef", default-features = false }
+op-alloy-network = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef", default-features = false }
 
 # Execution
 alloy-evm = { version = "0.34.0", default-features = false }
-alloy-op-evm = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa", default-features = false }
+alloy-op-evm = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef", default-features = false }
 # [MANTLE] revm sourced from mantle-xyz/revm @ mantle-elysium (revm v38 +
 # Mantle protocol changes: ARSIA/JOVIAN, BVM_ETH, token_ratio, DA footprint,
 # Arsia fee validation). Aligns with mantle-v2 rust workspace.
@@ -206,14 +206,14 @@ tiny-keccak = { git = "https://github.com/sp1-patches/tiny-keccak", tag = "patch
 
 # Patch op-alloy and alloy-op-evm to use the mantle-v2 versions
 # Required so transitive deps from kona + op-alloy all resolve to the same source.
-op-alloy-consensus = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
-op-alloy-network = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
-op-alloy-rpc-types = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
-op-alloy-rpc-types-engine = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
-op-alloy-provider = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
-alloy-op-evm = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
-alloy-op-hardforks = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
-op-alloy = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "29e41dad7cdda2e7dddad6552b42d274287e77aa" }
+op-alloy-consensus = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
+op-alloy-network = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
+op-alloy-rpc-types = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
+op-alloy-rpc-types-engine = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
+op-alloy-provider = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
+alloy-op-evm = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
+alloy-op-hardforks = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
+op-alloy = { git = "https://github.com/mantlenetworkio/mantle-v2", rev = "d2e4ebea0909fe2e77ff16ee987110efe375abef" }
 
 # [MANTLE] Patch every revm-family crate (including transitively-pulled ones) to
 # mantle-xyz/revm @ mantle-elysium. Matches the pattern in mantle-v2/rust/Cargo.toml.
@@ -231,7 +231,8 @@ revm-primitives = { git = "https://github.com/mantle-xyz/revm", branch = "mantle
 revm-state = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
 op-revm = { git = "https://github.com/mantle-xyz/revm", branch = "mantle-elysium" }
 
-# [MANTLE] alloy-evm: redirected to mantle-xyz/evm @ mantle-v0.34.0 (v0.34.0 + Mantle
-# token_ratio trait method). Matches the [patch.crates-io] entry in mantle-v2/rust/Cargo.toml.
-alloy-evm = { git = "https://github.com/mantle-xyz/evm", branch = "mantle-v0.34.0" }
+# [MANTLE] alloy-evm is intentionally NOT patched: it resolves from crates.io = upstream
+# alloy-rs/evm v0.34.0. The former mantle-xyz/evm@mantle-v0.34.0 fork only added a dead-code
+# `token_ratio` trait method; mantle-v2 rust dropped the fork at d2e4ebea (commit 75d90fc71),
+# so we drop the patch here too to stay in lockstep. See MANTLE_CHANGES.md §2.2 / §3.1.
 
