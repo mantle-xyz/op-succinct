@@ -14,7 +14,7 @@ synchronizing future upstream changes.
 | Mantle branch | `mantle/op-succinct-v3.8.1` (this repo, `origin` = `mantle-xyz/op-succinct`) |
 | Older Mantle fork (deprecated) | `origin/main` HEAD `664a1bd4` (≈ v3.4.1 era + 68 ad-hoc commits; superseded by this branch) |
 | Rust toolchain | 1.94 (see `rust-toolchain.toml`) |
-| Dependency source: kona / op-alloy / alloy-op-evm | `mantlenetworkio/mantle-v2` rust subtree @ `d2e4ebea` (**mantle-elysium branch tip**). Bumped from `29e41dad` to pick up `05b2cca3e` (alloy-op-evm: route Mantle chains to the ARSIA spec in `spec_by_timestamp_after_bedrock` — before this they resolved to JOVIAN and executed with **pre-Arsia** fee rules) and `05079251c` (op-alloy: preserve `eth_value`/`eth_tx_value` in the `TxDeposit` Compact codec). Without these the host derives L2 blocks that diverge from canonical — every root (`transactions_root`/`state_root`/`receipts_root`) differs. See §3.1a. |
+| Dependency source: kona / op-alloy / alloy-op-evm | `mantlenetworkio/mantle-v2` rust subtree @ `13b367fc` (on `mantle-elysium`, one commit past the former tip `d2e4ebea`). `13b367fc` adds the Osaka/BPO1/BPO2 L1 blob params to kona's `default_blob_schedule()` — the actual fix for the Sepolia derivation divergence. The intermediate `d2e4ebea` bump (from `29e41dad`) is kept for its `05b2cca3e`/`05079251c` fixes but did NOT resolve the divergence on its own. See §3.1a. |
 | Dependency source: revm family | `mantle-xyz/revm @ mantle-elysium` via `[patch.crates-io]` |
 | Dependency source: alloy-evm | **upstream `alloy-rs/evm` v0.34.0 from crates.io — NOT patched.** The former `mantle-xyz/evm @ mantle-v0.34.0` fork only added a dead-code `token_ratio` trait method; mantle-v2/rust dropped it at `d2e4ebea` (commit `75d90fc71`), so the `[patch.crates-io]` redirect was removed here to stay in lockstep. |
 | Contracts baseline | `mantle-xyz/op-succinct` tag `v1.1.7-2` (a.k.a. "v117"); ported into `contracts/` |
@@ -154,7 +154,7 @@ grep -rn "\[MANTLE\]" . --include="*.rs" --include="*.toml" --include="*.sol" \
 When bumping the mantle-v2 rev, refresh **every** `rev = "..."` in this file (a
 `replace_all` of the old → new SHA is the canonical move). There are 25 such pins.
 
-### 3.1a mantle-v2 rev bump `29e41dad` → `d2e4ebea` (derivation-divergence fix)
+### 3.1a mantle-v2 rev bumps `29e41dad` → `d2e4ebea` → `13b367fc` (Sepolia blob-schedule divergence fix)
 
 **Symptom.** On QA/Sepolia Mantle chains the proposer/cost-estimator failed with a
 repeating `Failed to prefetch hint: ... header ... not found` (a non-canonical L1 hash),
@@ -163,26 +163,41 @@ and the host-derived L2 blocks did **not** match canonical — `transactions_roo
 `header not found` was only a downstream symptom: the host requested L1/L2 data keyed by
 hashes computed from its own **wrong** derived state.
 
-**Root cause.** `29e41dad`'s `alloy-op-evm::spec_by_timestamp_after_bedrock` only checked
-OP forks, so Mantle chains resolved to the **JOVIAN** spec instead of **ARSIA** and executed
-with pre-Arsia fee rules (L1-cost/`token_ratio` handling). Combined with a `TxDeposit`
-Compact-codec bug that dropped `eth_value`/`eth_tx_value`, every derived block diverged.
+**Root cause (the real one).** The L1 (Sepolia) had entered the **BPO2** blob-parameter
+fork (EIP-7892: target 14, max 21, blob-base-fee update fraction **11684671**). op-node
+computes the L1 `blobBaseFee` for the L1-attributes (Arsia) system tx with a config-aware
+`block.BlobBaseFee(l1ChainConfig)` that honours BPO2 → `63365475`. But kona's
+`crates/protocol/registry/src/l1/mod.rs` `default_blob_schedule()` only listed **Cancun +
+Prague** (Osaka/BPO1/BPO2 were commented out), while `sepolia()` set the `osaka_time`/`bpo*_time`
+fields. So for a BPO2-era block kona knew BPO2 was active but had no BPO2 params → fell back
+to **Prague** (update fraction 5007716) → `blobBaseFee ≈ 1.6e18` instead of `63365475`. That
+wrong value went into the system tx → `transactions_root` differed → every derived block
+diverged. The L1 chain config (incl. `blobSchedule`) is served to the guest as the
+`L1_CONFIG_KEY` preimage (read from `configs/L1/<l1_chain_id>.json`), so this is a pure input,
+not compiled into the ELF.
 
-**Fix.** Bump the `mantlenetworkio/mantle-v2` pin to `d2e4ebea` (mantle-elysium tip), which
-includes:
-- `05b2cca3e` — `fix(alloy-op-evm): add Mantle spec routing to spec_by_timestamp_after_bedrock`
-- `05079251c` — `fix(op-alloy): preserve eth_value/eth_tx_value in TxDeposit Compact codec`
+**Fix (`13b367fc`).** In kona `default_blob_schedule()`, uncomment `osaka`/`bpo1`/`bpo2` so the
+schedule carries their `BlobParams` (alloy `BlobParams::bpo2()` = 14/21/11684671, matching
+op-geth `mantle-elysium` `params/config.go`). Mantle **mainnet** stays pinned to Prague because
+`mainnet()` leaves `osaka_time`/`bpo*_time = None` — the extra schedule entries are inert when
+the fork never activates (mirrors op-node's `MantleArsiaL1ChainConfigByChainID` mainnet =
+Cancun+Prague only). As Sepolia advances to **BPO3/BPO4**, those entries must be added too, kept
+in sync with op-geth's `BlobScheduleConfig`.
 
-and drop the `alloy-evm` `[patch.crates-io]` redirect (the `mantle-xyz/evm @ mantle-v0.34.0`
-fork was removed upstream at `75d90fc71`; its only addition was a dead-code `token_ratio`).
+**Also note — cached L1 config.** op-succinct's `fetch_and_save_l1_config` uses
+`configs/L1/<l1_chain_id>.json` if it already exists (cache), only regenerating from the kona
+registry when absent. A stale cached file (Cancun+Prague only) will keep feeding the guest the
+wrong schedule even after the kona fix — delete it so it regenerates, or edit the file's
+`blobSchedule` directly as a hot-fix (no rebuild needed since it's a preimage input).
 
-**How it was found.** The kona/op-alloy source at `d2e4ebea` (in `rde-v3`) derived the same
-L2 range correctly, while op-succinct at `29e41dad` diverged; diffing `29e41dad..d2e4ebea`
-showed `rust/kona` unchanged but `rust/alloy-op-evm` + `rust/op-alloy` carried the two fixes.
+**Intermediate `d2e4ebea` bump.** Done first (from `29e41dad`) to pull `05b2cca3e`
+(alloy-op-evm Mantle spec routing) + `05079251c` (op-alloy TxDeposit codec) and to drop the
+`alloy-evm` fork patch (§2.2). These are kept but did **not** fix the blob divergence on their
+own — the blob-schedule change at `13b367fc` is what resolves it.
 
-**⚠️ vkey / ELF.** This changes guest-program execution, so the SP1 range/agg vkeys change.
-`just build-elfs` must be re-run on x64 and the regenerated `elf/*` committed alongside this
-bump; the Cargo.toml/Cargo.lock bump is committed first, ELFs follow.
+**⚠️ vkey / ELF.** The Rust-dep bumps change guest-program execution → SP1 range/agg vkeys
+change → `just build-elfs` on x64 + commit the `elf/*` + update on-chain vkeys. (The
+`blobSchedule` content itself is a runtime preimage and does not affect the vkey.)
 
 ### 3.2 Contracts — v117 baseline (Phase 3)
 
