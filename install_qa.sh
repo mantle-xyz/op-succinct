@@ -156,7 +156,7 @@ decode_calldata "$CALLDATA"
 
 kubectl -n $NAMESPACE  scale sts mantle-op-proposer --replicas 0
 
-cast send $CA_L2OutputOracleProxy "$CALLDATA" --rpc-url $L1_RPC --private-key $KEY_addrowner
+cast send $CA_ProxyAdmin "$CALLDATA" --rpc-url $L1_RPC --private-key $KEY_addrowner
 
 cast send --private-key $KEY_addrowner \
   $CA_ProxyAdmin \
