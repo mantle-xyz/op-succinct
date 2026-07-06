@@ -155,12 +155,13 @@ SUCCINCTIMPL=$(grep "The impl are" upgrade.log | grep -oE "0x[0-9a-fA-F]{40}"| h
 set +x;decode_calldata "$CALLDATA";set -x
 
 kubectl -n $NAMESPACE  scale sts mantle-op-proposer --replicas 0
-
-cast send $CA_ProxyAdmin "$CALLDATA" --rpc-url $L1_RPC --private-key $KEY_addrowner
-
 cast send --private-key $KEY_addrowner \
   $CA_ProxyAdmin \
   "upgrade(address,address)" \
   $CA_L2OutputOracleProxy \
   $SUCCINCTIMPL \
   -r $L1_RPC
+
+  
+cast send $CA_ProxyAdmin "$CALLDATA" --rpc-url $L1_RPC --private-key $KEY_addrowner
+
