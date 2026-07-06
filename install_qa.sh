@@ -151,8 +151,8 @@ EOF
 cd contracts
 NETWORK=ethereum-$NAMESPACE task Upgrade -- --broadcast 2>&1 | tee upgrade.log  
 CALLDATA=$(grep -A1 "calldata for upgrading" "upgrade.log" | grep -oE "0x[0-9a-fA-F]+" | head -n1 | tr -d '[:space:]')
-SUCCINCTIMPL=$(grep "The impl are" upgrade.log | grep -oE "0x[0-9a-fA-F]{40}")
-decode_calldata "$CALLDATA"
+SUCCINCTIMPL=$(grep "The impl are" upgrade.log | grep -oE "0x[0-9a-fA-F]{40}"| head -n1)
+set +x;decode_calldata "$CALLDATA";set -x
 
 kubectl -n $NAMESPACE  scale sts mantle-op-proposer --replicas 0
 
