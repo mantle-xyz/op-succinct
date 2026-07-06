@@ -5415,7 +5415,7 @@ dependencies = [
  "kona-genesis",
  "kona-registry",
  "libc",
- "metrics-exporter-prometheus 0.18.3",
+ "metrics-exporter-prometheus",
  "metrics-process",
  "serde",
  "thiserror 2.0.18",
@@ -6150,27 +6150,6 @@ dependencies = [
 
 [[package]]
 name = "metrics-exporter-prometheus"
-version = "0.16.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd7399781913e5393588a8d8c6a2867bf85fb38eaf2502fdce465aad2dc6f034"
-dependencies = [
- "base64 0.22.1",
- "http-body-util",
- "hyper 1.9.0",
- "hyper-rustls 0.27.9",
- "hyper-util",
- "indexmap 2.14.0",
- "ipnet",
- "metrics",
- "metrics-util 0.19.1",
- "quanta",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "metrics-exporter-prometheus"
 version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1db0d8f1fc9e62caebd0319e11eaec5822b0186c171568f0480b46a0137f9108"
@@ -6179,12 +6158,14 @@ dependencies = [
  "evmap",
  "http-body-util",
  "hyper 1.9.0",
+ "hyper-rustls 0.27.9",
  "hyper-util",
  "indexmap 2.14.0",
  "ipnet",
  "metrics",
- "metrics-util 0.20.3",
+ "metrics-util",
  "quanta",
+ "rustls 0.23.40",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6204,22 +6185,6 @@ dependencies = [
  "procfs",
  "rlimit",
  "windows 0.62.2",
-]
-
-[[package]]
-name = "metrics-util"
-version = "0.19.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8496cc523d1f94c1385dd8f0f0c2c480b2b8aeccb5b7e4485ad6365523ae376"
-dependencies = [
- "crossbeam-epoch",
- "crossbeam-utils",
- "hashbrown 0.15.5",
- "metrics",
- "quanta",
- "rand 0.9.4",
- "rand_xoshiro",
- "sketches-ddsketch",
 ]
 
 [[package]]
@@ -6855,7 +6820,7 @@ dependencies = [
  "kzg-rs",
  "lazy_static",
  "metrics",
- "metrics-exporter-prometheus 0.16.2",
+ "metrics-exporter-prometheus",
  "metrics-process",
  "num-format",
  "op-alloy-consensus",

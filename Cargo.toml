@@ -64,8 +64,12 @@ opentelemetry-stdout = { version = "0.2.0", features = ["trace"] }
 opentelemetry-otlp = { version = "^0.16.0", features = ["default", "logs"] }
 opentelemetry-appender-tracing = "0.4.0"
 
+# [MANTLE] Aligned to 0.18 to match the version pulled transitively by kona-cli
+# (kona-host). Two metrics-exporter-prometheus versions in one binary race over the
+# single global `metrics` recorder, leaving the /metrics HTTP endpoint reading a
+# different (frozen) registry than the one ValidityGauge::set() writes to.
 metrics = "0.24.1"
-metrics-exporter-prometheus = "0.16.2"
+metrics-exporter-prometheus = "0.18"
 metrics-process = "2.4.0"
 strum = "0.27.1"
 strum_macros = "0.27.1"
