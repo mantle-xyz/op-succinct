@@ -15,7 +15,61 @@ else
 fi
 
 CONFIG_FILE="$MANTLE_CONFIG_DIR/cicd/services/mantle-op-$TYPE/app-$NAMESPACE.yaml"
+decode_calldata() {
 
+  CALLDATA="$1"
+
+  echo "== 外层 CALLDATA =="
+  echo "$CALLDATA"
+  echo
+
+  # 2) 解码外层 ProxyAdmin.upgradeAndCall(address proxy, address impl, bytes data)
+  echo "== 解码 upgradeAndCall(address,address,bytes) =="
+  OUTER=$(cast calldata-decode "upgradeAndCall(address,address,bytes)" "$CALLDATA")
+  echo "$OUTER"
+  echo
+
+  PROXY=$(echo "$OUTER"  | sed -n '1p' | awk '{print $1}')
+  IMPL=$(echo  "$OUTER"  | sed -n '2p' | awk '{print $1}')
+  INNER=$(echo "$OUTER"  | sed -n '3p' | awk '{print $1}')
+
+  echo "proxy          = $PROXY"
+  echo "implementation = $IMPL"
+  echo "inner selector = ${INNER:0:10}"
+  echo
+
+  # 3) 解码内层 initialize(InitParams)
+  #    struct InitParams {
+  #      address challenger; address proposer; address owner;
+  #      uint256 finalizationPeriodSeconds; uint256 l2BlockTime;
+  #      bytes32 aggregationVkey; bytes32 rangeVkeyCommitment; bytes32 rollupConfigHash;
+  #      bytes32 startingOutputRoot; uint256 startingBlockNumber; uint256 startingTimestamp;
+  #      uint256 submissionInterval; address verifier;
+  #    }
+  INIT_SIG="initialize((address,address,address,uint256,uint256,bytes32,bytes32,bytes32,bytes32,uint256,uint256,uint256,address))"
+
+  echo "== 解码内层 $INIT_SIG =="
+  DECODED=$(cast calldata-decode "$INIT_SIG" "$INNER")
+  echo "$DECODED"
+  echo
+
+  # 4) 逐字段标注
+  FIELDS=(challenger proposer owner finalizationPeriodSeconds l2BlockTime \
+          aggregationVkey rangeVkeyCommitment rollupConfigHash startingOutputRoot \
+          startingBlockNumber startingTimestamp submissionInterval verifier)
+
+  echo "== 字段核对 =="
+  # cast 把 tuple 输出成一行: (v0, v1, ...)。去掉外层括号后按 ", " 拆分。
+  INNER_TUPLE="${DECODED#\(}"
+  INNER_TUPLE="${INNER_TUPLE%\)}"
+  IFS=',' read -ra VALS <<< "$INNER_TUPLE"
+  for i in "${!FIELDS[@]}"; do
+    v="${VALS[$i]}"
+    v="${v#"${v%%[![:space:]]*}"}"   # 去掉前导空格
+    printf "%-26s = %s\n" "${FIELDS[$i]}" "$v"
+  done
+  
+}
 read_addr() {
   local dec padded
   dec=$(yq "$1" "$CONFIG_FILE")
@@ -110,61 +164,3 @@ cast send --private-key $KEY_addrowner \
   $CA_L2OutputOracleProxy \
   $SUCCINCTIMPL \
   -r $L1_RPC
-
-
-
-function decode_calldata() {
-
-  CALLDATA="$1"
-
-  echo "== 外层 CALLDATA =="
-  echo "$CALLDATA"
-  echo
-
-  # 2) 解码外层 ProxyAdmin.upgradeAndCall(address proxy, address impl, bytes data)
-  echo "== 解码 upgradeAndCall(address,address,bytes) =="
-  OUTER=$(cast calldata-decode "upgradeAndCall(address,address,bytes)" "$CALLDATA")
-  echo "$OUTER"
-  echo
-
-  PROXY=$(echo "$OUTER"  | sed -n '1p' | awk '{print $1}')
-  IMPL=$(echo  "$OUTER"  | sed -n '2p' | awk '{print $1}')
-  INNER=$(echo "$OUTER"  | sed -n '3p' | awk '{print $1}')
-
-  echo "proxy          = $PROXY"
-  echo "implementation = $IMPL"
-  echo "inner selector = ${INNER:0:10}"
-  echo
-
-  # 3) 解码内层 initialize(InitParams)
-  #    struct InitParams {
-  #      address challenger; address proposer; address owner;
-  #      uint256 finalizationPeriodSeconds; uint256 l2BlockTime;
-  #      bytes32 aggregationVkey; bytes32 rangeVkeyCommitment; bytes32 rollupConfigHash;
-  #      bytes32 startingOutputRoot; uint256 startingBlockNumber; uint256 startingTimestamp;
-  #      uint256 submissionInterval; address verifier;
-  #    }
-  INIT_SIG="initialize((address,address,address,uint256,uint256,bytes32,bytes32,bytes32,bytes32,uint256,uint256,uint256,address))"
-
-  echo "== 解码内层 $INIT_SIG =="
-  DECODED=$(cast calldata-decode "$INIT_SIG" "$INNER")
-  echo "$DECODED"
-  echo
-
-  # 4) 逐字段标注
-  FIELDS=(challenger proposer owner finalizationPeriodSeconds l2BlockTime \
-          aggregationVkey rangeVkeyCommitment rollupConfigHash startingOutputRoot \
-          startingBlockNumber startingTimestamp submissionInterval verifier)
-
-  echo "== 字段核对 =="
-  # cast 把 tuple 输出成一行: (v0, v1, ...)。去掉外层括号后按 ", " 拆分。
-  INNER_TUPLE="${DECODED#\(}"
-  INNER_TUPLE="${INNER_TUPLE%\)}"
-  IFS=',' read -ra VALS <<< "$INNER_TUPLE"
-  for i in "${!FIELDS[@]}"; do
-    v="${VALS[$i]}"
-    v="${v#"${v%%[![:space:]]*}"}"   # 去掉前导空格
-    printf "%-26s = %s\n" "${FIELDS[$i]}" "$v"
-  done
-  
-}
