@@ -14,11 +14,21 @@ else
 fi
 
 CONFIG_FILE="$MANTLE_CONFIG_DIR/cicd/services/mantle-op-$TYPE/app-$NAMESPACE.yaml"
-EOA_addrowner=`yq ".extraObjects[0].data.EOA_addrowner" $CONFIG_FILE`
-EOA_proposer=`yq ".extraObjects[0].data.EOA_proposer" $CONFIG_FILE`
-CA_L2OutputOracleProxy=`yq ".extraObjects[0].data.CA_L2OutputOracleProxy" $CONFIG_FILE`
-CA_ProxyAdmin=`yq ".extraObjects[0].data.CA_ProxyAdmin" $CONFIG_FILE`
-L2CHAINID=`yq ".extraObjects[0].data.CHAIN_ID" $CONFIG_FILE`
+
+read_addr() {
+  local dec padded
+  dec=$(yq "$1" "$CONFIG_FILE")
+  padded=$(cast --to-uint256 "$dec")
+  cast to-check-sum-address "0x${padded: -40}"
+}
+
+EOA_addrowner=$(read_addr ".extraObjects[0].data.EOA_addrowner")
+EOA_proposer=$(read_addr ".extraObjects[0].data.EOA_proposer")
+CA_L2OutputOracleProxy=$(read_addr ".extraObjects[0].data.CA_L2OutputOracleProxy")
+CA_ProxyAdmin=$(read_addr ".extraObjects[0].data.CA_ProxyAdmin")
+L2CHAINID=$(yq -r ".extraObjects[0].data.CHAIN_ID" "$CONFIG_FILE")
+echo "===="
+echo $L2CHAINID
 
 OUTPUT=`cast call $CA_L2OutputOracleProxy "getL2Output(uint256)(tuple(uint256,bytes32,uint256))" 0 -r $L1_RPC | awk '{print $1}' | awk -F'(' '{print $2}'`
 STARTING_OUTPUT_ROOT=`cast to-hex $OUTPUT`
@@ -35,7 +45,7 @@ L1_RPC='$L1_RPC'
 L1_BEACON_RPC='$L1_BEACON_RPC'
 L2_RPC='$L2_RPC'
 L2_NODE_RPC='$L2_NODE_RPC'
-ROLLUP_CONFIG_PATH = "./configs/$L2CHAINID/rollup.json"
+ROLLUP_CONFIG_PATH='./configs/$L2CHAINID/rollup.json'
 EOF
 
 cargo run --bin config --release -- --env-file .env 2>&1 | tee config.log
