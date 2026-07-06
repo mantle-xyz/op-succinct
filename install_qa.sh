@@ -35,10 +35,10 @@ L2CHAINID=$(yq -r ".extraObjects[0].data.CHAIN_ID" "$CONFIG_FILE")
 echo "===="
 echo $L2CHAINID
 
-OUTPUT=`cast call $CA_L2OutputOracleProxy "getL2Output(uint256)(tuple(uint256,bytes32,uint256))" 0 -r $L1_RPC | awk '{print $1}' | awk -F'(' '{print $2}'`
-STARTING_OUTPUT_ROOT=`cast to-hex $OUTPUT`
-STARTING_TIMESTAMP=`cast call $CA_L2OutputOracleProxy "startingTimestamp()(uint256)" -r $L1_RPC | awk '{print $1}' | awk -F'(' '{print $3}'`
-STARTING_BLOCK_NUMBER=`cast call $CA_L2OutputOracleProxy "startingBlockNumber()(uint256)" -r $L1_RPC | awk '{print $1}' | awk -F'(' '{print $4}'`
+OUTPUT=$(cast call $CA_L2OutputOracleProxy "getL2Output(uint256)(tuple(uint256,bytes32,uint256))" 0 -r $L1_RPC | awk '{print $1}' | awk -F'(' '{print $2}')
+STARTING_OUTPUT_ROOT=$(cast to-hex $OUTPUT)
+STARTING_TIMESTAMP=$(cast call $CA_L2OutputOracleProxy "startingTimestamp()(uint256)" -r $L1_RPC | awk '{print $1}')
+STARTING_BLOCK_NUMBER=$(cast call $CA_L2OutputOracleProxy "startingBlockNumber()(uint256)" -r $L1_RPC | awk '{print $1}')
 
 mkdir -p contracts/deploy-config/ethereum-$NAMESPACE
 mkdir -p ./configs/$L2CHAINID
