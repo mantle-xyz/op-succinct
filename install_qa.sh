@@ -86,14 +86,15 @@ config:
   proxyAdmin: "$CA_ProxyAdmin" 
   rangeVkeyCommitment: "$RANGE_VKEY_COMMITMENT" 
   rollupConfigHash: "$ROLLUP_CONFIG_HASH" 
-  startingBlockNumber: "$STARTING_BLOCK_NUMBER" 
+  startingBlockNumber: $STARTING_BLOCK_NUMBER
   startingOutputRoot: "$STARTING_OUTPUT_ROOT" 
-  startingTimestamp: "$STARTING_TIMESTAMP" 
+  startingTimestamp: $STARTING_TIMESTAMP
   submissionInterval: 450
   verifier: "0xd685a80aF2d1761648e56716af4868d850Dae49B" 
   l2OutputOracleProxy: "$CA_L2OutputOracleProxy" 
 EOF
 
+cd contracts
 NETWORK=ethereum-$NAMESPACE task Upgrade -- --broadcast 2>&1 | tee upgrade.log  
 CALLDATA=$(grep -A1 "calldata for upgrading" "upgrade.log" | grep -oE "0x[0-9a-fA-F]+" | head -n1 | tr -d '[:space:]')
 SUCCINCTIMPL=$(grep "The impl are" upgrade.log | grep -oE "0x[0-9a-fA-F]{40}")
