@@ -1,11 +1,12 @@
 set -ex
 git submodule update --init --recursive --depth 1
 NAMESPACE=$1
+NETWORK=`echo $NAMESPACE | awk -F '-' '{print $1}'`
 TYPE=${2:-"geth"}
 MANTLE_CONFIG_DIR="${MANTLE_CONFIG_DIR:-$HOME/github_work/mantle-config}"
 L2_RPC="${L2_RPC:-https://op-$TYPE-rpc0-$NAMESPACE.qa4.gomantle.org}"
 L2_NODE_RPC="${OP_NODE_RPC:-https://op-node-$NAMESPACE.qa4.gomantle.org}"
-if [ "$TYPE" == "geth" ]; then
+if [ "$NETWORK" == "sepolia" ]; then
   L1_RPC="https://sepolia-geth.qa4.gomantle.org"
   L1_BEACON_RPC="https://sepolia-lighthouse.qa4.gomantle.org"
 else
