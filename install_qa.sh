@@ -10,9 +10,11 @@ L2_NODE_RPC="${OP_NODE_RPC:-https://op-node-$NAMESPACE.qa4.gomantle.org/?token=g
 if [ "$NETWORK" == "sepolia" ]; then
   L1_RPC="https://sepolia-geth.qa4.gomantle.org"
   L1_BEACON_RPC="https://sepolia-lighthouse.qa4.gomantle.org"
+  VERIFIER="0xd685a80aF2d1761648e56716af4868d850Dae49B"
 else
   L1_RPC="https://hoodi-geth1.qa4.gomantle.org"
   L1_BEACON_RPC="https://hoodi-lighthouse4.qa4.gomantle.org"
+  VERIFIER="0x2a5A70409Ee9F057503a50E0F4614A6d8CcBb462"
 fi
 
 CONFIG_FILE="$MANTLE_CONFIG_DIR/cicd/services/mantle-op-$TYPE/app-$NAMESPACE.yaml"
@@ -145,7 +147,7 @@ config:
   startingOutputRoot: "$STARTING_OUTPUT_ROOT" 
   startingTimestamp: $STARTING_TIMESTAMP
   submissionInterval: 450
-  verifier: "0xd685a80aF2d1761648e56716af4868d850Dae49B" 
+  verifier: "$VERIFIER" 
   l2OutputOracleProxy: "$CA_L2OutputOracleProxy" 
 EOF
 
