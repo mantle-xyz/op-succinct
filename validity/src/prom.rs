@@ -69,6 +69,11 @@ pub enum ValidityGauge {
         message = "Number of witness generation errors"
     )]
     WitnessgenErrorCount,
+    #[strum(
+        serialize = "succinct_witnessgen_timeout_count",
+        message = "Number of witness generation timeouts"
+    )]
+    WitnessgenTimeoutCount,
     #[strum(serialize = "succinct_execution_error_count", message = "Number of execution errors")]
     ExecutionErrorCount,
     #[strum(

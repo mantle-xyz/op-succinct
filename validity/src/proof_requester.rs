@@ -45,6 +45,7 @@ pub struct OPSuccinctProofRequester<H: OPSuccinctHost> {
     pub safe_db_fallback: bool,
     pub max_price_per_pgu: u64,
     pub proving_timeout: u64,
+    pub witnessgen_timeout: u64,
     pub range_cycle_limit: u64,
     pub range_gas_limit: u64,
     pub agg_cycle_limit: u64,
@@ -72,6 +73,7 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
         safe_db_fallback: bool,
         max_price_per_pgu: u64,
         proving_timeout: u64,
+        witnessgen_timeout: u64,
         range_cycle_limit: u64,
         range_gas_limit: u64,
         agg_cycle_limit: u64,
@@ -104,6 +106,7 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
             safe_db_fallback,
             max_price_per_pgu,
             proving_timeout,
+            witnessgen_timeout,
             range_cycle_limit,
             range_gas_limit,
             agg_cycle_limit,
@@ -563,12 +566,41 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
         );
 
         let witnessgen_duration = Instant::now();
-        // Generate the stdin needed for the proof. If this fails, retry the request.
-        let stdin = match self.generate_proof_stdin(&request).await {
-            Ok(stdin) => stdin,
-            Err(e) => {
+        // Generate the stdin needed for the proof, bounded by a wall-clock timeout. Host prefetch
+        // can hang indefinitely when an L1/L2 node stops responding; without a timeout the spawned
+        // task never finishes, so `handle_ongoing_tasks` never reaps it (it only processes
+        // `is_finished()` handles) and the request pins a MAX_CONCURRENT_WITNESS_GEN slot forever.
+        // On timeout we return an error so the task completes and the request is failed/retried.
+        let stdin = match tokio::time::timeout(
+            Duration::from_secs(self.witnessgen_timeout),
+            self.generate_proof_stdin(&request),
+        )
+        .await
+        {
+            Ok(Ok(stdin)) => stdin,
+            Ok(Err(e)) => {
                 ValidityGauge::WitnessgenErrorCount.increment(1.0);
                 return Err(e);
+            }
+            Err(_) => {
+                // Witnessgen hung (almost always an unresponsive L1/L2 node). We already know it
+                // is a timeout right here, so handle it at the source: surface it (metric + warn)
+                // and reset the request to Unrequested so it is retried AS THE SAME range. Do NOT
+                // mark it Failed — that counts toward bisection and would fragment a range that is
+                // fine. Returning Ok frees the concurrency slot without entering the failure path.
+                ValidityGauge::WitnessgenTimeoutCount.increment(1.0);
+                warn!(
+                    request_id = request.id,
+                    request_type = ?request.req_type,
+                    start_block = request.start_block,
+                    end_block = request.end_block,
+                    witnessgen_timeout = self.witnessgen_timeout,
+                    "Witness generation timed out; resetting to Unrequested for retry (no bisection)"
+                );
+                self.db_client
+                    .update_request_status(request.id, RequestStatus::Unrequested)
+                    .await?;
+                return Ok(());
             }
         };
         let duration = witnessgen_duration.elapsed();

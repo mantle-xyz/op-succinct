@@ -77,6 +77,7 @@ async fn main() -> Result<()> {
         use_kms_requester: env_config.use_kms_requester,
         max_price_per_pgu: env_config.max_price_per_pgu,
         proving_timeout: env_config.proving_timeout,
+        witnessgen_timeout: env_config.witnessgen_timeout,
         network_calls_timeout: env_config.network_calls_timeout,
         range_cycle_limit: env_config.range_cycle_limit,
         range_gas_limit: env_config.range_gas_limit,

@@ -77,6 +77,10 @@ pub struct RequesterConfig {
     /// The timeout to use for proving (in seconds).
     pub proving_timeout: u64,
 
+    /// The wall-clock timeout for witness generation (in seconds). Bounds host prefetch so a hung
+    /// L1/L2 node cannot permanently occupy a witness-generation concurrency slot.
+    pub witnessgen_timeout: u64,
+
     /// The timeout to use for network prover calls (in seconds).
     pub network_calls_timeout: u64,
 
@@ -132,6 +136,7 @@ impl RequesterConfig {
             use_kms_requester = self.use_kms_requester,
             max_price_per_pgu = self.max_price_per_pgu,
             proving_timeout = self.proving_timeout,
+            witnessgen_timeout = self.witnessgen_timeout,
             network_calls_timeout = self.network_calls_timeout,
             range_cycle_limit = self.range_cycle_limit,
             range_gas_limit = self.range_gas_limit,

@@ -30,6 +30,7 @@ pub struct EnvironmentConfig {
     pub use_kms_requester: bool,
     pub max_price_per_pgu: u64,
     pub proving_timeout: u64,
+    pub witnessgen_timeout: u64,
     pub network_calls_timeout: u64,
     pub range_cycle_limit: u64,
     pub range_gas_limit: u64,
@@ -133,6 +134,12 @@ pub async fn read_proposer_env() -> Result<EnvironmentConfig> {
         use_kms_requester: get_env_var("USE_KMS_REQUESTER", Some(false))?,
         max_price_per_pgu: get_env_var("MAX_PRICE_PER_PGU", Some(300_000_000))?, /* 0.3 PROVE per billion PGU */
         proving_timeout: get_env_var("PROVING_TIMEOUT", Some(14400))?,           // 4 hours
+        // Wall-clock cap on witness generation: catches a hung host prefetch (e.g. an unresponsive
+        // L1/L2 node) that would otherwise pin a MAX_CONCURRENT_WITNESS_GEN slot forever. Must
+        // exceed the heaviest *legitimate* witnessgen. 30 min suits normal / gas-bounded ranges;
+        // note a full 1800-block, ~190k-tx range took ~40 min in QA stress tests — raise
+        // WITNESSGEN_TIMEOUT for such heavy workloads or witnessgen will falsely time out.
+        witnessgen_timeout: get_env_var("WITNESSGEN_TIMEOUT", Some(1800))?,      // 30 minutes
         network_calls_timeout: get_env_var("NETWORK_CALLS_TIMEOUT", Some(15))?,  // 15 seconds
         range_cycle_limit: get_env_var("RANGE_CYCLE_LIMIT", Some(1_000_000_000_000))?, // 1 trillion
         range_gas_limit: get_env_var("RANGE_GAS_LIMIT", Some(1_000_000_000_000))?, // 1 trillion
