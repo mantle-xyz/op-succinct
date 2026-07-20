@@ -1817,20 +1817,7 @@ where
         &self,
         completed_range_proofs: Vec<(i64, i64)>,
     ) -> Result<Option<i64>> {
-        if completed_range_proofs.is_empty() {
-            return Ok(None);
-        }
-
-        let mut current_end = completed_range_proofs[0].1;
-
-        for proof in completed_range_proofs.iter().skip(1) {
-            if proof.0 != current_end {
-                break;
-            }
-            current_end = proof.1;
-        }
-
-        Ok(Some(current_end))
+        Ok(highest_proven_contiguous_block(&completed_range_proofs))
     }
 
     /// Wrap a network prover call with timeout, logging, and metrics.
@@ -1888,6 +1875,69 @@ where
                 ))
             }
         }
+    }
+}
+
+/// Highest block reachable by a contiguous chain of completed range proofs, starting from the
+/// first proof and stopping at the first gap (a proof whose start block != the running end).
+/// Returns None when there are no completed range proofs.
+///
+/// `completed_range_proofs` must be sorted by start block (as `fetch_completed_ranges` returns
+/// them). Extracted as a free function so the contiguity semantics — which gate aggregation
+/// proof creation — can be unit-tested without constructing a full `Proposer`.
+fn highest_proven_contiguous_block(completed_range_proofs: &[(i64, i64)]) -> Option<i64> {
+    let (first, rest) = completed_range_proofs.split_first()?;
+    let mut current_end = first.1;
+    for &(start, end) in rest {
+        if start != current_end {
+            break;
+        }
+        current_end = end;
+    }
+    Some(current_end)
+}
+
+#[cfg(test)]
+mod contiguous_block_tests {
+    use super::highest_proven_contiguous_block;
+
+    #[test]
+    fn empty_returns_none() {
+        assert_eq!(highest_proven_contiguous_block(&[]), None);
+    }
+
+    #[test]
+    fn single_range_returns_its_end() {
+        assert_eq!(highest_proven_contiguous_block(&[(100, 200)]), Some(200));
+    }
+
+    #[test]
+    fn fully_contiguous_chain_returns_last_end() {
+        assert_eq!(
+            highest_proven_contiguous_block(&[(100, 200), (200, 300), (300, 400)]),
+            Some(400)
+        );
+    }
+
+    #[test]
+    fn stops_at_first_gap() {
+        // 300 != 400: the chain breaks after the second range, so the third is not counted.
+        assert_eq!(
+            highest_proven_contiguous_block(&[(100, 200), (200, 300), (400, 500)]),
+            Some(300)
+        );
+    }
+
+    #[test]
+    fn gap_immediately_after_first_range() {
+        // Second range does not start at 200, so only the first range is contiguous.
+        assert_eq!(highest_proven_contiguous_block(&[(100, 200), (300, 400)]), Some(200));
+    }
+
+    #[test]
+    fn overlap_is_treated_as_a_gap() {
+        // Overlapping (not exactly adjacent) ranges break contiguity: 200 != 250.
+        assert_eq!(highest_proven_contiguous_block(&[(100, 250), (200, 300)]), Some(250));
     }
 }
 
