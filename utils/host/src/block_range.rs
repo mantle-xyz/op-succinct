@@ -3,12 +3,10 @@ use std::{
     collections::HashSet,
 };
 
+use crate::rpc_types::{OutputResponse, SafeHeadResponse};
 use alloy_eips::BlockId;
 use anyhow::{bail, Result};
 use futures::StreamExt;
-use kona_rpc::SafeHeadResponse;
-
-use crate::compat::CompatOutputResponse;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -127,7 +125,7 @@ pub async fn split_range_based_on_safe_heads(
 
     // Get the L1 origin of l2_start
     let l2_start_hex = format!("0x{l2_start:x}");
-    let start_output: CompatOutputResponse = data_fetcher
+    let start_output: OutputResponse = data_fetcher
         .fetch_rpc_data_with_mode(
             RPCMode::L2Node,
             "optimism_outputAtBlock",

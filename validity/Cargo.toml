@@ -19,13 +19,7 @@ alloy-primitives.workspace = true
 
 # tracing and telemetry
 tracing.workspace = true
-tracing-subscriber.workspace = true
-tracing-opentelemetry.workspace = true
-opentelemetry.workspace = true
-opentelemetry_sdk.workspace = true
-opentelemetry-stdout.workspace = true
-opentelemetry-otlp.workspace = true
-opentelemetry-appender-tracing.workspace = true
+
 
 # local
 op-succinct-client-utils.workspace = true
@@ -36,6 +30,7 @@ op-succinct-signer-utils.workspace = true
 
 # sp1
 sp1-sdk.workspace = true
+sp1-cluster-utils.workspace = true
 
 # alloy
 alloy-eips.workspace = true
@@ -71,6 +66,8 @@ strum_macros.workspace = true
 [build-dependencies]
 op-succinct-build-utils.workspace = true
 
+[dev-dependencies]
+postgresql_embedded = { version = "0.20", features = ["bundled"] }
+
 [features]
-default = ["ethereum"]
-ethereum = ["op-succinct-proof-utils/ethereum"]
+default = []

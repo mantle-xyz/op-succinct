@@ -28,13 +28,16 @@ kona-host.workspace = true
 kona-preimage.workspace = true
 kona-proof.workspace = true
 kona-protocol.workspace = true
-kona-rpc.workspace = true
+kona-registry.workspace = true
+# Note: kona-rpc is NOT included to avoid rollup-boost dependency chain.
+# RPC types (OutputResponse, SafeHeadResponse) are defined locally in src/rpc_types.rs
 
 # alloy
 alloy-consensus.workspace = true
 alloy-contract.workspace = true
 alloy-eips.workspace = true
 alloy-primitives.workspace = true
+alloy-trie.workspace = true
 alloy-provider.workspace = true
 alloy-rlp.workspace = true
 alloy-sol-types.workspace = true
@@ -42,6 +45,7 @@ alloy-sol-types.workspace = true
 # general
 anyhow.workspace = true
 async-trait.workspace = true
+bincode.workspace = true
 cfg-if.workspace = true
 c-kzg.workspace = true
 futures.workspace = true
@@ -58,6 +62,10 @@ serde_json.workspace = true
 strum.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+lazy_static.workspace = true
+
+# cargo metadata
+cargo_metadata.workspace = true
 
 # logging and telemetry
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
@@ -67,3 +75,6 @@ opentelemetry_sdk.workspace = true
 opentelemetry-stdout.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry-appender-tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -157,6 +157,38 @@ deploy-mock-verifier env_file=".env":
     --broadcast \
     $VERIFY
 
+# Upgrade the game implementation contract (for hardfork/upgrade)
+# This script deploys a new OPSuccinctFaultDisputeGame implementation and sets it in the factory.
+# Required env vars: FACTORY_ADDRESS, GAME_TYPE, VERIFIER_ADDRESS, ANCHOR_STATE_REGISTRY, ACCESS_MANAGER,
+#                    AGGREGATION_VKEY, RANGE_VKEY_COMMITMENT, ROLLUP_CONFIG_HASH,
+#                    MAX_CHALLENGE_DURATION, MAX_PROVE_DURATION, CHALLENGER_BOND_WEI
+upgrade-game-impl env_file=".env":
+    #!/usr/bin/env bash
+    set -aeo pipefail
+
+    source {{env_file}}
+
+    if [ -z "$L1_RPC" ]; then
+        echo "L1_RPC not set in {{env_file}}"
+        exit 1
+    fi
+
+    if [ -z "$PRIVATE_KEY" ]; then
+        echo "PRIVATE_KEY not set in {{env_file}}"
+        exit 1
+    fi
+
+    cd contracts
+
+    echo "Upgrading game implementation..."
+    forge script script/fp/UpgradeOPSuccinctFDG.s.sol \
+        --rpc-url "$L1_RPC" \
+        --private-key "$PRIVATE_KEY" \
+        --broadcast \
+        --slow
+
+    echo "Game implementation upgrade complete!"
+
 # Deploy the OPSuccinct L2 Output Oracle
 deploy-oracle env_file=".env" *features='':
     #!/usr/bin/env bash
@@ -379,30 +411,52 @@ vkeys:
     ETH_RANGE=$(echo "$ETH_OUTPUT" | grep "Range Verification Key Hash" | awk '{print $NF}')
     AGG_KEY=$(echo "$ETH_OUTPUT" | grep "Aggregation Verification Key Hash" | awk '{print $NF}')
 
+    # Celestia DA
+    CEL_OUTPUT=$(RUST_LOG=error cargo run --release --bin config --features celestia 2>&1)
+    CEL_RANGE=$(echo "$CEL_OUTPUT" | grep "Range Verification Key Hash" | awk '{print $NF}')
+
+    # EigenDA
+    EIGEN_OUTPUT=$(RUST_LOG=error cargo run --release --bin config --features eigenda 2>&1)
+    EIGEN_RANGE=$(echo "$EIGEN_OUTPUT" | grep "Range Verification Key Hash" | awk '{print $NF}')
+
     echo "## Verification Key Hashes"
     echo ""
     echo "| Program | Verification Key Hash |"
     echo "|--------|------------------------|"
     echo "| Ethereum DA Range Verification Key | **$ETH_RANGE** |"
+    echo "| Celestia DA Range Verification Key | **$CEL_RANGE** |"
+    echo "| EigenDA Range Verification Key | **$EIGEN_RANGE** |"
     echo "| Aggregation Verification Key | **$AGG_KEY** |"
 
 # Build all ELF files.
 build-elfs: build-range-elfs build-agg-elf
 
 # Build ELF files for range programs.
+#
+# [MANTLE] Two adjustments vs. upstream Succinct Labs v3.8.1's justfile:
+#   1. Drop the `celestia` and `eigenda` blocks — Phase 2 deleted those crates
+#      (Validity-Oracle-only runtime). Only `ethereum` remains.
+#   2. Pass `--ignore-rust-version` to `cargo-prove`. SP1 v6.1.0 ships rustc
+#      1.93.0-dev inside its docker image; our mantle-v2 deps (kona-genesis,
+#      alloy-op-evm, etc.) declare `rust-version = "1.94"`. The 1.93 build
+#      compiles those crates fine — the 1.94 floor is a policy declaration,
+#      not a hard requirement — so we tell cargo to skip the MSRV check.
+#      Remove the flag once SP1 ships a docker image with rustc >= 1.94.
 build-range-elfs:
     #!/usr/bin/env bash
 
     cd programs/range/ethereum
-    # ~/.sp1/bin/cargo-prove prove build --elf-name range-elf-bump --docker --tag v5.2.4 --output-directory ../../../elf
-    ~/.sp1/bin/cargo-prove prove build --elf-name range-elf-embedded --docker --tag v6.1.0 --output-directory ../../../elf --features embedded
+    ~/.sp1/bin/cargo-prove prove build --elf-name range-elf-embedded --docker --tag v6.1.0 --output-directory ../../../elf --ignore-rust-version
 
 # Build ELF file for aggregation program.
+#
+# [MANTLE] `--ignore-rust-version` for the same SP1-1.93 vs mantle-v2-1.94
+# reason documented on `build-range-elfs` above.
 build-agg-elf:
     #!/usr/bin/env bash
 
     cd programs/aggregation
-    ~/.sp1/bin/cargo-prove prove build --elf-name aggregation-elf --docker --tag v6.1.0 --output-directory ../../elf
+    ~/.sp1/bin/cargo-prove prove build --elf-name aggregation-elf --docker --tag v6.1.0 --output-directory ../../elf --ignore-rust-version
 
 # Run all unit tests except for the specified ones.
 tests:

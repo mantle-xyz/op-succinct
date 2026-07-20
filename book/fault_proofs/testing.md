@@ -1,61 +1,95 @@
 # Testing Guide
 
-This guide explains how to run and understand the test suite for the OP Succinct fault dispute game system. Tests are located in:
-- End-to-end tests: fault_proof/tests/e2e.rs
-- Integration tests: fault_proof/tests/integration.rs
+This guide explains how to run and understand the test suite for the OP Succinct fault dispute game system.
+
+## Overview
+
+The fault-proof crate includes comprehensive integration tests that run actual proposer and challenger binaries against a forked Ethereum network (Anvil). These tests validate the complete lifecycle of dispute games including creation, challenges, resolution, and bond claims.
 
 ## Prerequisites
 
 Before running the tests, ensure you have:
-1. Rust toolchain installed
-2. Environment variables properly configured
-3. Access to L1 and L2 test networks
-4. Sufficient test ETH for transactions
 
-## Configuration
+1. **Rust toolchain installed**
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
 
-See [Proposer Configuration](./proposer.md#configuration) and [Challenger Configuration](./challenger.md#configuration) for more information on how to configure the proposer and challenger properly.
+2. **Nightly Foundry installed** (required for contract bindings)
+   ```bash
+   curl -L https://foundry.paradigm.xyz | bash
+   foundryup --install nightly-d592b3e0f142d694c3be539702704a4a73238773
+   ```
+    As of July 11, 2025, you need to use Forge nightly for binding generation.
+
+3. **`just` installed for task running**. (Can be installed via `cargo`)
+   ```bash
+    cargo install just
+    ```
+
+4. **Environment variables configured**
+   ```bash
+   export L1_RPC=<YOUR_L1_RPC>
+   export L2_RPC=<YOUR_L2_RPC>
+   export L2_NODE_RPC=<YOUR_L2_NODE_RPC>
+   ```
 
 ## Available Tests
 
-### Integration Tests
+### Integration Tests (`fault-proof/tests/integration.rs`)
 
-#### 1. Proposer Defense Scenario
-`test_proposer_defends_successfully()`: Tests the scenario where:
-- The proposer creates a valid game
-- A malicious challenger challenges it
-- The proposer successfully defends with a valid proof
+The asynchronous integration test suite spins up real proposer and challenger services, interacts with
+the dispute game factory, and warps Anvil time to exercise full lifecycles. Each test uses the
+`_native` services and validates that contracts and coordination logic behave as expected.
 
-### End-to-End Tests
+#### Lifecycle Coverage
 
-#### 1. Proposer Wins Scenario
-`test_e2e_proposer_wins()`: Tests the happy path where:
-- The honest proposer creates valid games
-- No challenges are submitted
-- Games are resolved successfully in favor of the proposer after timeout
+- `test_honest_proposer_native()`: Covers the proposer happy path end-to-end.
+  - **Phase 1: Game Creation** – Proposer seeds three canonical games from L2 state.
+  - **Phase 2: Challenge Period** – Time is warped to the end of `MAX_CHALLENGE_DURATION`.
+  - **Phase 3: Resolution** – Games auto-resolve to `ProposerWins`.
+  - **Phase 4: Bond Claims** – Proposer claims the bonds after
+    `DISPUTE_GAME_FINALITY_DELAY_SECONDS`.
+- `test_honest_challenger_native()`: Validates that a challenger finds and defeats invalid roots.
+  - **Phase 1: Create Invalid Games** – Helper code submits outputs with random invalid roots.
+  - **Phase 2: Challenges** – Challenger service files disputes for each invalid game.
+  - **Phase 3: Resolution** – The clock is warped past both challenge and prove windows, ensuring
+    `ChallengerWins`.
+  - **Phase 4: Bond Claims** – Challenger recovers bonds once the finality delay elapses.
+- `test_proposer_retains_anchor_after_bond_claim()`: Verifies proposer internal state consistency.
+  Drives the proposer through game creation, resolution, and bond claims, then asserts that the
+  cached anchor game remains in the cache after the bond claim.
 
-#### 2. Challenger Wins Scenario
-`test_e2e_challenger_wins()`: Tests the scenario where:
-- The malicious proposer creates invalid games
-- The challenger successfully challenges them
-- Games resolve in favor of the challenger after timeout
+#### Game Type Transition
+
+- `test_game_type_transition_skips_legacy_game()`: Seeds the factory with a single legacy permissioned
+  game, ensures the respected game type is restored, and verifies the proposer starts producing
+  fresh `TEST_GAME_TYPE` games without touching legacy one. The test also asserts that historical
+  mock games remain `IN_PROGRESS`.
+
+- `test_game_type_transition_while_proposer_running()`: Starts the proposer service with the current
+  game type set to legacy. It seeds a legacy game, then updates the respected game type to `TEST_GAME_TYPE`
+  while the proposer remains active. Verifies that the proposer correctly ignores the existing legacy game
+  and begins producing new games of type `TEST_GAME_TYPE`.
+
+#### Game Chain Validation Scenarios
+
+These tests focus on anchor selection, parent validation, and handling of invalid chains:
+
+- `test_game_chain_validation_invalid_parent()`: Builds a chain where a valid child points to an
+  invalid parent. When the proposer relaunches, it skips the poisoned branch and continues from a
+  clean anchor.
+- `test_game_chain_validation_challenged_parent()`: Creates a valid parent/child pair, allows the
+  parent to be challenged and resolved to `ChallengerWins`, and confirms the proposer restarts from
+  a fresh anchor instead of extending the tainted chain.
+- `test_game_chain_validation_anchor_reset()`: Constructs two branches, finalizes an alternate
+  branch, manually resets the anchor registry, and verifies the proposer begins building on the new
+  canonical ancestor (`parentIndex == b1_index`).
 
 ## Running the Tests
 
-To run a specific test:
+### Basic Test Execution
 ```bash
-# For e2e tests
-cargo test --test e2e <TEST_NAME>
-
-# For integration tests
-cargo test --test integration <TEST_NAME>
-```
-
-For example:
-```bash
-# Run the proposer defense test
-cargo test --test integration test_proposer_defends_successfully
-
-# Run the proposer wins e2e test
-cargo test --test e2e test_e2e_proposer_wins
+# Run all integration tests with single thread and no capture
+just fp-integration-tests
 ```

@@ -69,6 +69,11 @@ pub enum ValidityGauge {
         message = "Number of witness generation errors"
     )]
     WitnessgenErrorCount,
+    #[strum(
+        serialize = "succinct_witnessgen_timeout_count",
+        message = "Number of witness generation timeouts"
+    )]
+    WitnessgenTimeoutCount,
     #[strum(serialize = "succinct_execution_error_count", message = "Number of execution errors")]
     ExecutionErrorCount,
     #[strum(
@@ -82,10 +87,20 @@ pub enum ValidityGauge {
     )]
     AggProofRequestErrorCount,
     #[strum(
+        serialize = "succinct_agg_proof_validation_error_count",
+        message = "Number of aggregation proof validation errors"
+    )]
+    AggProofValidationErrorCount,
+    #[strum(
         serialize = "succinct_relay_agg_proof_error_count",
         message = "Number of relay aggregation proof errors"
     )]
     RelayAggProofErrorCount,
+    #[strum(
+        serialize = "succinct_network_call_timeout_count",
+        message = "Number of network prover call timeouts"
+    )]
+    NetworkCallTimeoutCount,
 }
 
 impl MetricsGauge for ValidityGauge {}

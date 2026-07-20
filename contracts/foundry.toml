@@ -6,27 +6,33 @@ remappings = [
     # Use openzeppelin-contracts v4.7.3 as the some contracts are not compatible with 0.8.15
     "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts",
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts",
-    "@optimism/=lib/optimism/packages/contracts-bedrock/",
+    # [MANTLE] v117 mixes legacy `@optimism/contracts/<X>` imports (in production contracts)
+    # with `@optimism/src/<X>` imports (in scripts). Map both prefixes to mantle-v2 fork's
+    # `contracts/` layout (the pinned gitlink aad7b8a8 doesn't have a `src/` directory).
+    # NOTE: foundry silently drops a bare `@optimism/=` mapping when more specific
+    # `@optimism/<X>/=` mappings exist, so we must list every prefix explicitly.
+    "@optimism/src/=lib/optimism/packages/contracts-bedrock/contracts/",
+    "@optimism/contracts/=lib/optimism/packages/contracts-bedrock/contracts/",
     "@forge-std/=lib/forge-std/src/",
     "@solady/=lib/solady/src",
+    "@solady-v0.0.281/=lib/solady-v0.0.281/src",
     # Note: Use zobront/sp1-contracts as the current version for SP1 contracts is not compatible with the hard
     # version for 0.8.15 on some Optimism contracts.
     "@sp1-contracts/=lib/sp1-contracts/contracts/",
-    "@rari-capital/=lib/optimism/packages/contracts-bedrock/lib/",
     # Optimism repo uses absolute imports, so we need to have remappings for the paths we use.
-    "src/libraries/=lib/optimism/packages/contracts-bedrock/src/libraries/",
-    "src/L1/=lib/optimism/packages/contracts-bedrock/src/L1/",
-    "src/L2/=lib/optimism/packages/contracts-bedrock/src/L2/",
-    "src/dispute/=lib/optimism/packages/contracts-bedrock/src/dispute/",
-    "src/cannon/=lib/optimism/packages/contracts-bedrock/src/cannon/",
-    "interfaces/=lib/optimism/packages/contracts-bedrock/interfaces/",
-    "@lib-keccak/=lib/lib-keccak/contracts/lib",
+    # [MANTLE] mantle-v2 fork of optimism uses `contracts/` instead of upstream's `src/`.
+    # Some v117 script files import `src/<dir>/<X>`; point those at the mantle-v2 layout
+    # so they resolve. (v117's foundry.toml shipped these pointing at upstream's `src/`,
+    # which doesn't exist on the pinned mantle-v2 commit — a v117 misconfiguration.)
+    "src/libraries/=lib/optimism/packages/contracts-bedrock/contracts/libraries/",
+    "src/L1/=lib/optimism/packages/contracts-bedrock/contracts/L1/",
+    "src/L2/=lib/optimism/packages/contracts-bedrock/contracts/L2/",
+    "src/dispute/=lib/optimism/packages/contracts-bedrock/contracts/dispute/",
+    "src/universal/=lib/optimism/packages/contracts-bedrock/contracts/universal/",
+    "@rari-capital/solmate=lib/solmate"
 ]
 
-[lint]
-severity = ["high", "med", "low", "gas"] # Drop all "info" notes
-
-# Enable read-write access to all files in current directory
-fs_permissions = [{ access = "read-write", path = "." }]
+# Enable read-write access to config files
+fs_permissions = [{ access = "read", path = "./deploy-config" }]
 
 # See more config options https://github.com/foundry-rs/foundry/tree/master/config

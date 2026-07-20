@@ -1,7 +1,10 @@
-
 use alloy_sol_types::sol;
 
-// Sourced from op-succinct/contracts/src/validity/OPSuccinctL2OutputOracle.sol
+// Sourced from contracts/src/validity/OPSuccinctL2OutputOracle.sol (v117 baseline).
+// [MANTLE] Aligned with the v117 ABI: 4-param `proposeL2Output`, direct vkey/config
+// storage fields (no `opSuccinctConfigs` mapping), and no `dgfProposeL2Output` —
+// Phase 3 dropped Fault Proof wholesale so the OP Succinct dispute-game contracts
+// (game type 6) are not present in this build. See MANTLE_CHANGES.md §3.2 / §3.3.
 sol! {
     #[sol(rpc)]
     contract OPSuccinctL2OutputOracle {
@@ -13,8 +16,8 @@ sol! {
         function latestBlockNumber() public view returns (uint256);
 
         function historicBlockHashes(uint256 _blockNumber) external view returns (bytes32);
-        
-        function updateAggregationVKey(bytes32 _aggregationVKey) external onlyOwner;
+
+        function updateAggregationVkey(bytes32 _aggregationVkey) external onlyOwner;
 
         function updateRangeVkeyCommitment(bytes32 _rangeVkeyCommitment) external onlyOwner;
 
@@ -106,5 +109,11 @@ sol! {
     #[sol(rpc)]
     contract SP1Blobstream {
         uint64 public latestBlock;
+    }
+}
+
+impl PartialEq for GameStatus {
+    fn eq(&self, other: &Self) -> bool {
+        *self as u8 == *other as u8
     }
 }

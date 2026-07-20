@@ -1,16 +1,27 @@
-use std::str::FromStr;
+use std::{str::FromStr, sync::Arc};
 
 use alloy_consensus::TxEnvelope;
 use alloy_eips::Decodable2718;
 use alloy_network::{Ethereum, EthereumWallet, TransactionBuilder};
-use alloy_primitives::{Address, Bytes};
+use alloy_primitives::{Address, Bytes, TxKind};
 use alloy_provider::{Provider, ProviderBuilder, Web3Signer};
 use alloy_rpc_types_eth::{TransactionReceipt, TransactionRequest};
+use alloy_signer::Signer as AlloySigner;
+use alloy_signer_gcp::{
+    // [MANTLE] Use the gcloud_sdk version re-exported by alloy_signer_gcp 2.x so the
+    // GoogleApiClient type used to construct GcpSigner matches what GcpSigner::new expects.
+    // The workspace's gcloud-sdk = "0.27" pulls a different version that produces incompatible types.
+    gcloud_sdk::{
+        google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient,
+        GoogleApi, TokenSourceType, GCP_DEFAULT_SCOPES,
+    },
+    GcpKeyRingRef, GcpSigner, KeySpecifier,
+};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_transport_http::reqwest::Url;
 use anyhow::{Context, Result};
-use op_succinct_signer_gcp_utils::{init_client, GcpSigner};
-use tokio::time::Duration;
+use tokio::{sync::Mutex, time::Duration};
+
 pub const NUM_CONFIRMATIONS: u64 = 3;
 pub const TIMEOUT_SECONDS: u64 = 60;
 
@@ -22,7 +33,7 @@ pub enum Signer {
     /// The local signer.
     LocalSigner(PrivateKeySigner),
     /// Cloud HSM signer using Google.
-    CloudHsmSigner(String, Address, String),
+    CloudHsmSigner(GcpSigner),
 }
 
 impl Signer {
@@ -30,45 +41,117 @@ impl Signer {
         match self {
             Signer::Web3Signer(_, address) => *address,
             Signer::LocalSigner(signer) => signer.address(),
-            Signer::CloudHsmSigner(_, address, _) => *address,
+            Signer::CloudHsmSigner(signer) => signer.address(),
         }
     }
 
-    pub fn from_env() -> Result<Self> {
-        if let (Ok(key_name), Ok(ethereum_address_str)) =
-            (std::env::var("HSM_API_NAME"), std::env::var("HSM_ETH_ADDRESS"))
-        {
-            let creds_json_hex = std::env::var("HSM_CREDENTIALS").expect("HSM_CREDENTIALS");
+    /// Creates a new Web3 signer with the given URL and address.
+    pub fn new_web3_signer(url: Url, address: Address) -> Self {
+        Signer::Web3Signer(url, address)
+    }
 
-            let ethereum_address = Address::from_str(&ethereum_address_str)
-                .context("Failed to parse HSM_ETH_ADDRESS")?;
-            Ok(Signer::CloudHsmSigner(key_name, ethereum_address, creds_json_hex))
+    /// Creates a new local signer from a private key string.
+    pub fn new_local_signer(private_key_str: &str) -> Result<Self> {
+        let private_key =
+            PrivateKeySigner::from_str(private_key_str).context("Failed to parse private key")?;
+        Ok(Signer::LocalSigner(private_key))
+    }
+
+    pub async fn from_env() -> Result<Self> {
+        // [MANTLE compat] Existing Mantle deployments configure GCP KMS via two env vars:
+        //   HSM_API_NAME      — full GCP resource path
+        //                       projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>[/cryptoKeyVersions/<V>]
+        //   HSM_CREDENTIALS   — hex-encoded JSON service account key
+        // Production posture forbids writing service-account JSON to disk, so this path
+        // pipes the decoded JSON straight into gcloud-sdk's TokenSourceType::Json — the
+        // credential never touches the filesystem.
+        if let Ok(hsm_api_name) = std::env::var("HSM_API_NAME") {
+            let creds_json_hex = std::env::var("HSM_CREDENTIALS")
+                .context("HSM_CREDENTIALS required when HSM_API_NAME is set")?;
+            let creds_json_bytes = alloy_primitives::hex::decode(&creds_json_hex)
+                .context("HSM_CREDENTIALS is not valid hex")?;
+            let creds_json = String::from_utf8(creds_json_bytes)
+                .context("HSM_CREDENTIALS hex did not decode to UTF-8 JSON")?;
+
+            let GcpKeyPath { project_id, location, keyring, key_name, key_version } =
+                parse_gcp_key_resource_path(&hsm_api_name)?;
+
+            let keyring_ref = GcpKeyRingRef::new(&project_id, &location, &keyring);
+            let key_specifier = KeySpecifier::new(keyring_ref, &key_name, key_version);
+
+            let client = GoogleApi::from_function_with_token_source(
+                KeyManagementServiceClient::new,
+                "https://cloudkms.googleapis.com",
+                None,
+                GCP_DEFAULT_SCOPES.clone(),
+                TokenSourceType::Json(creds_json),
+            )
+            .await?;
+            let signer = GcpSigner::new(client, key_specifier, None).await?;
+
+            return Ok(Signer::CloudHsmSigner(signer));
+        }
+
+        if let (Ok(project_id), Ok(location), Ok(keyring_name)) = (
+            std::env::var("GOOGLE_PROJECT_ID"),
+            std::env::var("GOOGLE_LOCATION"),
+            std::env::var("GOOGLE_KEYRING"),
+        ) {
+            let key_name = std::env::var("HSM_KEY_NAME").expect("HSM_KEY_NAME");
+            let key_version =
+                std::env::var("HSM_KEY_VERSION").unwrap_or("1".to_string()).parse()?;
+
+            let keyring = GcpKeyRingRef::new(&project_id, &location, &keyring_name);
+
+            let key_specifier = KeySpecifier::new(keyring, &key_name, key_version);
+
+            let client = GoogleApi::from_function(
+                KeyManagementServiceClient::new,
+                "https://cloudkms.googleapis.com",
+                None,
+            )
+            .await?;
+            let signer = GcpSigner::new(client, key_specifier, None).await?;
+
+            Ok(Signer::CloudHsmSigner(signer))
         } else if let (Ok(signer_url_str), Ok(signer_address_str)) =
             (std::env::var("SIGNER_URL"), std::env::var("SIGNER_ADDRESS"))
         {
             let signer_url = Url::parse(&signer_url_str).context("Failed to parse SIGNER_URL")?;
             let signer_address =
                 Address::from_str(&signer_address_str).context("Failed to parse SIGNER_ADDRESS")?;
-            Ok(Signer::Web3Signer(signer_url, signer_address))
+            Ok(Signer::new_web3_signer(signer_url, signer_address))
         } else if let Ok(private_key_str) = std::env::var("PRIVATE_KEY") {
-            let private_key = PrivateKeySigner::from_str(&private_key_str)
-                .context("Failed to parse PRIVATE_KEY")?;
-            Ok(Signer::LocalSigner(private_key))
+            Signer::new_local_signer(&private_key_str)
         } else {
             anyhow::bail!(
                 "None of the required signer configurations are set in environment:\n\
-                - For Cloud HSM: HSM_API_NAME, HSM_ETH_ADDRESS, HSM_CREDENTIALS\n\
+                - For Cloud HSM (Mantle compat): HSM_API_NAME + HSM_CREDENTIALS (hex JSON)\n\
+                - For Cloud HSM (upstream): GOOGLE_PROJECT_ID, GOOGLE_LOCATION, GOOGLE_KEYRING\n\
                 - For Web3Signer: SIGNER_URL and SIGNER_ADDRESS\n\
                 - For Local: PRIVATE_KEY"
             )
         }
     }
 
-    /// Sends a transaction request, signed by the configured `signer`.
+    /// Sends a transaction request, signed by the configured `signer`, using the default
+    /// confirmation timeout of [`TIMEOUT_SECONDS`].
     pub async fn send_transaction_request(
         &self,
         l1_rpc: Url,
+        transaction_request: TransactionRequest,
+    ) -> Result<TransactionReceipt> {
+        self.send_transaction_request_with_timeout(l1_rpc, transaction_request, TIMEOUT_SECONDS)
+            .await
+    }
+
+    /// Sends a transaction request, signed by the configured `signer`, with a caller-supplied
+    /// confirmation timeout (in seconds).
+    pub async fn send_transaction_request_with_timeout(
+        &self,
+        l1_rpc: Url,
         mut transaction_request: TransactionRequest,
+        timeout_secs: u64,
     ) -> Result<TransactionReceipt> {
         match self {
             Signer::Web3Signer(signer_url, signer_address) => {
@@ -97,7 +180,7 @@ impl Signer {
                     .await
                     .context("Failed to send transaction")?
                     .with_required_confirmations(NUM_CONFIRMATIONS)
-                    .with_timeout(Some(Duration::from_secs(TIMEOUT_SECONDS)))
+                    .with_timeout(Some(Duration::from_secs(timeout_secs)))
                     .get_receipt()
                     .await?;
 
@@ -109,29 +192,33 @@ impl Signer {
                     .wallet(EthereumWallet::new(private_key.clone()))
                     .connect_http(l1_rpc);
 
-                // Set the from address to the Ethereum wallet address.
+                // Ensure the request has a `from` address so the wallet filler can sign it.
                 transaction_request.set_from(private_key.address());
-
-                // Fill the transaction request with all of the relevant gas and nonce information.
-                let filled_tx = provider.fill(transaction_request).await?;
+                if transaction_request.to.is_none() {
+                    // NOTE(fakedev9999): Anvil's wallet filler insists on a `to` field even for
+                    // deployments. Mark the request as contract creation so it can be signed.
+                    transaction_request.to = Some(TxKind::Create);
+                }
 
                 let receipt = provider
-                    .send_tx_envelope(filled_tx.as_envelope().unwrap().clone())
+                    .send_transaction(transaction_request)
                     .await
                     .context("Failed to send transaction")?
                     .with_required_confirmations(NUM_CONFIRMATIONS)
-                    .with_timeout(Some(Duration::from_secs(TIMEOUT_SECONDS)))
+                    .with_timeout(Some(Duration::from_secs(timeout_secs)))
                     .get_receipt()
                     .await?;
 
                 Ok(receipt)
             }
-            Signer::CloudHsmSigner(key_name, ethereum_address, creds_json_hex) => {
-                let client = init_client(creds_json_hex.clone()).await.unwrap();
-                let signer =
-                    GcpSigner::new(client, key_name.to_string(), None, *ethereum_address).unwrap();
+            Signer::CloudHsmSigner(signer) => {
                 // Set the from address to HSM address
-                transaction_request.set_from(*ethereum_address);
+                transaction_request.set_from(signer.address());
+                if transaction_request.to.is_none() {
+                    // NOTE(fakedev9999): Anvil's wallet filler insists on a `to` field even for
+                    // deployments. Mark the request as contract creation so it can be signed.
+                    transaction_request.to = Some(TxKind::Create);
+                }
 
                 let wallet = EthereumWallet::new(signer.clone());
                 let provider = ProviderBuilder::new()
@@ -139,21 +226,118 @@ impl Signer {
                     .wallet(wallet)
                     .connect_http(l1_rpc);
 
-                // Fill and send transaction (the wallet will handle KMS signing automatically)
-                let filled_tx = provider.fill(transaction_request).await?;
-
                 let receipt = provider
-                    .send_tx_envelope(filled_tx.as_envelope().unwrap().clone())
+                    .send_transaction(transaction_request)
                     .await
                     .context("Failed to send KMS-signed transaction")?
                     .with_required_confirmations(NUM_CONFIRMATIONS)
-                    .with_timeout(Some(Duration::from_secs(TIMEOUT_SECONDS)))
+                    .with_timeout(Some(Duration::from_secs(timeout_secs)))
                     .get_receipt()
                     .await?;
 
                 Ok(receipt)
             }
         }
+    }
+}
+
+/// Parsed components of a GCP KMS crypto key resource path.
+///
+/// Accepted shapes (as set in Mantle's HSM_API_NAME env var):
+/// - `projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>` — version defaults to `1`
+/// - `projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>/cryptoKeyVersions/<V>`
+struct GcpKeyPath {
+    project_id: String,
+    location: String,
+    keyring: String,
+    key_name: String,
+    key_version: u64,
+}
+
+fn parse_gcp_key_resource_path(s: &str) -> Result<GcpKeyPath> {
+    let parts: Vec<&str> = s.split('/').collect();
+    let invalid = || {
+        anyhow::anyhow!(
+            "HSM_API_NAME `{s}` is not a valid GCP KMS key resource path; expected \
+             `projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>[/cryptoKeyVersions/<V>]`"
+        )
+    };
+    if parts.len() != 8 && parts.len() != 10 {
+        return Err(invalid());
+    }
+    if parts[0] != "projects"
+        || parts[2] != "locations"
+        || parts[4] != "keyRings"
+        || parts[6] != "cryptoKeys"
+    {
+        return Err(invalid());
+    }
+    let key_version = if parts.len() == 10 {
+        if parts[8] != "cryptoKeyVersions" {
+            return Err(invalid());
+        }
+        parts[9].parse().context("HSM_API_NAME cryptoKeyVersions segment is not a u64")?
+    } else {
+        1
+    };
+    Ok(GcpKeyPath {
+        project_id: parts[1].to_string(),
+        location: parts[3].to_string(),
+        keyring: parts[5].to_string(),
+        key_name: parts[7].to_string(),
+        key_version,
+    })
+}
+
+/// Wrapper around Signer that provides thread-safe transaction sending.
+/// Transactions are serialized via a Mutex to prevent nonce conflicts.
+#[derive(Clone, Debug)]
+pub struct SignerLock {
+    inner: Arc<Mutex<Signer>>,
+    cached_address: Address,
+}
+
+impl SignerLock {
+    /// Creates a new SignerLock wrapping the given Signer.
+    pub fn new(signer: Signer) -> Self {
+        let cached_address = signer.address();
+        SignerLock { inner: Arc::new(Mutex::new(signer)), cached_address }
+    }
+
+    /// Creates a SignerLock from environment variables.
+    pub async fn from_env() -> Result<Self> {
+        Ok(SignerLock::new(Signer::from_env().await?))
+    }
+
+    /// Returns the address of the signer without acquiring a lock.
+    pub fn address(&self) -> Address {
+        self.cached_address
+    }
+
+    /// Sends a transaction request, signed by the configured signer, using the default
+    /// confirmation timeout of [`TIMEOUT_SECONDS`]. Transactions are serialized via a Mutex
+    /// to prevent nonce conflicts.
+    pub async fn send_transaction_request(
+        &self,
+        l1_rpc: Url,
+        transaction_request: TransactionRequest,
+    ) -> Result<TransactionReceipt> {
+        let signer = self.inner.lock().await;
+        signer.send_transaction_request(l1_rpc, transaction_request).await
+    }
+
+    /// Sends a transaction request with a caller-supplied confirmation timeout (in seconds).
+    /// Transactions are serialized via a Mutex to prevent nonce conflicts.
+    pub async fn send_transaction_request_with_timeout(
+        &self,
+        l1_rpc: Url,
+        transaction_request: TransactionRequest,
+        timeout_secs: u64,
+    ) -> Result<TransactionReceipt> {
+        let signer = self.inner.lock().await;
+        signer
+            .send_transaction_request_with_timeout(l1_rpc, transaction_request, timeout_secs)
+            .await
     }
 }
 
@@ -167,11 +351,11 @@ mod tests {
 
     #[tokio::test]
     #[ignore]
-    async fn test_send_transaction_request() {
-        let proposer_signer = Signer::Web3Signer(
+    async fn test_send_transaction_request_web3() {
+        let proposer_signer = SignerLock::new(Signer::new_web3_signer(
             "http://localhost:9000".parse().unwrap(),
             "0x9b3F173823E944d183D532ed236Ee3B83Ef15E1d".parse().unwrap(),
-        );
+        ));
 
         let provider = ProviderBuilder::new()
             .network::<Ethereum>()
@@ -198,14 +382,23 @@ mod tests {
 
     #[tokio::test]
     #[ignore]
-    async fn test_send_transaction_request_cloud_hsm() {
+    // This test is meant to be ran locally to test various signers implementations,
+    // depending of the envvars set.
+    async fn test_send_transaction_request() {
+        dotenv::dotenv().ok();
+
         rustls::crypto::aws_lc_rs::default_provider()
             .install_default()
             .expect("Failed to install default crypto provider");
-        let signer = Signer::from_env().unwrap();
+        let signer = SignerLock::from_env().await.unwrap();
+
+        println!("Signer: {}", signer.address());
+
         let transaction_request = TransactionRequest::default()
-            .to(Address::from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]))
-            .value(U256::from(1000000000000000000u64))
+            .to(Address::from([
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+            ]))
+            .value(U256::from(100000u64))
             .from(signer.address());
         let receipt = signer
             .send_transaction_request("http://localhost:8545".parse().unwrap(), transaction_request)

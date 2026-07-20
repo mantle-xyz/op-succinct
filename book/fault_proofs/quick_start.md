@@ -2,80 +2,123 @@
 
 This guide provides the fastest path to try out OP Succinct fault dispute games by deploying contracts and running a proposer to create games.
 
+```admonish note
+If your integration involves alternative data availability solutions like
+Celestia or EigenDA, you may need to configure additional environment variables.
+Refer to the [`Experimental Features`](./experimental/experimental.md) section
+for the required setup steps.
+```
+
 ## Prerequisites
 
 - [Foundry](https://book.getfoundry.sh/getting-started/installation)
 - [Rust](https://www.rust-lang.org/tools/install) (latest stable version)
-- L1 and L2 archive node RPC endpoints. L2 node should be configured with SafeDB enabled. See [SafeDB Configuration](./best_practices.md#safe-db-configuration) for more details.
+- [just](https://github.com/casey/just)
+- L1 and L2 archive node RPC endpoints
+  - L2 node should be configured with SafeDB enabled.
+  - See [SafeDB Configuration](./best_practices.md#safe-db-configuration) for more details.
 - ETH on L1 for:
   - Contract deployment
   - Game bonds (configurable in factory)
   - Challenge bonds (proof rewards)
   - Transaction fees
 
-## Step 1: Deploy Contracts
+```` admonish info
+On Ubuntu, you'll need some system dependencies to run the service:
 
-1. Clone and setup the repository:
+```bash
+sudo apt update && sudo apt install -y \
+  curl clang pkg-config libssl-dev ca-certificates git libclang-dev jq build-essential
+```
+````
 
-    ```bash
-    git clone https://github.com/succinctlabs/op-succinct.git
-    cd op-succinct/contracts
-    forge install
-    ```
+## Step 1: Clone and build contracts
 
-2. Create a `.env` file in the project root. See [this guide](deploy.md#prerequisites) for more details on these environment variables:
+Clone the repository and build the contracts:
 
-    ```env
-    # example .env file
-    L1_RPC=<YOUR_L1_RPC_URL>
-    L1_BEACON_RPC=<L1_BEACON_RPC_URL>
-    L2_RPC=<YOUR_L2_RPC_URL>
-    L2_NODE_RPC=<YOUR_L2_NODE_RPC_URL>
-    PRIVATE_KEY=<YOUR_PRIVATE_KEY>
+```bash
+git clone https://github.com/succinctlabs/op-succinct.git
+cd op-succinct/contracts
+forge build
+cd ..
+```
 
-    # Required - set these values
-    GAME_TYPE=42
-    DISPUTE_GAME_FINALITY_DELAY_SECONDS=604800
-    MAX_CHALLENGE_DURATION=604800
-    MAX_PROVE_DURATION=86400
+## Step 2: Configure environment
 
-    # Optional
-    # Warning: Setting PERMISSIONLESS_MODE=true allows anyone to propose and challenge games. Ensure this behavior is intended for your deployment.
-    # For a permissioned setup, set this to false and configure PROPOSER_ADDRESSES and CHALLENGER_ADDRESSES.
-    PERMISSIONLESS_MODE=true
+Create a `.env` file in the project root. See [this guide](deploy.md#prerequisites) for more details on these environment variables:
 
-    # For testing, use mock verifier
-    OP_SUCCINCT_MOCK=true
-    ```
+```env
+# example .env file
+L1_RPC=<YOUR_L1_RPC_URL>
+L2_RPC=<YOUR_L2_RPC_URL>
+L2_NODE_RPC=<YOUR_L2_NODE_RPC_URL>
+PRIVATE_KEY=<YOUR_PRIVATE_KEY>
 
-3. Deploy an SP1 mock verifier:
+# Required - set these values
+GAME_TYPE=42
+DISPUTE_GAME_FINALITY_DELAY_SECONDS=604800
+MAX_CHALLENGE_DURATION=604800
+MAX_PROVE_DURATION=86400
+
+# Optional
+
+# Not needed by default, but could be required for integrations that access consensus-layer data.
+L1_BEACON_RPC=<L1_BEACON_RPC_URL>
+
+# Warning: Setting PERMISSIONLESS_MODE=true allows anyone to propose and challenge games. Ensure this behavior is intended for your deployment.
+# For a permissioned setup, set this to false and configure PROPOSER_ADDRESSES and CHALLENGER_ADDRESSES.
+PERMISSIONLESS_MODE=true
+
+# For testing, use mock verifier
+OP_SUCCINCT_MOCK=true
+```
+
+```admonish info
+Obtaining a Test Private Key
+
+- Anvil (local devnet): Run `anvil` and use one of the pre-funded accounts printed on startup. Copy the Private Key value for any account. Only use these on your local Anvil network.
+
+- Foundry (generate a fresh key): Run `cast wallet new` to generate a human-readable output. Save the private key and fund it on your test network.
+
+⚠️ **Caution:** Never use test keys on mainnet or with real assets.
+```
+
+## Step 3: Deploy contracts
+
+1. Deploy an SP1 mock verifier:
 
     ```bash
     just deploy-mock-verifier
-    ```  
+    ```
 
-4. Deploy the core fault dispute game contracts:
+2. Deploy the core fault dispute game contracts:
 
     ```bash
     just deploy-fdg-contracts
     ```
 
-Save the output addresses, particularly the `FACTORY_ADDRESS` output as "Factory Proxy: 0x..."
+Save the output addresses, particularly `ANCHOR_STATE_REGISTRY_ADDRESS` as "AnchorStateRegistry: 0x..." and `FACTORY_ADDRESS` as "Factory Proxy: 0x..."
 
-## Step 2: Run the Proposer
+## Step 4: Run the Proposer
 
 1. Create a `.env.proposer` file in the project root directory:
 
     ```env
     # Required Configuration
     L1_RPC=<YOUR_L1_RPC_URL>
-    L1_BEACON_RPC=<L1_BEACON_RPC_URL>
     L2_RPC=<YOUR_L2_RPC_URL>
     L2_NODE_RPC=<YOUR_L2_NODE_RPC_URL>
+    ANCHOR_STATE_REGISTRY_ADDRESS=<ANCHOR_STATE_REGISTRY_ADDRESS_FROM_DEPLOYMENT>
     FACTORY_ADDRESS=<FACTORY_ADDRESS_FROM_DEPLOYMENT>
     GAME_TYPE=42
     PRIVATE_KEY=<YOUR_PRIVATE_KEY>
     MOCK_MODE=true # Set to true for mock mode
+    ```
+
+    ```admonish note
+    If your integration requires access to consensus-layer data, set the
+    `L1_BEACON_RPC` (L1 Beacon Node). This is optional and not required by
+    default.
     ```
 
 2. Run the proposer:
@@ -93,7 +136,7 @@ Save the output addresses, particularly the `FACTORY_ADDRESS` output as "Factory
     NETWORK_PRIVATE_KEY=0x...
     ```
 
-    To get a whitelisted key on the Succinct Prover Network for OP Succinct, fill out this [form](https://docs.google.com/forms/d/e/1FAIpQLSd-X9uH7G0bvXH_kjptnQtNil8L4dumrVPpFE4t8Ci1XT1GaQ/viewform). The Succinct team will reach out to you with an RPC endpoint you can use.
+    For the Succinct Prover Network setup, see the [quickstart guide](https://docs.succinct.xyz/docs/sp1/prover-network/quickstart).
 
 2. Run the proposer:
 
@@ -101,7 +144,7 @@ Save the output addresses, particularly the `FACTORY_ADDRESS` output as "Factory
     cargo run --bin proposer
     ```
 
-## Step 3: Run the Challenger
+## Step 5: Run the Challenger
 
 1. Create a `.env.challenger` file in the project root directory:
 
@@ -109,6 +152,7 @@ Save the output addresses, particularly the `FACTORY_ADDRESS` output as "Factory
     # Required Configuration
     L1_RPC=<YOUR_L1_RPC_URL>
     L2_RPC=<YOUR_L2_RPC_URL>
+    ANCHOR_STATE_REGISTRY_ADDRESS=<ANCHOR_STATE_REGISTRY_ADDRESS_FROM_DEPLOYMENT>
     FACTORY_ADDRESS=<FACTORY_ADDRESS_FROM_DEPLOYMENT>
     GAME_TYPE=42
     PRIVATE_KEY=<YOUR_PRIVATE_KEY>

@@ -1,23 +1,31 @@
-use std::{collections::HashMap, env, str::FromStr, sync::Arc, time::Duration};
+use std::{collections::HashMap, ops::Range, str::FromStr, sync::Arc, time::Duration};
 
 use alloy_eips::BlockId;
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{Address, B256, U256};
 use alloy_provider::{network::ReceiptResponse, Provider};
-use alloy_sol_types::SolValue;
 use anyhow::{anyhow, Context, Result};
+use chrono::Utc;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use op_succinct_client_utils::{boot::hash_rollup_config, types::u32_to_u8};
 use op_succinct_elfs::AGGREGATION_ELF;
 use op_succinct_host_utils::{
-    fetcher::OPSuccinctDataFetcher, host::OPSuccinctHost, metrics::MetricsGauge,
-    network::determine_network_mode,
+    fetcher::OPSuccinctDataFetcher,
+    host::OPSuccinctHost,
+    metrics::MetricsGauge,
+    network::{determine_network_mode, get_network_signer},
     DisputeGameFactory::DisputeGameFactoryInstance as DisputeGameFactoryContract,
     OPSuccinctL2OutputOracle::OPSuccinctL2OutputOracleInstance as OPSuccinctL2OOContract,
 };
-use op_succinct_proof_utils::get_range_elf_embedded;
-use op_succinct_signer_utils::Signer;
+use op_succinct_proof_utils::{
+    cluster_poll_proof, cluster_setup_keys, get_range_elf_embedded, is_cluster_mode,
+    reconstruct_proof_request, ClusterProofConfig, ClusterProofHandle, ClusterProofHandleJson,
+};
+use op_succinct_signer_utils::SignerLock;
 use sp1_sdk::{
-    network::proto::types::{ExecutionStatus, FulfillmentStatus},
+    network::{
+        proto::types::{ExecutionStatus, FulfillmentStatus},
+        NetworkMode,
+    },
     Elf, HashableKey, NetworkProver, Prover, ProverClient, ProvingKey, SP1Proof,
     SP1ProofWithPublicValues,
 };
@@ -25,17 +33,38 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::{
-    db::{DriverDBClient, OPSuccinctRequest, RequestMode, RequestStatus},
-    find_gaps, get_latest_proposed_block_number, get_ranges_to_prove, CommitmentConfig,
-    ContractConfig, OPSuccinctProofRequester, ProgramConfig, RequesterConfig, ValidityGauge,
+    db::{DriverDBClient, OPSuccinctRequest, RequestMode, RequestStatus, RequestType},
+    find_gaps, get_latest_proposed_block_number, get_ranges_to_prove_by_blocks,
+    get_ranges_to_prove_by_gas, CommitmentConfig, ContractConfig, OPSuccinctProofRequester,
+    ProgramConfig, RequestExecutionStatistics, RequesterConfig, ValidityGauge,
 };
+
+/// Number of consecutive poll failures before a cluster proof is marked as permanently failed.
+const MAX_CONSECUTIVE_POLL_FAILURES: u32 = 3;
+
+/// Marker the self-hosted proof-router/gateway attaches to an admission-shed
+/// gRPC `Status` (trailer + message prefix) when its concurrency pool is full.
+/// The Succinct proving network never returns this, so keying on it leaves the
+/// Succinct path completely unchanged. Kept in sync with the gateway/router.
+const ADMISSION_SHED_MARKER: &str = "x-sp1-admission-shed";
+
+/// Whether a failed proof-request task was a self-hosted admission shed (the
+/// prover pool was momentarily full) rather than a genuine proof/range failure.
+/// A shed is transient: the request must be retried as-is, NOT marked Failed —
+/// marking it Failed counts toward range bisection and needlessly fragments the
+/// range (the prover is just busy, not the range too big). The marker travels
+/// in the tonic `Status` message + metadata, so it appears in the error's debug
+/// rendering regardless of any anyhow wrapping.
+fn is_admission_shed_error(e: &anyhow::Error) -> bool {
+    format!("{e:?}").contains(ADMISSION_SHED_MARKER)
+}
 
 /// Configuration for the driver.
 pub struct DriverConfig {
-    pub network_prover: Arc<NetworkProver>,
+    pub network_prover: Option<Arc<NetworkProver>>,
     pub fetcher: Arc<OPSuccinctDataFetcher>,
     pub driver_db_client: Arc<DriverDBClient>,
-    pub signer: Signer,
+    pub signer: SignerLock,
     pub loop_interval: u64,
 }
 /// Type alias for a map of task IDs to their join handles and associated requests
@@ -62,7 +91,7 @@ where
         db_client: Arc<DriverDBClient>,
         fetcher: Arc<OPSuccinctDataFetcher>,
         requester_config: RequesterConfig,
-        signer: Signer,
+        signer: SignerLock,
         loop_interval: u64,
         host: Arc<H>,
     ) -> Result<Self> {
@@ -86,29 +115,44 @@ where
             .add_chain_lock(requester_config.l1_chain_id, requester_config.l2_chain_id)
             .await?;
 
-        // Set a default network private key to avoid an error in mock mode.
-        let private_key = env::var("NETWORK_PRIVATE_KEY").unwrap_or_else(|_| {
-            tracing::warn!(
-                "Using default NETWORK_PRIVATE_KEY of 0x01. This is only valid in mock mode."
+        let is_cluster = is_cluster_mode();
+
+        let cluster_config =
+            if is_cluster { Some(Arc::new(ClusterProofConfig::from_env().await?)) } else { None };
+        let cluster_handles: Arc<Mutex<HashMap<i64, ClusterProofHandle>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        let (range_pk, range_vk, agg_pk, agg_vk, network_prover) = if is_cluster {
+            let (range_pk, range_vk, agg_pk, agg_vk) = cluster_setup_keys().await?;
+            (range_pk, range_vk, agg_pk, agg_vk, None)
+        } else {
+            let network_signer = get_network_signer(requester_config.use_kms_requester).await?;
+            let network_mode = determine_network_mode(
+                requester_config.range_proof_strategy,
+                requester_config.agg_proof_strategy,
+            )?;
+            let network_prover = Arc::new(
+                ProverClient::builder()
+                    .network_for(network_mode)
+                    .signer(network_signer)
+                    .build()
+                    .await,
             );
-            "0x0000000000000000000000000000000000000000000000000000000000000001".to_string()
-        });
-        let network_mode = determine_network_mode(requester_config.range_proof_strategy, requester_config.agg_proof_strategy)?;
-        let network_prover = Arc::new(
-            ProverClient::builder().network_for(network_mode).private_key(&private_key).build().await,
+            let range_pk = network_prover.setup(Elf::Static(get_range_elf_embedded())).await?;
+            let range_vk = range_pk.verifying_key().clone();
+            let agg_pk = network_prover.setup(Elf::Static(AGGREGATION_ELF)).await?;
+            let agg_vk = agg_pk.verifying_key().clone();
+            (range_pk, range_vk, agg_pk, agg_vk, Some(network_prover))
+        };
+
+        let range_vkey_commitment = B256::from(u32_to_u8(range_vk.vk.hash_u32()));
+        let agg_vkey_hash = B256::from_str(&agg_vk.bytes32())?;
+        let rollup_config_hash = hash_rollup_config(
+            fetcher
+                .rollup_config
+                .as_ref()
+                .ok_or_else(|| anyhow!("Rollup config must be set to initialize the proposer."))?,
         );
-
-        let range_pk = network_prover.setup(Elf::Static(get_range_elf_embedded())).await?;
-        let range_vk = range_pk.verifying_key().clone();
-
-        let agg_pk = network_prover.setup(Elf::Static(AGGREGATION_ELF)).await?;
-        let agg_vk = agg_pk.verifying_key().clone();
-        let multi_block_vkey_u8 = u32_to_u8(range_vk.vk.hash_u32());
-        let range_vkey_commitment = B256::from(multi_block_vkey_u8);
-        let agg_vkey_hash = B256::from_str(&agg_vk.bytes32()).unwrap();
-
-        // Initialize fetcher
-        let rollup_config_hash = hash_rollup_config(fetcher.rollup_config.as_ref().unwrap());
 
         let program_config = ProgramConfig {
             range_vk: Arc::new(range_vk),
@@ -121,8 +165,8 @@ where
                 rollup_config_hash,
             },
         };
+        program_config.log();
 
-        // Initialize the proof requester.
         let proof_requester = Arc::new(OPSuccinctProofRequester::new(
             host,
             network_prover.clone(),
@@ -130,12 +174,24 @@ where
             db_client.clone(),
             program_config.clone(),
             requester_config.mock,
+            is_cluster,
+            cluster_config,
+            cluster_handles,
             requester_config.range_proof_strategy,
             requester_config.agg_proof_strategy,
             requester_config.agg_proof_mode,
             requester_config.safe_db_fallback,
-            requester_config.prove_timeout,
-        ));
+            requester_config.max_price_per_pgu,
+            requester_config.proving_timeout,
+            requester_config.witnessgen_timeout,
+            requester_config.range_cycle_limit,
+            requester_config.range_gas_limit,
+            requester_config.agg_cycle_limit,
+            requester_config.agg_gas_limit,
+            requester_config.whitelist.clone(),
+            requester_config.min_auction_period,
+            requester_config.auction_timeout,
+        )?);
 
         let l2oo_contract =
             OPSuccinctL2OOContract::new(requester_config.l2oo_address, provider.clone());
@@ -223,12 +279,40 @@ where
             &requests,
         );
 
-        let ranges_to_prove = get_ranges_to_prove(
-            &disjoint_ranges,
-            self.requester_config.range_proof_interval as i64,
-        );
+        let ranges_to_prove = if self.requester_config.evm_gas_limit > 0 {
+            // Use gas-based splitting
+            let mut all_block_infos = std::collections::HashMap::new();
+            for &Range { start, end } in &disjoint_ranges {
+                if start < end {
+                    let block_data = self
+                        .driver_config
+                        .fetcher
+                        .get_l2_block_data_range(start as u64, end as u64)
+                        .await?;
 
-        if !ranges_to_prove.is_empty() {
+                    for block_info in block_data {
+                        all_block_infos.insert(block_info.block_number as i64, block_info);
+                    }
+                }
+            }
+
+            get_ranges_to_prove_by_gas(
+                &disjoint_ranges,
+                self.requester_config.evm_gas_limit,
+                self.requester_config.range_proof_interval as i64,
+                &all_block_infos,
+            )?
+        } else {
+            // Use block-based splitting
+            get_ranges_to_prove_by_blocks(
+                &disjoint_ranges,
+                self.requester_config.range_proof_interval as i64,
+            )
+        };
+
+        if ranges_to_prove.is_empty() {
+            warn!("No range proof requests inserted into the database.")
+        } else {
             info!("Inserting {} range proof requests into the database.", ranges_to_prove.len());
 
             // Create range proof requests for the ranges to prove in parallel
@@ -241,8 +325,8 @@ where
                     };
                     OPSuccinctRequest::create_range_request(
                         mode,
-                        range.0,
-                        range.1,
+                        range.start,
+                        range.end,
                         self.program_config.commitments.range_vkey_commitment,
                         self.program_config.commitments.rollup_config_hash,
                         self.requester_config.l1_chain_id,
@@ -256,15 +340,31 @@ where
 
             // Insert the new range proof requests into the database.
             self.driver_config.driver_db_client.insert_requests(&new_range_requests).await?;
+
+            // Log details for each created range proof request.
+            for request in &new_range_requests {
+                debug!(
+                    start_block = request.start_block,
+                    end_block = request.end_block,
+                    "Range proof request created and inserted into database"
+                );
+            }
         }
 
         Ok(())
     }
 
     /// Handle all proof requests in the Prove state.
+    ///
+    /// No-op in mock mode (proofs are generated synchronously).
+    /// In cluster mode, polls each request via `process_cluster_proof_status`.
+    /// In network mode, polls each request via `process_proof_request_status`.
     #[tracing::instrument(name = "proposer.handle_proving_requests", skip(self))]
     pub async fn handle_proving_requests(&self) -> Result<()> {
-        // Get all requests from the database.
+        if self.proof_requester.is_synchronous_proving() {
+            return Ok(());
+        }
+
         let prove_requests = self
             .driver_config
             .driver_db_client
@@ -276,9 +376,16 @@ where
             )
             .await?;
 
-        // Get the proof status of all of the requests.
         for request in prove_requests {
-            self.process_proof_request_status(request).await?;
+            if self.proof_requester.cluster {
+                // Cluster mode: catch errors per-request so a single failed poll doesn't
+                // abort processing of remaining Prove requests.
+                if let Err(e) = self.process_cluster_proof_status(request).await {
+                    warn!(error = ?e, "Error processing cluster proof status");
+                }
+            } else {
+                self.process_proof_request_status(request).await?;
+            }
         }
 
         Ok(())
@@ -287,18 +394,74 @@ where
     /// Process a single OP Succinct request's proof status.
     #[tracing::instrument(name = "proposer.process_proof_request_status", skip(self, request))]
     pub async fn process_proof_request_status(&self, request: OPSuccinctRequest) -> Result<()> {
+        let network_prover = self
+            .driver_config
+            .network_prover
+            .as_ref()
+            .context("network_prover required for proof status polling")?;
+
         if let Some(proof_request_id) = request.proof_request_id.as_ref() {
+            let proof_request_id = B256::from_slice(proof_request_id);
             let (status, proof) = self
-                .driver_config
-                .network_prover
-                .get_proof_status(B256::from_slice(proof_request_id))
+                .network_call_with_timeout(
+                    network_prover.get_proof_status(proof_request_id),
+                    "waiting for proof status",
+                    &request,
+                )
+                .await?;
+
+            let request_details = self
+                .network_call_with_timeout(
+                    network_prover.get_proof_request(proof_request_id),
+                    "waiting for proof request details",
+                    &request,
+                )
                 .await?;
 
             // Check if current time exceeds deadline. If so, the proof has timed out.
-            let current_time = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+            let current_time =
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
+
+            // Cancel the request in the network if the auction timeout is exceeded.
+            if let Some(request_details) = request_details {
+                let auction_deadline =
+                    request_details.created_at + self.requester_config.auction_timeout;
+                if network_prover.network_mode() == NetworkMode::Mainnet &&
+                    request_details.fulfillment_status == FulfillmentStatus::Requested as i32 &&
+                    current_time > auction_deadline
+                {
+                    // Cancel the request in the network.
+                    self.network_call_with_timeout(
+                        network_prover.cancel_request(proof_request_id),
+                        "cancelling proof request",
+                        &request,
+                    )
+                    .await?;
+
+                    // Mark the request as cancelled in the database.
+                    match self.proof_requester.handle_cancelled_request(request.clone()).await {
+                        Ok(_) => ValidityGauge::ProofRequestRetryCount.increment(1.0),
+                        Err(e) => {
+                            ValidityGauge::RetryErrorCount.increment(1.0);
+                            return Err(e);
+                        }
+                    }
+
+                    ValidityGauge::ProofRequestTimeoutErrorCount.increment(1.0);
+
+                    warn!(
+                        proof_id = request.id,
+                        start_block = request.start_block,
+                        end_block = request.end_block,
+                        req_type = ?request.req_type,
+                        auction_deadline,
+                        current_time,
+                        "Proof request auction deadline exceeded"
+                    );
+
+                    return Ok(());
+                }
+            }
 
             if current_time > status.deadline() {
                 match self
@@ -315,9 +478,14 @@ where
 
                 ValidityGauge::ProofRequestTimeoutErrorCount.increment(1.0);
 
-                tracing::warn!(
-                    "Proof request has timed out for request id: {:?}",
-                    proof_request_id
+                warn!(
+                    proof_id = request.id,
+                    start_block = request.start_block,
+                    end_block = request.end_block,
+                    req_type = ?request.req_type,
+                    deadline = status.deadline(),
+                    current_time,
+                    "Proof request timed out"
                 );
 
                 return Ok(());
@@ -326,11 +494,16 @@ where
             // If the proof request has been fulfilled, update the request to status Complete and
             // add the proof bytes to the database.
             if status.fulfillment_status() == FulfillmentStatus::Fulfilled as i32 {
-                let proof: SP1ProofWithPublicValues = proof.unwrap();
+                let proof: SP1ProofWithPublicValues = proof.ok_or_else(|| {
+                    anyhow!(
+                        "Network reported Fulfilled but returned no proof for request {}",
+                        request.id
+                    )
+                })?;
 
                 let proof_bytes = match proof.proof {
                     // If it's a compressed proof, serialize with bincode.
-                    SP1Proof::Compressed(_) => bincode::serialize(&proof).unwrap(),
+                    SP1Proof::Compressed(_) => bincode::serialize(&proof)?,
                     // If it's Groth16 or PLONK, get the on-chain proof bytes.
                     SP1Proof::Groth16(_) | SP1Proof::Plonk(_) => proof.bytes(),
                     SP1Proof::Core(_) => return Err(anyhow!("Core proofs are not supported.")),
@@ -343,7 +516,86 @@ where
                     .await?;
                 // Update the prove_duration based on the current time and the proof_request_time.
                 self.driver_config.driver_db_client.update_prove_duration(request.id).await?;
+
+                if let Some(proof_request) = self
+                    .network_call_with_timeout(
+                        network_prover.get_proof_request(proof_request_id),
+                        "fetching execution statistics",
+                        &request,
+                    )
+                    .await?
+                {
+                    let execution_statistics = RequestExecutionStatistics::from(&proof_request);
+
+                    // Write the execution data to the database.
+                    self.driver_config
+                        .driver_db_client
+                        .insert_execution_statistics(
+                            request.id,
+                            serde_json::to_value(execution_statistics)?,
+                            0,
+                        )
+                        .await?;
+                }
+
+                // Log completion of range and aggregation proofs.
+                match request.req_type {
+                    RequestType::Range => {
+                        info!(
+                            proof_id = request.id,
+                            start_block = request.start_block,
+                            end_block = request.end_block,
+                            proof_request_time = ?request.proof_request_time,
+                            total_tx_fees = %request.total_tx_fees,
+                            total_transactions = request.total_nb_transactions,
+                            witnessgen_duration_s = request.witnessgen_duration,
+                            prove_duration_s = request.prove_duration,
+                            total_eth_gas_used = request.total_eth_gas_used,
+                            total_l1_fees = %request.total_l1_fees,
+                            "Range proof completed successfully"
+                        );
+                    }
+                    RequestType::Aggregation => {
+                        info!(
+                            proof_id = request.id,
+                            start_block = request.start_block,
+                            end_block = request.end_block,
+                            witnessgen_duration_s = request.witnessgen_duration,
+                            prove_duration_s = request.prove_duration,
+                            "Aggregation proof completed successfully"
+                        );
+                    }
+                }
             } else if status.fulfillment_status() == FulfillmentStatus::Unfulfillable as i32 {
+                // Log failure of range and aggregation proofs.
+                match request.req_type {
+                    RequestType::Range => {
+                        warn!(
+                            proof_id = request.id,
+                            start_block = request.start_block,
+                            end_block = request.end_block,
+                            proof_request_time = ?request.proof_request_time,
+                            total_tx_fees = %request.total_tx_fees,
+                            total_transactions = request.total_nb_transactions,
+                            witnessgen_duration_s = request.witnessgen_duration,
+                            total_eth_gas_used = request.total_eth_gas_used,
+                            total_l1_fees = %request.total_l1_fees,
+                            execution_status = ?status.execution_status(),
+                            "Range proof request failed - unfulfillable"
+                        );
+                    }
+                    RequestType::Aggregation => {
+                        warn!(
+                            proof_id = request.id,
+                            start_block = request.start_block,
+                            end_block = request.end_block,
+                            witnessgen_duration_s = request.witnessgen_duration,
+                            execution_status = ?status.execution_status(),
+                            "Aggregation proof request failed - unfulfillable"
+                        );
+                    }
+                }
+
                 self.proof_requester
                     .handle_failed_request(request, status.execution_status())
                     .await?;
@@ -352,6 +604,230 @@ where
         } else {
             // There should never be a proof request in Prove status without a proof request id.
             tracing::warn!(id = request.id, start_block = request.start_block, end_block = request.end_block, req_type = ?request.req_type, "Request has no proof request id");
+        }
+
+        Ok(())
+    }
+
+    /// Fail a cluster proof request: increment the appropriate error gauge, mark
+    /// the request as failed (with potential split-retry), and remove the in-memory handle.
+    async fn fail_cluster_request(&self, request: &OPSuccinctRequest) -> Result<()> {
+        // Remove the in-memory handle first so it doesn't leak if the DB update below fails.
+        self.proof_requester.cluster_handles.lock().await.remove(&request.id);
+
+        match request.req_type {
+            RequestType::Range => ValidityGauge::RangeProofRequestErrorCount.increment(1.0),
+            RequestType::Aggregation => ValidityGauge::AggProofRequestErrorCount.increment(1.0),
+        }
+
+        match self
+            .proof_requester
+            .handle_failed_request(
+                request.clone(),
+                ExecutionStatus::UnspecifiedExecutionStatus as i32,
+            )
+            .await
+        {
+            Ok(_) => ValidityGauge::ProofRequestRetryCount.increment(1.0),
+            Err(e) => {
+                ValidityGauge::RetryErrorCount.increment(1.0);
+                return Err(e);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Process a single cluster proof request's status by polling the cluster.
+    ///
+    /// Handles:
+    /// - Handle lookup from in-memory map, or reconstruction from DB on restart
+    /// - Wall-clock timeout via `proof_request_time`
+    /// - Proof completion (serialize and store)
+    /// - Transient vs permanent poll errors (3 consecutive failures = permanent)
+    #[tracing::instrument(name = "proposer.process_cluster_proof_status", skip(self, request))]
+    async fn process_cluster_proof_status(&self, request: OPSuccinctRequest) -> Result<()> {
+        let cluster_config = self
+            .proof_requester
+            .cluster_config
+            .as_ref()
+            .context("cluster_config required for cluster proof polling")?;
+
+        // 1. Wall-clock timeout check — runs before handle lookup/reconstruction so we skip
+        //    unnecessary deserialization and lock acquisition for already-timed-out proofs.
+        if let Some(proof_request_time) = request.proof_request_time {
+            let elapsed = Utc::now().naive_utc() - proof_request_time;
+            if elapsed.num_seconds().max(0) > self.proof_requester.proving_timeout as i64 {
+                warn!(
+                    request_id = request.id,
+                    start_block = request.start_block,
+                    end_block = request.end_block,
+                    req_type = ?request.req_type,
+                    elapsed_secs = elapsed.num_seconds(),
+                    proving_timeout = self.proof_requester.proving_timeout,
+                    "Cluster proof exceeded wall-clock timeout"
+                );
+
+                self.fail_cluster_request(&request).await?;
+                ValidityGauge::ProofRequestTimeoutErrorCount.increment(1.0);
+
+                return Ok(());
+            }
+        }
+
+        // 2. Look up or reconstruct the proof handle. Lock is acquired narrowly: once for the
+        //    lookup, and (on miss) once more for insert.
+        let proof_request = {
+            let cached = self
+                .proof_requester
+                .cluster_handles
+                .lock()
+                .await
+                .get(&request.id)
+                .map(|h| h.proof_request.clone());
+
+            if let Some(pr) = cached {
+                pr
+            } else {
+                // Reconstruct from DB (restart recovery).
+                let handle_json_value = request.cluster_proof_handle.as_ref().ok_or_else(|| {
+                    anyhow!(
+                        "Cluster proof request {} in Prove status has no cluster_proof_handle",
+                        request.id
+                    )
+                })?;
+                let handle_json: ClusterProofHandleJson =
+                    serde_json::from_value(handle_json_value.clone())?;
+
+                let proof_request_time = request.proof_request_time.ok_or_else(|| {
+                    anyhow!(
+                        "Cluster proof request {} in Prove status has no proof_request_time",
+                        request.id
+                    )
+                })?;
+
+                let elapsed = Utc::now().naive_utc() - proof_request_time;
+                let total_timeout = Duration::from_secs(self.proof_requester.proving_timeout);
+                let remaining = total_timeout
+                    .checked_sub(Duration::from_secs(elapsed.num_seconds().max(0) as u64))
+                    .unwrap_or(Duration::ZERO);
+
+                let proof_request = reconstruct_proof_request(&handle_json, remaining);
+
+                self.proof_requester.cluster_handles.lock().await.insert(
+                    request.id,
+                    ClusterProofHandle {
+                        proof_request: proof_request.clone(),
+                        consecutive_poll_failures: 0,
+                    },
+                );
+
+                info!(
+                    request_id = request.id,
+                    start_block = request.start_block,
+                    end_block = request.end_block,
+                    remaining_timeout_secs = remaining.as_secs(),
+                    "Reconstructed cluster proof handle from DB"
+                );
+
+                proof_request
+            }
+        };
+
+        // 3. Poll the cluster for proof status.
+        match cluster_poll_proof(cluster_config, proof_request).await {
+            Ok(Some(results)) => {
+                // Proof complete — convert and store.
+                let proof = SP1ProofWithPublicValues::from(results.proof);
+
+                let proof_bytes = match proof.proof {
+                    SP1Proof::Compressed(_) => bincode::serialize(&proof)?,
+                    SP1Proof::Groth16(_) | SP1Proof::Plonk(_) => proof.bytes(),
+                    SP1Proof::Core(_) => return Err(anyhow!("Core proofs are not supported.")),
+                };
+
+                self.driver_config
+                    .driver_db_client
+                    .update_proof_to_complete(request.id, &proof_bytes)
+                    .await?;
+                self.driver_config.driver_db_client.update_prove_duration(request.id).await?;
+
+                let prove_duration_s = request
+                    .proof_request_time
+                    .map(|t| (Utc::now().naive_utc() - t).num_seconds())
+                    .unwrap_or(0);
+
+                match request.req_type {
+                    RequestType::Range => {
+                        info!(
+                            request_id = request.id,
+                            start_block = request.start_block,
+                            end_block = request.end_block,
+                            prove_duration_s,
+                            total_tx_fees = %request.total_tx_fees,
+                            total_transactions = request.total_nb_transactions,
+                            witnessgen_duration_s = request.witnessgen_duration,
+                            total_eth_gas_used = request.total_eth_gas_used,
+                            total_l1_fees = %request.total_l1_fees,
+                            "Range proof completed via cluster"
+                        );
+                    }
+                    RequestType::Aggregation => {
+                        info!(
+                            request_id = request.id,
+                            start_block = request.start_block,
+                            end_block = request.end_block,
+                            prove_duration_s,
+                            witnessgen_duration_s = request.witnessgen_duration,
+                            "Aggregation proof completed via cluster"
+                        );
+                    }
+                }
+
+                self.proof_requester.cluster_handles.lock().await.remove(&request.id);
+            }
+            Ok(None) => {
+                // Still pending — reset failure counter.
+                let mut handles = self.proof_requester.cluster_handles.lock().await;
+                if let Some(handle) = handles.get_mut(&request.id) {
+                    handle.consecutive_poll_failures = 0;
+                }
+            }
+            Err(e) => {
+                // Poll error — distinguish transient vs permanent.
+                // Acquire the lock once and both increment + optionally remove in the same scope.
+                let should_fail = {
+                    let mut handles = self.proof_requester.cluster_handles.lock().await;
+                    if let Some(handle) = handles.get_mut(&request.id) {
+                        handle.consecutive_poll_failures += 1;
+                        handle.consecutive_poll_failures >= MAX_CONSECUTIVE_POLL_FAILURES
+                    } else {
+                        true
+                    }
+                };
+
+                if should_fail {
+                    warn!(
+                        request_id = request.id,
+                        start_block = request.start_block,
+                        end_block = request.end_block,
+                        req_type = ?request.req_type,
+                        error = %e,
+                        "Cluster proof poll failed permanently"
+                    );
+
+                    self.fail_cluster_request(&request).await?;
+                } else {
+                    warn!(
+                        request_id = request.id,
+                        start_block = request.start_block,
+                        end_block = request.end_block,
+                        req_type = ?request.req_type,
+                        error = %e,
+                        "Cluster proof poll failed transiently, will retry next iteration"
+                    );
+                }
+            }
         }
 
         Ok(())
@@ -393,7 +869,7 @@ where
 
         // Get the completed range proofs with a start block greater than the latest proposed block
         // number. These blocks are sorted.
-        let mut completed_range_proofs = self
+        let completed_range_proofs = self
             .driver_config
             .driver_db_client
             .fetch_completed_ranges(
@@ -403,9 +879,6 @@ where
                 self.requester_config.l2_chain_id,
             )
             .await?;
-
-        // Sort the completed range proofs by start block.
-        completed_range_proofs.sort_by_key(|(start_block, _)| *start_block);
 
         // Get the highest block number of the completed range proofs.
         let highest_proven_contiguous_block_number = match self
@@ -510,9 +983,10 @@ where
                 let receipt = self
                     .driver_config
                     .signer
-                    .send_transaction_request(
+                    .send_transaction_request_with_timeout(
                         self.driver_config.fetcher.as_ref().rpc_config.l1_rpc.clone(),
                         transaction_request,
+                        self.requester_config.tx_confirmation_timeout,
                     )
                     .await?;
 
@@ -528,22 +1002,27 @@ where
 
             // Create an aggregation proof request to cover the range with the checkpointed L1 block
             // hash.
-            self.driver_config
-                .driver_db_client
-                .insert_request(&OPSuccinctRequest::new_agg_request(
-                    if self.requester_config.mock { RequestMode::Mock } else { RequestMode::Real },
-                    latest_proposed_block_number,
-                    highest_proven_contiguous_block_number,
-                    self.program_config.commitments.range_vkey_commitment,
-                    self.program_config.commitments.agg_vkey_hash,
-                    self.program_config.commitments.rollup_config_hash,
-                    self.requester_config.l1_chain_id,
-                    self.requester_config.l2_chain_id,
-                    checkpointed_l1_block_number,
-                    checkpointed_l1_block_hash,
-                    self.requester_config.prover_address,
-                ))
-                .await?;
+            let agg_request = OPSuccinctRequest::new_agg_request(
+                if self.requester_config.mock { RequestMode::Mock } else { RequestMode::Real },
+                latest_proposed_block_number,
+                highest_proven_contiguous_block_number,
+                self.program_config.commitments.range_vkey_commitment,
+                self.program_config.commitments.agg_vkey_hash,
+                self.program_config.commitments.rollup_config_hash,
+                self.requester_config.l1_chain_id,
+                self.requester_config.l2_chain_id,
+                checkpointed_l1_block_number,
+                checkpointed_l1_block_hash,
+                self.driver_config.signer.address(),
+            );
+
+            self.driver_config.driver_db_client.insert_request(&agg_request).await?;
+
+            info!(
+                start_block = agg_request.start_block,
+                end_block = agg_request.end_block,
+                "Aggregation proof request created and inserted into database"
+            );
         }
 
         Ok(())
@@ -604,6 +1083,13 @@ where
         }
 
         if let Some(request) = self.get_next_unrequested_proof().await? {
+            // Guard: a request can be Unrequested yet still have a finished-but-not-yet-reaped task
+            // in the map (e.g. one a witnessgen timeout just reset to Unrequested). Skip it this
+            // cycle so we never spawn a duplicate task or overwrite its map entry —
+            // handle_ongoing_tasks reaps it next iteration and it is then picked up cleanly.
+            if self.tasks.lock().await.contains_key(&request.id) {
+                return Ok(());
+            }
             info!(
                 request_id = request.id,
                 request_type = ?request.req_type,
@@ -647,7 +1133,38 @@ where
             .await?;
 
         if let Some(unreq_agg_request) = unreq_agg_request {
-            return Ok(Some(unreq_agg_request));
+            // Fetch consecutive range proofs from the database associated with the aggregation
+            // proof request.
+            let range_proofs = self
+                .proof_requester
+                .db_client
+                .get_consecutive_complete_range_proofs(
+                    unreq_agg_request.start_block,
+                    unreq_agg_request.end_block,
+                    &self.program_config.commitments,
+                    self.requester_config.l1_chain_id,
+                    self.requester_config.l2_chain_id,
+                )
+                .await?;
+
+            // Validate the aggregation proof request
+            match self.validate_aggregation_request(&range_proofs, &unreq_agg_request).await {
+                true => {
+                    debug!(
+                        "Aggregation request validated successfully: start_block={}, end_block={}",
+                        unreq_agg_request.start_block, unreq_agg_request.end_block
+                    );
+                    return Ok(Some(unreq_agg_request));
+                }
+                false => {
+                    debug!(
+                        "Aggregation request validation failed, moving to range proofs: start_block={}, end_block={}",
+                        unreq_agg_request.start_block, unreq_agg_request.end_block
+                    );
+                    ValidityGauge::AggProofValidationErrorCount.increment(1.0);
+                    // Validation failed, continue to try fetching range proofs
+                }
+            }
         }
 
         let unreq_range_request = self
@@ -666,6 +1183,104 @@ where
         }
 
         Ok(None)
+    }
+
+    /// Validates an aggregation proof request by checking that:
+    /// 1. There are no gaps between consecutive range proofs
+    /// 2. There are no duplicate/overlapping range proofs
+    /// 3. The range proofs cover the entire block range
+    pub async fn validate_aggregation_request(
+        &self,
+        range_proofs: &[OPSuccinctRequest],
+        agg_request: &OPSuccinctRequest,
+    ) -> bool {
+        debug!(
+            "Validating aggregation proof request: start_block={}, end_block={}",
+            agg_request.start_block, agg_request.end_block
+        );
+
+        // Log all constituent range proofs
+        for (i, proof) in range_proofs.iter().enumerate() {
+            debug!(
+                "Range proof {}: start_block={}, end_block={}",
+                i, proof.start_block, proof.end_block
+            );
+        }
+
+        // If no range proofs found, validation fails
+        if range_proofs.is_empty() {
+            warn!(
+                start_block = ?agg_request.start_block,
+                end_block = ?agg_request.end_block,
+                commitments = ?self.program_config.commitments,
+                "No consecutive span proof range found for request"
+            );
+            return false;
+        }
+
+        let first_range_proof_request =
+            range_proofs.first().expect("Range proofs should not be empty");
+
+        let last_range_proof_request =
+            range_proofs.last().expect("Range proofs should not be empty");
+
+        if first_range_proof_request.start_block != agg_request.start_block {
+            warn!(
+                expected_start_block = ?agg_request.start_block,
+                actual_start_block = ?first_range_proof_request.start_block,
+                commitments = ?self.program_config.commitments,
+                "Range proofs start block does not match aggregation request"
+            );
+
+            return false;
+        }
+
+        if last_range_proof_request.end_block != agg_request.end_block {
+            warn!(
+                expected_end_block = ?agg_request.end_block,
+                actual_end_block = ?last_range_proof_request.end_block,
+                commitments = ?self.program_config.commitments,
+                "Range proofs end block does not match aggregation request"
+            );
+            return false;
+        }
+
+        // Check for gaps and duplicates / overlaps between consecutive proofs
+        for i in 1..range_proofs.len() {
+            let prev_proof = &range_proofs[i - 1];
+            let curr_proof = &range_proofs[i];
+
+            // Check for gap
+            if prev_proof.end_block < curr_proof.start_block {
+                debug!(
+                    "Gap detected: proof {} ends at {} but proof {} starts at {}",
+                    i - 1,
+                    prev_proof.end_block,
+                    i,
+                    curr_proof.start_block
+                );
+                return false;
+            }
+
+            // Check for overlap (duplicate blocks)
+            if prev_proof.end_block > curr_proof.start_block {
+                debug!(
+                    "Overlap detected: proof {} ends at {} but proof {} starts at {}",
+                    i - 1,
+                    prev_proof.end_block,
+                    i,
+                    curr_proof.start_block
+                );
+                return false;
+            }
+        }
+
+        // All validation checks passed
+        debug!(
+            "Aggregation request validated successfully with {} consecutive range proofs",
+            range_proofs.len()
+        );
+        true
     }
 
     /// Relay all completed aggregation proofs to the contract.
@@ -735,68 +1350,41 @@ where
             .get_l2_output_at_block(completed_agg_proof.end_block as u64)
             .await?;
 
-        // If the DisputeGameFactory address is set, use it to create a new validity dispute game
-        // that will resolve with the proof. Note: In the DGF setting, the proof immediately
-        // resolves the game. Otherwise, propose the L2 output.
-        let receipt = if self.contract_config.dgf_address != Address::ZERO {
-            // Validity game type: https://github.com/ethereum-optimism/optimism/blob/develop/packages/contracts-bedrock/src/dispute/lib/Types.sol#L64.
-            const OP_SUCCINCT_VALIDITY_DISPUTE_GAME_TYPE: u32 = 6;
-
-            // Get the initialization bond for the validity dispute game.
-            let init_bond = self
-                .contract_config
-                .dgf_contract
-                .initBonds(OP_SUCCINCT_VALIDITY_DISPUTE_GAME_TYPE)
-                .call()
-                .await?;
-
-            let extra_data = <(U256, U256, Address, B256, Bytes)>::abi_encode_packed(&(
-                U256::from(completed_agg_proof.end_block as u64),
-                U256::from(completed_agg_proof.checkpointed_l1_block_number.unwrap() as u64),
-                self.requester_config.prover_address,
-                self.requester_config.op_succinct_config_name_hash,
-                completed_agg_proof.proof.as_ref().unwrap().clone().into(),
+        // [MANTLE] v117 contracts ship no dispute-game implementation (Phase 3 dropped
+        // Fault Proof + the OPSuccinctValidityDisputeGame type 6 contract). The DGF
+        // path is unreachable on this build; surface a clear config error rather than
+        // letting the call revert with an opaque "no implementation for game type" on
+        // chain. Clear `DGF_ADDRESS` to use the L2OutputOracle directly.
+        if self.contract_config.dgf_address != Address::ZERO {
+            return Err(anyhow!(
+                "DGF_ADDRESS is set ({}) but the v117 contract baseline ships no \
+                 dispute-game contracts; clear DGF_ADDRESS to propose via the \
+                 L2OutputOracle directly",
+                self.contract_config.dgf_address,
             ));
+        }
 
-            let transaction_request = self
-                .contract_config
-                .dgf_contract
-                .create(
-                    OP_SUCCINCT_VALIDITY_DISPUTE_GAME_TYPE,
-                    output.output_root,
-                    extra_data.into(),
-                )
-                .value(init_bond)
-                .into_transaction_request();
+        // Propose the L2 output to the L2OutputOracle directly.
+        let transaction_request = self
+            .contract_config
+            .l2oo_contract
+            .proposeL2Output(
+                output.output_root,
+                U256::from(completed_agg_proof.end_block),
+                U256::from(completed_agg_proof.checkpointed_l1_block_number.unwrap()),
+                completed_agg_proof.proof.clone().unwrap().into(),
+            )
+            .into_transaction_request();
 
-            self.driver_config
-                .signer
-                .send_transaction_request(
-                    self.driver_config.fetcher.as_ref().rpc_config.l1_rpc.clone(),
-                    transaction_request,
-                )
-                .await?
-        } else {
-            // Propose the L2 output.
-            let transaction_request = self
-                .contract_config
-                .l2oo_contract
-                .proposeL2Output(
-                    output.output_root,
-                    U256::from(completed_agg_proof.end_block),
-                    U256::from(completed_agg_proof.checkpointed_l1_block_number.unwrap()),
-                    completed_agg_proof.proof.clone().unwrap().into(),
-                )
-                .into_transaction_request();
-
-            self.driver_config
-                .signer
-                .send_transaction_request(
-                    self.driver_config.fetcher.as_ref().rpc_config.l1_rpc.clone(),
-                    transaction_request,
-                )
-                .await?
-        };
+        let receipt = self
+            .driver_config
+            .signer
+            .send_transaction_request_with_timeout(
+                self.driver_config.fetcher.as_ref().rpc_config.l1_rpc.clone(),
+                transaction_request,
+                self.requester_config.tx_confirmation_timeout,
+            )
+            .await?;
 
         // If the transaction reverted, log the error.
         if !receipt.status() {
@@ -808,12 +1396,15 @@ where
 
     /// Validate the requester config matches the contract.
     async fn validate_contract_config(&self) -> Result<()> {
-        let contract_rollup_config_hash =
-            self.contract_config.l2oo_contract.rollupConfigHash().call().await?.0;
+        // [MANTLE] v117 stores vkeys/rollup-config-hash as direct fields rather than
+        // behind an `opSuccinctConfigs(_configName)` mapping — read them as three
+        // separate calls. See contracts/src/validity/OPSuccinctL2OutputOracle.sol.
         let contract_agg_vkey_hash =
             self.contract_config.l2oo_contract.aggregationVkey().call().await?.0;
         let contract_range_vkey_commitment =
             self.contract_config.l2oo_contract.rangeVkeyCommitment().call().await?.0;
+        let contract_rollup_config_hash =
+            self.contract_config.l2oo_contract.rollupConfigHash().call().await?.0;
 
         let rollup_config_hash_match =
             contract_rollup_config_hash == self.program_config.commitments.rollup_config_hash;
@@ -931,6 +1522,32 @@ where
                                 error = ?e,
                                 "Task failed with error"
                             );
+                            // A self-hosted admission shed means the prover pool
+                            // was momentarily full — the request never reached a
+                            // backend. Retry the SAME range next loop instead of
+                            // marking it Failed, which would count toward range
+                            // bisection and fragment a range that is fine. Only
+                            // the self-hosted gateway emits this marker; Succinct
+                            // never does, so its path is unchanged.
+                            if is_admission_shed_error(&e) {
+                                warn!(
+                                    request_id = request.id,
+                                    request_type = ?request.req_type,
+                                    "self-hosted admission shed; resetting to Unrequested for retry (no bisection)"
+                                );
+                                if let Err(reset_err) = self
+                                    .driver_config
+                                    .driver_db_client
+                                    .update_request_status(request.id, RequestStatus::Unrequested)
+                                    .await
+                                {
+                                    warn!(
+                                        error = ?reset_err,
+                                        "Failed to reset shed request to Unrequested"
+                                    );
+                                }
+                                continue;
+                            }
                             // Now safe to retry as original task is cleaned up
                             match self
                                 .proof_requester
@@ -1122,14 +1739,8 @@ where
             .set(fetcher.get_l2_header(BlockId::finalized()).await?.number as f64);
 
         // Get submission interval from contract and set gauge
-        let contract_submission_interval: u64 = self
-            .contract_config
-            .l2oo_contract
-            .submissionInterval()
-            .call()
-            .await?
-            .try_into()
-            .unwrap();
+        let contract_submission_interval: u64 =
+            self.contract_config.l2oo_contract.submissionInterval().call().await?.try_into()?;
 
         let submission_interval =
             contract_submission_interval.max(self.requester_config.submission_interval);
@@ -1214,19 +1825,156 @@ where
         &self,
         completed_range_proofs: Vec<(i64, i64)>,
     ) -> Result<Option<i64>> {
-        if completed_range_proofs.is_empty() {
-            return Ok(None);
-        }
+        Ok(highest_proven_contiguous_block(&completed_range_proofs))
+    }
 
-        let mut current_end = completed_range_proofs[0].1;
-
-        for proof in completed_range_proofs.iter().skip(1) {
-            if proof.0 != current_end {
-                break;
+    /// Wrap a network prover call with timeout, logging, and metrics.
+    async fn network_call_with_timeout<F, T>(
+        &self,
+        future: F,
+        operation_name: &str,
+        request: &OPSuccinctRequest,
+    ) -> Result<T>
+    where
+        F: std::future::Future<Output = Result<T>>,
+    {
+        match tokio::time::timeout(
+            Duration::from_secs(self.requester_config.network_calls_timeout),
+            future,
+        )
+        .await
+        {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(network_error)) => {
+                warn!(
+                    request_id = request.id,
+                    start_block = request.start_block,
+                    end_block = request.end_block,
+                    operation = operation_name,
+                    error = %network_error,
+                    "Network error during operation"
+                );
+                Err(anyhow!(
+                    "Network error {} for request {} (start_block={}, end_block={}): {}",
+                    operation_name,
+                    request.id,
+                    request.start_block,
+                    request.end_block,
+                    network_error
+                ))
             }
-            current_end = proof.1;
+            Err(_) => {
+                warn!(
+                    request_id = request.id,
+                    start_block = request.start_block,
+                    end_block = request.end_block,
+                    operation = operation_name,
+                    timeout_secs = self.requester_config.network_calls_timeout,
+                    "Network call timeout"
+                );
+                ValidityGauge::NetworkCallTimeoutCount.increment(1.0);
+                Err(anyhow!(
+                    "Timeout after {}s {} for request {} (start_block={}, end_block={})",
+                    self.requester_config.network_calls_timeout,
+                    operation_name,
+                    request.id,
+                    request.start_block,
+                    request.end_block
+                ))
+            }
         }
+    }
+}
 
-        Ok(Some(current_end))
+/// Highest block reachable by a contiguous chain of completed range proofs, starting from the
+/// first proof and stopping at the first gap (a proof whose start block != the running end).
+/// Returns None when there are no completed range proofs.
+///
+/// `completed_range_proofs` must be sorted by start block (as `fetch_completed_ranges` returns
+/// them). Extracted as a free function so the contiguity semantics — which gate aggregation
+/// proof creation — can be unit-tested without constructing a full `Proposer`.
+fn highest_proven_contiguous_block(completed_range_proofs: &[(i64, i64)]) -> Option<i64> {
+    let (first, rest) = completed_range_proofs.split_first()?;
+    let mut current_end = first.1;
+    for &(start, end) in rest {
+        if start != current_end {
+            break;
+        }
+        current_end = end;
+    }
+    Some(current_end)
+}
+
+#[cfg(test)]
+mod contiguous_block_tests {
+    use super::highest_proven_contiguous_block;
+
+    #[test]
+    fn empty_returns_none() {
+        assert_eq!(highest_proven_contiguous_block(&[]), None);
+    }
+
+    #[test]
+    fn single_range_returns_its_end() {
+        assert_eq!(highest_proven_contiguous_block(&[(100, 200)]), Some(200));
+    }
+
+    #[test]
+    fn fully_contiguous_chain_returns_last_end() {
+        assert_eq!(
+            highest_proven_contiguous_block(&[(100, 200), (200, 300), (300, 400)]),
+            Some(400)
+        );
+    }
+
+    #[test]
+    fn stops_at_first_gap() {
+        // 300 != 400: the chain breaks after the second range, so the third is not counted.
+        assert_eq!(
+            highest_proven_contiguous_block(&[(100, 200), (200, 300), (400, 500)]),
+            Some(300)
+        );
+    }
+
+    #[test]
+    fn gap_immediately_after_first_range() {
+        // Second range does not start at 200, so only the first range is contiguous.
+        assert_eq!(highest_proven_contiguous_block(&[(100, 200), (300, 400)]), Some(200));
+    }
+
+    #[test]
+    fn overlap_is_treated_as_a_gap() {
+        // Overlapping (not exactly adjacent) ranges break contiguity: 200 != 250.
+        assert_eq!(highest_proven_contiguous_block(&[(100, 250), (200, 300)]), Some(250));
+    }
+}
+
+#[cfg(test)]
+mod admission_shed_tests {
+    use super::is_admission_shed_error;
+
+    #[test]
+    fn detects_self_hosted_admission_shed_only() {
+        // A self-hosted gateway shed carries the marker in the Status message +
+        // metadata (which surface in the error's debug rendering).
+        let shed = anyhow::anyhow!(
+            "status: Unavailable, message: \"x-sp1-admission-shed: self-hosted range proof pool at capacity; retry shortly\""
+        );
+        assert!(is_admission_shed_error(&shed));
+
+        // The Succinct network never emits this marker — must NOT be treated as
+        // a shed (its path stays unchanged: genuine failure handling).
+        let succinct_unavailable = anyhow::anyhow!(
+            "status: Unavailable, message: \"succinct network temporarily unavailable\""
+        );
+        assert!(!is_admission_shed_error(&succinct_unavailable));
+
+        // A genuine proof/range failure is not a shed either.
+        let real_failure = anyhow::anyhow!("proof generation failed: execution unexecutable");
+        assert!(!is_admission_shed_error(&real_failure));
+
+        // The marker is detected even through anyhow context wrapping.
+        let wrapped = shed.context("make_proof_request failed");
+        assert!(is_admission_shed_error(&wrapped));
     }
 }

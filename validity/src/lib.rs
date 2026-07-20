@@ -1,3 +1,7 @@
+// [MANTLE] proposer::handle_proving_requests nests async generics through sp1-cluster-utils;
+// computing its layout exceeds the default rustc query depth.
+#![recursion_limit = "256"]
+
 mod config;
 mod contract;
 mod db;

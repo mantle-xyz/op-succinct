@@ -8,9 +8,7 @@ use sp1_sdk::{
     Elf, ExecutionReport, SP1Stdin,
 };
 
-pub const DEFAULT_RANGE: u64 = 5;
 pub const TWO_WEEKS: Duration = Duration::from_secs(14 * 24 * 60 * 60);
-pub const ONE_HOUR: Duration = Duration::from_secs(60 * 60);
 
 pub async fn execute_multi(
     data_fetcher: &OPSuccinctDataFetcher,
@@ -20,6 +18,7 @@ pub async fn execute_multi(
 ) -> Result<(Vec<BlockInfo>, ExecutionReport, Duration)> {
     let start_time = Instant::now();
 
+    // CpuProver creates its own tokio runtime, so run it outside the async context.
     let (_, report) = tokio::task::spawn_blocking(move || {
         let prover = CpuProver::new();
         prover

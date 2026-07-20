@@ -13,48 +13,45 @@ This guide explains how to run the OP Succinct Lite using Docker Compose.
 
 The fault proof system consists of two main components:
 
-- **Proposer**: Creates and defends claims about L2 state. See `fault_proof/Dockerfile.proposer`.
-- **Challenger**: Monitors and challenges invalid claims. See `fault_proof/Dockerfile.challenger`.
+- **Proposer**: Creates and defends claims about L2 state. See `fault-proof/Dockerfile.proposer`.
+- **Challenger**: Monitors and challenges invalid claims. See `fault-proof/Dockerfile.challenger`.
 
 ## Quick Start
 
-1. Create environment files under the `fault_proof` directory for both components:
+1. Create environment files under the `fault-proof` directory for both components:
 
 ### Proposer Configuration (.env.proposer)
 
 ```env
 # Required Configuration
-L1_RPC=                  # L1 RPC endpoint URL
-L2_RPC=                  # L2 RPC endpoint URL
-FACTORY_ADDRESS=         # Address of the DisputeGameFactory contract
-GAME_TYPE=               # Type identifier for the dispute game
-PRIVATE_KEY=             # Private key for transaction signing
+L1_RPC=                         # L1 RPC endpoint URL
+L2_RPC=                         # L2 RPC endpoint URL
+ANCHOR_STATE_REGISTRY_ADDRESS=  # Address of the AnchorStateRegistry contract
+FACTORY_ADDRESS=                # Address of the DisputeGameFactory contract
+GAME_TYPE=                      # Type identifier for the dispute game
+PRIVATE_KEY=                    # Private key for transaction signing
 NETWORK_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000001
 
 # Optional Configuration
 FAST_FINALITY_MODE=false # Whether to use fast finality mode
 PROPOSAL_INTERVAL_IN_BLOCKS=1800    # Number of L2 blocks between proposals
 FETCH_INTERVAL=30                   # Polling interval in seconds
-ENABLE_GAME_RESOLUTION=true         # Whether to enable automatic game resolution
-MAX_GAMES_TO_CHECK_FOR_RESOLUTION=100  # Maximum number of games to check for resolution
-MAX_GAMES_TO_CHECK_FOR_DEFENSE=100    # Maximum number of recent games to check for defense
+MAX_CONCURRENT_DEFENSE_TASKS=8      # Maximum number of concurrently running defense tasks
 ```
 
 ### Challenger Configuration (.env.challenger)
 
 ```env
 # Required Configuration
-L1_RPC=                  # L1 RPC endpoint URL
-L2_RPC=                  # L2 RPC endpoint URL
-FACTORY_ADDRESS=         # Address of the DisputeGameFactory contract
-GAME_TYPE=               # Type identifier for the dispute game
-PRIVATE_KEY=             # Private key for transaction signing
+L1_RPC=                              # L1 RPC endpoint URL
+L2_RPC=                              # L2 RPC endpoint URL
+ANCHOR_STATE_REGISTRY_ADDRESS=       # Address of the AnchorStateRegistry contract
+FACTORY_ADDRESS=                     # Address of the DisputeGameFactory contract
+GAME_TYPE=                           # Type identifier for the dispute game
+PRIVATE_KEY=                         # Private key for transaction signing
 
 # Optional Configuration
-FETCH_INTERVAL=30        # Polling interval in seconds
-MAX_GAMES_TO_CHECK_FOR_CHALLENGE=100  # Maximum number of games to check for challenges
-ENABLE_GAME_RESOLUTION=true           # Whether to enable automatic game resolution
-MAX_GAMES_TO_CHECK_FOR_RESOLUTION=100 # Maximum number of games to check for resolution
+FETCH_INTERVAL=30                    # Polling interval in seconds
 ```
 
 2. Start the services:
@@ -101,14 +98,14 @@ docker compose down
 
 For fast finality mode, add these to your `.env.proposer`:
 
-```
+```bash
 FAST_FINALITY_MODE=true
 NETWORK_PRIVATE_KEY=     # Private key for the Succinct Prover Network
 L1_BEACON_RPC=           # L1 Beacon RPC endpoint URL
 L2_NODE_RPC=             # L2 Node RPC endpoint URL
 ```
 
-To get a whitelisted key on the Succinct Prover Network for OP Succinct, fill out this [form](https://docs.google.com/forms/d/e/1FAIpQLSd2Yil8TrU54cIuohH1WvDvbxTusyqh5rsDmMAtGC85-Arshg/viewform?ref=https://succinctlabs.github.io/op-succinct/).
+For the Succinct Prover Network setup, see the [quickstart guide](https://docs.succinct.xyz/docs/sp1/prover-network/quickstart).
 
 ## Building Images Manually
 
