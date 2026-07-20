@@ -42,6 +42,23 @@ use crate::{
 /// Number of consecutive poll failures before a cluster proof is marked as permanently failed.
 const MAX_CONSECUTIVE_POLL_FAILURES: u32 = 3;
 
+/// Marker the self-hosted proof-router/gateway attaches to an admission-shed
+/// gRPC `Status` (trailer + message prefix) when its concurrency pool is full.
+/// The Succinct proving network never returns this, so keying on it leaves the
+/// Succinct path completely unchanged. Kept in sync with the gateway/router.
+const ADMISSION_SHED_MARKER: &str = "x-sp1-admission-shed";
+
+/// Whether a failed proof-request task was a self-hosted admission shed (the
+/// prover pool was momentarily full) rather than a genuine proof/range failure.
+/// A shed is transient: the request must be retried as-is, NOT marked Failed —
+/// marking it Failed counts toward range bisection and needlessly fragments the
+/// range (the prover is just busy, not the range too big). The marker travels
+/// in the tonic `Status` message + metadata, so it appears in the error's debug
+/// rendering regardless of any anyhow wrapping.
+fn is_admission_shed_error(e: &anyhow::Error) -> bool {
+    format!("{e:?}").contains(ADMISSION_SHED_MARKER)
+}
+
 /// Configuration for the driver.
 pub struct DriverConfig {
     pub network_prover: Option<Arc<NetworkProver>>,
@@ -1497,6 +1514,32 @@ where
                                 error = ?e,
                                 "Task failed with error"
                             );
+                            // A self-hosted admission shed means the prover pool
+                            // was momentarily full — the request never reached a
+                            // backend. Retry the SAME range next loop instead of
+                            // marking it Failed, which would count toward range
+                            // bisection and fragment a range that is fine. Only
+                            // the self-hosted gateway emits this marker; Succinct
+                            // never does, so its path is unchanged.
+                            if is_admission_shed_error(&e) {
+                                warn!(
+                                    request_id = request.id,
+                                    request_type = ?request.req_type,
+                                    "self-hosted admission shed; resetting to Unrequested for retry (no bisection)"
+                                );
+                                if let Err(reset_err) = self
+                                    .driver_config
+                                    .driver_db_client
+                                    .update_request_status(request.id, RequestStatus::Unrequested)
+                                    .await
+                                {
+                                    warn!(
+                                        error = ?reset_err,
+                                        "Failed to reset shed request to Unrequested"
+                                    );
+                                }
+                                continue;
+                            }
                             // Now safe to retry as original task is cleaned up
                             match self
                                 .proof_requester
@@ -1845,5 +1888,35 @@ where
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod admission_shed_tests {
+    use super::is_admission_shed_error;
+
+    #[test]
+    fn detects_self_hosted_admission_shed_only() {
+        // A self-hosted gateway shed carries the marker in the Status message +
+        // metadata (which surface in the error's debug rendering).
+        let shed = anyhow::anyhow!(
+            "status: Unavailable, message: \"x-sp1-admission-shed: self-hosted range proof pool at capacity; retry shortly\""
+        );
+        assert!(is_admission_shed_error(&shed));
+
+        // The Succinct network never emits this marker — must NOT be treated as
+        // a shed (its path stays unchanged: genuine failure handling).
+        let succinct_unavailable = anyhow::anyhow!(
+            "status: Unavailable, message: \"succinct network temporarily unavailable\""
+        );
+        assert!(!is_admission_shed_error(&succinct_unavailable));
+
+        // A genuine proof/range failure is not a shed either.
+        let real_failure = anyhow::anyhow!("proof generation failed: execution unexecutable");
+        assert!(!is_admission_shed_error(&real_failure));
+
+        // The marker is detected even through anyhow context wrapping.
+        let wrapped = shed.context("make_proof_request failed");
+        assert!(is_admission_shed_error(&wrapped));
     }
 }
