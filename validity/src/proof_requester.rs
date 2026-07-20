@@ -597,9 +597,21 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
                     witnessgen_timeout = self.witnessgen_timeout,
                     "Witness generation timed out; resetting to Unrequested for retry (no bisection)"
                 );
-                self.db_client
+                // Do NOT use `?` here: if the reset write fails we must still return Ok so the task
+                // completes cleanly. The request then stays in WitnessGeneration and the orphan
+                // reaper (set_orphaned_tasks_to_failed) marks it Failed WITHOUT bisecting, and
+                // add_new_ranges rebuilds the same range — so a DB blip never triggers bisection.
+                if let Err(reset_err) = self
+                    .db_client
                     .update_request_status(request.id, RequestStatus::Unrequested)
-                    .await?;
+                    .await
+                {
+                    warn!(
+                        request_id = request.id,
+                        error = ?reset_err,
+                        "Failed to reset timed-out request to Unrequested; orphan reaper will mark it Failed and it will be rebuilt"
+                    );
+                }
                 return Ok(());
             }
         };

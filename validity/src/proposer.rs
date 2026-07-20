@@ -1083,6 +1083,13 @@ where
         }
 
         if let Some(request) = self.get_next_unrequested_proof().await? {
+            // Guard: a request can be Unrequested yet still have a finished-but-not-yet-reaped task
+            // in the map (e.g. one a witnessgen timeout just reset to Unrequested). Skip it this
+            // cycle so we never spawn a duplicate task or overwrite its map entry —
+            // handle_ongoing_tasks reaps it next iteration and it is then picked up cleanly.
+            if self.tasks.lock().await.contains_key(&request.id) {
+                return Ok(());
+            }
             info!(
                 request_id = request.id,
                 request_type = ?request.req_type,
