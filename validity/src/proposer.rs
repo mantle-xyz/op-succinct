@@ -61,18 +61,32 @@ fn is_admission_shed_error(e: &anyhow::Error) -> bool {
 
 /// Whether a failed proof-request task failed because the prover backend was
 /// unreachable / transiently unavailable (a transport or connectivity fault)
-/// rather than because the proof itself failed. gRPC defines `UNAVAILABLE` as a
-/// retryable transient condition, and a dead backend surfaces as
-/// `status: Unavailable, message: "tcp connect error"` (e.g. the self-hosted
-/// network-gateway is down, or the router reports both backends unavailable).
+/// rather than because the proof itself failed. gRPC maps every transport /
+/// connectivity fault — a dead backend, a reset connection, a DNS failure, a
+/// "tcp connect error", or the router reporting all backends unavailable — to
+/// `UNAVAILABLE`, which is a retryable transient condition.
 ///
 /// Such a failure must be retried as-is, NOT marked Failed: marking it Failed
 /// feeds range bisection, which needlessly fragments a range that is perfectly
 /// fine — the backend was simply unreachable. A range only needs bisecting when
-/// the proof fails *deterministically* (execution unexecutable / too big),
-/// which surfaces as a different error, never as gRPC `UNAVAILABLE`. This holds
-/// for both the self-hosted and Succinct paths.
+/// the proof fails *deterministically* (execution unexecutable / too big), which
+/// surfaces as a different, NON-transport error — the sp1-sdk `network::Error`
+/// enum, never a `tonic::Status` — so it is not matched here. This holds for both
+/// the self-hosted and Succinct paths.
+///
+/// Primary signal is the TYPED gRPC code: the sp1-sdk surfaces RPC failures as an
+/// `anyhow::Error` carrying a downcastable `tonic::Status` (its own `retry.rs`
+/// classifies the identical way), so `code() == Unavailable` catches every
+/// transport fault robustly, is immune to `Status` Display-format drift across
+/// tonic versions, and can't be tripped by an unrelated error that merely
+/// mentions the text. The string fallback runs only when the error is NOT a
+/// downcastable `Status` of our tonic version (a future SDK tonic bump that
+/// de-unifies the type, or a pre-`Status` connect failure), so a plain
+/// "tcp connect error" still never bisects.
 fn is_transient_transport_error(e: &anyhow::Error) -> bool {
+    if let Some(status) = e.downcast_ref::<tonic::Status>() {
+        return status.code() == tonic::Code::Unavailable;
+    }
     let rendered = format!("{e:?}");
     rendered.contains("status: Unavailable") ||
         rendered.contains("tcp connect error") ||
@@ -2009,7 +2023,49 @@ mod admission_shed_tests {
     }
 
     #[test]
+    fn typed_status_code_is_the_primary_transport_signal() {
+        // A REAL tonic::Status — the type the sp1-sdk actually produces and
+        // carries in the anyhow error — is classified by its typed CODE, not its
+        // text, so it is robust to Display drift and to incidental substrings.
+        let unavailable: anyhow::Error = tonic::Status::unavailable("backend down").into();
+        assert!(
+            is_transient_transport_error(&unavailable),
+            "a real UNAVAILABLE Status must be transient (no bisect)"
+        );
+
+        // The router "all backends down" shed carries NO tcp text; the typed code
+        // still classifies it transient — exactly the case a string net would miss
+        // if the Status Display format ever drifts across tonic versions.
+        let cbs_open: anyhow::Error =
+            tonic::Status::unavailable("all backends unavailable; both circuit breakers open")
+                .into();
+        assert!(is_transient_transport_error(&cbs_open));
+
+        // A non-Unavailable Status is NOT transport-class and must still bisect
+        // (Internal stands in for a genuine backend/proof fault). This also proves
+        // the typed path can't be tripped by unrelated text.
+        let internal: anyhow::Error =
+            tonic::Status::internal("proof failed: tcp connect error mentioned in message").into();
+        assert!(
+            !is_transient_transport_error(&internal),
+            "a non-Unavailable Status must not be treated as transient"
+        );
+
+        // Typed detection survives anyhow context wrapping (downcast walks the chain).
+        let wrapped = anyhow::Error::from(tonic::Status::unavailable("x"))
+            .context("request_range_proof failed");
+        assert!(is_transient_transport_error(&wrapped));
+
+        // A deterministic, non-Status error (no downcastable Status, no tcp text)
+        // is not transport-class → bisect.
+        let deterministic = anyhow::anyhow!("execution unexecutable: range too large");
+        assert!(!is_transient_transport_error(&deterministic));
+    }
+
+    #[test]
     fn detects_transient_transport_errors() {
+        // These use hand-written strings (NOT real `tonic::Status`), so they
+        // exercise the STRING FALLBACK path — the typed path is covered above.
         // The production symptom: the network-gateway is down, so the router (or
         // the SDK) surfaces a gRPC UNAVAILABLE with a tcp connect error. This
         // must be treated as retryable-without-bisection.
