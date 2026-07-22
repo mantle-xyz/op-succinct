@@ -10,12 +10,15 @@ use alloy_signer::Signer as AlloySigner;
 use alloy_signer_gcp::{
     // [MANTLE] Use the gcloud_sdk version re-exported by alloy_signer_gcp 2.x so the
     // GoogleApiClient type used to construct GcpSigner matches what GcpSigner::new expects.
-    // The workspace's gcloud-sdk = "0.27" pulls a different version that produces incompatible types.
+    // The workspace's gcloud-sdk = "0.27" pulls a different version that produces incompatible
+    // types.
     gcloud_sdk::{
         google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient,
         GoogleApi, TokenSourceType, GCP_DEFAULT_SCOPES,
     },
-    GcpKeyRingRef, GcpSigner, KeySpecifier,
+    GcpKeyRingRef,
+    GcpSigner,
+    KeySpecifier,
 };
 use alloy_signer_local::PrivateKeySigner;
 use alloy_transport_http::reqwest::Url;
@@ -60,7 +63,8 @@ impl Signer {
     pub async fn from_env() -> Result<Self> {
         // [MANTLE compat] Existing Mantle deployments configure GCP KMS via two env vars:
         //   HSM_API_NAME      — full GCP resource path
-        //                       projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>[/cryptoKeyVersions/<V>]
+        //
+        // projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>[/cryptoKeyVersions/<V>]
         //   HSM_CREDENTIALS   — hex-encoded JSON service account key
         // Production posture forbids writing service-account JSON to disk, so this path
         // pipes the decoded JSON straight into gcloud-sdk's TokenSourceType::Json — the
@@ -265,10 +269,10 @@ fn parse_gcp_key_resource_path(s: &str) -> Result<GcpKeyPath> {
     if parts.len() != 8 && parts.len() != 10 {
         return Err(invalid());
     }
-    if parts[0] != "projects"
-        || parts[2] != "locations"
-        || parts[4] != "keyRings"
-        || parts[6] != "cryptoKeys"
+    if parts[0] != "projects" ||
+        parts[2] != "locations" ||
+        parts[4] != "keyRings" ||
+        parts[6] != "cryptoKeys"
     {
         return Err(invalid());
     }
