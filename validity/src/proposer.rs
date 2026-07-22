@@ -59,6 +59,26 @@ fn is_admission_shed_error(e: &anyhow::Error) -> bool {
     format!("{e:?}").contains(ADMISSION_SHED_MARKER)
 }
 
+/// Whether a failed proof-request task failed because the prover backend was
+/// unreachable / transiently unavailable (a transport or connectivity fault)
+/// rather than because the proof itself failed. gRPC defines `UNAVAILABLE` as a
+/// retryable transient condition, and a dead backend surfaces as
+/// `status: Unavailable, message: "tcp connect error"` (e.g. the self-hosted
+/// network-gateway is down, or the router reports both backends unavailable).
+///
+/// Such a failure must be retried as-is, NOT marked Failed: marking it Failed
+/// feeds range bisection, which needlessly fragments a range that is perfectly
+/// fine — the backend was simply unreachable. A range only needs bisecting when
+/// the proof fails *deterministically* (execution unexecutable / too big),
+/// which surfaces as a different error, never as gRPC `UNAVAILABLE`. This holds
+/// for both the self-hosted and Succinct paths.
+fn is_transient_transport_error(e: &anyhow::Error) -> bool {
+    let rendered = format!("{e:?}");
+    rendered.contains("status: Unavailable") ||
+        rendered.contains("tcp connect error") ||
+        rendered.contains("error trying to connect")
+}
+
 /// Configuration for the driver.
 pub struct DriverConfig {
     pub network_prover: Option<Arc<NetworkProver>>,
@@ -1522,18 +1542,28 @@ where
                                 error = ?e,
                                 "Task failed with error"
                             );
-                            // A self-hosted admission shed means the prover pool
-                            // was momentarily full — the request never reached a
-                            // backend. Retry the SAME range next loop instead of
-                            // marking it Failed, which would count toward range
-                            // bisection and fragment a range that is fine. Only
-                            // the self-hosted gateway emits this marker; Succinct
-                            // never does, so its path is unchanged.
-                            if is_admission_shed_error(&e) {
+                            // Some failures must NOT bisect the range: a
+                            // self-hosted admission shed (prover pool momentarily
+                            // full) and a transient transport failure (the
+                            // backend was unreachable — e.g. the gateway is down,
+                            // gRPC `Unavailable` / "tcp connect error"). In both
+                            // cases the request never produced a proof, so the
+                            // range is fine; marking it Failed would feed range
+                            // bisection and needlessly fragment it. Reset it to
+                            // Unrequested and retry the SAME range next loop.
+                            let no_bisect_reason = if is_admission_shed_error(&e) {
+                                Some("self-hosted admission shed (prover pool full)")
+                            } else if is_transient_transport_error(&e) {
+                                Some("transient transport failure (backend unreachable)")
+                            } else {
+                                None
+                            };
+                            if let Some(reason) = no_bisect_reason {
                                 warn!(
                                     request_id = request.id,
                                     request_type = ?request.req_type,
-                                    "self-hosted admission shed; resetting to Unrequested for retry (no bisection)"
+                                    reason,
+                                    "resetting to Unrequested for retry (no bisection)"
                                 );
                                 if let Err(reset_err) = self
                                     .driver_config
@@ -1543,7 +1573,7 @@ where
                                 {
                                     warn!(
                                         error = ?reset_err,
-                                        "Failed to reset shed request to Unrequested"
+                                        "Failed to reset request to Unrequested"
                                     );
                                 }
                                 continue;
@@ -1951,7 +1981,7 @@ mod contiguous_block_tests {
 
 #[cfg(test)]
 mod admission_shed_tests {
-    use super::is_admission_shed_error;
+    use super::{is_admission_shed_error, is_transient_transport_error};
 
     #[test]
     fn detects_self_hosted_admission_shed_only() {
@@ -1976,5 +2006,44 @@ mod admission_shed_tests {
         // The marker is detected even through anyhow context wrapping.
         let wrapped = shed.context("make_proof_request failed");
         assert!(is_admission_shed_error(&wrapped));
+    }
+
+    #[test]
+    fn detects_transient_transport_errors() {
+        // The production symptom: the network-gateway is down, so the router (or
+        // the SDK) surfaces a gRPC UNAVAILABLE with a tcp connect error. This
+        // must be treated as retryable-without-bisection.
+        let gateway_down =
+            anyhow::anyhow!("status: Unavailable, message: \"tcp connect error\", details: []");
+        assert!(is_transient_transport_error(&gateway_down));
+
+        // A Succinct-side transient unavailable is also transport-class: retry,
+        // don't bisect (the range is fine, the backend was momentarily down).
+        let succinct_unavailable = anyhow::anyhow!(
+            "status: Unavailable, message: \"succinct network temporarily unavailable\""
+        );
+        assert!(is_transient_transport_error(&succinct_unavailable));
+
+        // Lower-level connect failures (before a gRPC status is formed).
+        let connect_err =
+            anyhow::anyhow!("error trying to connect: tcp connect error: Connection refused");
+        assert!(is_transient_transport_error(&connect_err));
+
+        // Detected through anyhow context wrapping too.
+        let wrapped = gateway_down.context("make_proof_request failed");
+        assert!(is_transient_transport_error(&wrapped));
+
+        // A genuine deterministic proof failure is NOT transport-class — it must
+        // still bisect the range.
+        let unexecutable = anyhow::anyhow!("proof generation failed: execution unexecutable");
+        assert!(!is_transient_transport_error(&unexecutable));
+
+        // An admission shed carries UNAVAILABLE, so it is also transport-class —
+        // the handler checks the shed predicate first for a distinct log, but
+        // either way the range is not bisected.
+        let shed = anyhow::anyhow!(
+            "status: Unavailable, message: \"x-sp1-admission-shed: pool at capacity\""
+        );
+        assert!(is_transient_transport_error(&shed));
     }
 }
