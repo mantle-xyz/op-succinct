@@ -31,6 +31,11 @@ op-succinct-signer-utils.workspace = true
 # sp1
 sp1-sdk.workspace = true
 sp1-cluster-utils.workspace = true
+# [MANTLE] Pinned to the tonic the pinned sp1-sdk uses (0.12.x) so downcasting an
+# SDK RPC error to `tonic::Status` resolves the SAME type the SDK produced — a
+# version mismatch would silently make the downcast return None. Only the core
+# `Status`/`Code` types are needed, so no transport/codegen features.
+tonic = { version = "0.12", default-features = false }
 
 # alloy
 alloy-eips.workspace = true

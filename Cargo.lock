@@ -7005,6 +7005,7 @@ dependencies = [
  "strum_macros",
  "tikv-jemallocator",
  "tokio",
+ "tonic 0.12.3",
  "tracing",
 ]
 
