@@ -37,6 +37,11 @@ jobs:
           - 5432:5432
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      # This workspace depends on private git repos. Without this, libgit2 cannot use the
+      # credentials actions/checkout configures, `cargo metadata` fails to resolve them, and
+      # sqlx-cli reports the unhelpful "Issue parsing `cargo metadata` output". lint.yml already
+      # sets this for the same reason.
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v3
       
@@ -58,6 +63,11 @@ jobs:
 
       - name: Apply migrations
         run: cd validity && sqlx migrate run
+
+      # sqlx-cli swallows the real error behind "Issue parsing `cargo metadata` output", so run it
+      # directly first: if dependency resolution is what broke, the failure is legible here.
+      - name: Resolve workspace metadata
+        run: cargo metadata --format-version 1 > /dev/null
 
       - name: Verify SQLx query files
         run: cd validity && cargo sqlx prepare --check
