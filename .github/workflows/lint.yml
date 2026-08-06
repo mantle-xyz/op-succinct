@@ -83,11 +83,13 @@ jobs:
         with:
           version: nightly
       
-      - name: Run cargo check
+      # Ordered cheapest-first: fmt needs no dependency resolution, the tonic check needs
+      # resolution but no compilation, and only then do we pay for check and clippy.
+      - name: Run cargo fmt
         uses: actions-rs/cargo@v1
         with:
-          command: check
-          args: --all-targets --all-features --tests
+          command: fmt
+          args: --all -- --check
 
       - name: Check tonic version is unified with sp1-sdk
         run: |
@@ -106,11 +108,11 @@ jobs:
           fi
           echo "tonic version check passed"
 
-      - name: Run cargo fmt
+      - name: Run cargo check
         uses: actions-rs/cargo@v1
         with:
-          command: fmt
-          args: --all -- --check
+          command: check
+          args: --all-targets --all-features --tests
 
       - name: Run cargo clippy
         uses: actions-rs/cargo@v1

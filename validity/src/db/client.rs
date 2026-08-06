@@ -296,6 +296,15 @@ impl DriverDBClient {
 
     /// Fetch the checkpointed block hash and number for an aggregation request with the same start
     /// block, end block, and commitment config.
+    ///
+    /// Ordered newest-first because the same `(start_block, end_block)` can accumulate several
+    /// failed rows: an aggregation the chain reverts is failed and rebuilt, and once range proofs
+    /// have caught up to the finalized head the end block stops moving, so every subsequent
+    /// attempt lands on the same pair. `LIMIT 1` without an `ORDER BY` would then return an
+    /// arbitrary row — whichever the plan happens to reach first — and reusing the checkpoint from
+    /// the FIRST attempt can hand back an L1 block older than some range proof's `l1Head`, which
+    /// the aggregation guest cannot walk back to. The caller's hash check does not catch that: it
+    /// detects a checkpoint that was reorged out, not one that is merely too old.
     pub async fn fetch_failed_agg_request_with_checkpointed_block_hash(
         &self,
         start_block: i64,
@@ -305,7 +314,7 @@ impl DriverDBClient {
         l2_chain_id: i64,
     ) -> Result<Option<(Vec<u8>, i64)>, Error> {
         let result = sqlx::query!(
-            "SELECT checkpointed_l1_block_hash, checkpointed_l1_block_number FROM requests WHERE range_vkey_commitment = $1 AND rollup_config_hash = $2 AND aggregation_vkey_hash = $3 AND req_type = $4 AND start_block = $5 AND end_block = $6 AND status = $7 AND checkpointed_l1_block_hash IS NOT NULL AND checkpointed_l1_block_number IS NOT NULL AND l1_chain_id = $8 AND l2_chain_id = $9 LIMIT 1",
+            "SELECT checkpointed_l1_block_hash, checkpointed_l1_block_number FROM requests WHERE range_vkey_commitment = $1 AND rollup_config_hash = $2 AND aggregation_vkey_hash = $3 AND req_type = $4 AND start_block = $5 AND end_block = $6 AND status = $7 AND checkpointed_l1_block_hash IS NOT NULL AND checkpointed_l1_block_number IS NOT NULL AND l1_chain_id = $8 AND l2_chain_id = $9 ORDER BY id DESC LIMIT 1",
             &commitment.range_vkey_commitment[..],
             &commitment.rollup_config_hash[..],
             &commitment.agg_vkey_hash[..],

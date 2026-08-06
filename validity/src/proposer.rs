@@ -2103,13 +2103,9 @@ mod execution_revert_tests {
 
     #[test]
     fn is_case_insensitive() {
-        // Capitalisation varies by client, and `relay_aggregation_proof` is not the only place in
-        // this file that builds a "... transaction reverted" message. Matching case-sensitively
-        // would make recognition depend on which component happened to phrase it.
+        // Capitalisation varies by client, so recognition must not depend on which one answered.
         assert!(is_execution_revert(&anyhow::anyhow!("Execution Reverted")));
-        assert!(is_execution_revert(&anyhow::anyhow!(
-            "Checkpoint block transaction reverted: <receipt>"
-        )));
+        assert!(is_execution_revert(&anyhow::anyhow!("Transaction Reverted: <receipt>")));
     }
 
     #[test]
