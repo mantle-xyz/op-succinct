@@ -17,7 +17,14 @@ concurrency:
 jobs:
   sqlx-check:
     name: Verify SQLx queries
-    runs-on: ubuntu-latest
+    # Self-hosted, like every other job here: this workspace depends on private git repos, and
+    # GitHub-hosted runners have no credentials for them — `cargo metadata` cannot even resolve
+    # the dependency graph there, let alone build.
+    runs-on:
+      - runs-on
+      - runner=8cpu-linux-x64
+      - run-id=${{ github.run_id }}
+      - spot=false
     # `cargo sqlx prepare --check` re-describes every query against a live server and diffs the
     # result against .sqlx, so it needs a database with the migrations applied. Without one the
     # step fails before it checks anything ("`--database-url` or `DATABASE_URL` must be set"),
