@@ -18,6 +18,25 @@ jobs:
   sqlx-check:
     name: Verify SQLx queries
     runs-on: ubuntu-latest
+    # `cargo sqlx prepare --check` re-describes every query against a live server and diffs the
+    # result against .sqlx, so it needs a database with the migrations applied. Without one the
+    # step fails before it checks anything ("`--database-url` or `DATABASE_URL` must be set"),
+    # which is how this job came to fail on every run since 2026-07-20 — the check was never
+    # actually verifying the cache.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v3
       
@@ -30,8 +49,15 @@ jobs:
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
+      # Pinned to ~0.8 on two counts: sqlx-cli 0.9.0 raised its MSRV to 1.94, above the
+      # nightly-2025-09-15 that rust-toolchain.toml pins for the SP1 zkVM build; and the cache
+      # format has to match the sqlx the workspace compiles against (0.8.x), or a correct cache
+      # reads as stale. Drop the pin only when both move together.
       - name: Install SQLx CLI
-        run: cargo install sqlx-cli --no-default-features --features native-tls,postgres
-      
+        run: cargo install sqlx-cli --version '~0.8' --no-default-features --features native-tls,postgres
+
+      - name: Apply migrations
+        run: cd validity && sqlx migrate run
+
       - name: Verify SQLx query files
         run: cd validity && cargo sqlx prepare --check
