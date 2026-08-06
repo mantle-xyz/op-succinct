@@ -104,6 +104,36 @@ pub struct DriverConfig {
 /// Type alias for a map of task IDs to their join handles and associated requests
 pub type TaskMap = HashMap<i64, (tokio::task::JoinHandle<Result<()>>, OPSuccinctRequest)>;
 
+/// Whether relaying failed because the chain rejected the proof, as opposed to the transaction
+/// never being delivered.
+///
+/// A revert is a verdict on the proof itself: the same bytes will be rejected on every
+/// resubmission, so the aggregation has to be regenerated rather than retried. Delivery failures
+/// (transport, timeout, nonce) say nothing about the proof and are left to the normal retry — a
+/// flaky RPC must not cost a full aggregation proof.
+///
+/// Matched on text because neither source has a stable typed form to match on: a node rejecting
+/// the transaction up front returns a JSON-RPC error, and the on-chain case is the message
+/// `relay_aggregation_proof` builds itself when `receipt.status()` is false.
+///
+/// EIP-1474 fixes the error CODE at 3 for an execution error; it does NOT fix the message text,
+/// which clients word differently (`execution reverted`, the same with an appended reason, or
+/// their own phrasing and capitalisation). Matching the code as well as the common wording, and
+/// matching case-insensitively, keeps a client we have not seen from going unrecognised — and
+/// failing to recognise a revert is what leaves the proof stuck forever, whereas over-matching
+/// only costs one regenerated proof.
+///
+/// Two details are load-bearing. The trailing colon on the code: a bare `error code 3` also
+/// prefix-matches `error code 32000`, geth's generic server error, which is a delivery failure and
+/// must not trigger regeneration. And the code match is deliberately broader than "revert" —
+/// EIP-1474 puts every execution error under 3 — which is the right side to err on here.
+fn is_execution_revert(e: &anyhow::Error) -> bool {
+    let rendered = format!("{e:?}").to_lowercase();
+    rendered.contains("execution reverted") ||
+        rendered.contains("transaction reverted") ||
+        rendered.contains("error code 3:")
+}
+
 pub struct Proposer<P, H: OPSuccinctHost>
 where
     P: Provider + 'static,
@@ -1350,6 +1380,47 @@ where
             Ok(transaction_hash) => transaction_hash,
             Err(e) => {
                 ValidityGauge::RelayAggProofErrorCount.increment(1.0);
+
+                // A revert condemns the proof, so fail it immediately rather than resubmitting
+                // bytes the chain has already rejected. Without this the request stays `Complete`
+                // forever: `submit_agg_proofs` resubmits it every loop, every attempt reverts, and
+                // because it still counts toward `fetch_active_agg_proofs_count`,
+                // `create_aggregation_proofs` never builds a replacement — the L2OO stops
+                // advancing until someone edits the row by hand. Failing it drops it out of that
+                // count so the next loop generates a fresh aggregation over the same range.
+                //
+                // This covers the causes without having to tell them apart: a guest that halted
+                // abnormally (`InvalidExitCode()`), an L1 head reorged out from under the
+                // checkpoint, a config the contract no longer agrees with — all of them present
+                // as a revert, and all of them are fixed by regenerating rather than retrying.
+                if is_execution_revert(&e) {
+                    warn!(
+                        request_id = completed_agg_proof.id,
+                        start_block = completed_agg_proof.start_block,
+                        end_block = completed_agg_proof.end_block,
+                        error = ?e,
+                        "Aggregation proof was rejected on chain; failing it so a new one is generated"
+                    );
+                    // Do not propagate a DB error from here: the caller logs whatever this
+                    // function returns, and returning the DB error would put that in front of the
+                    // revert that actually explains the failure. A failed transition just means
+                    // the next loop resubmits and reverts again, which is recoverable; losing the
+                    // revert from the logs is what makes an incident take a day to diagnose.
+                    if let Err(db_err) = self
+                        .driver_config
+                        .driver_db_client
+                        .update_request_status(completed_agg_proof.id, RequestStatus::Failed)
+                        .await
+                    {
+                        warn!(
+                            request_id = completed_agg_proof.id,
+                            error = ?db_err,
+                            "Failed to mark the reverted aggregation proof as Failed; it will be \
+                             resubmitted and revert again until this transition succeeds"
+                        );
+                    }
+                }
+
                 return Err(e);
             }
         };
@@ -1990,6 +2061,77 @@ mod contiguous_block_tests {
     fn overlap_is_treated_as_a_gap() {
         // Overlapping (not exactly adjacent) ranges break contiguity: 200 != 250.
         assert_eq!(highest_proven_contiguous_block(&[(100, 250), (200, 300)]), Some(250));
+    }
+}
+
+#[cfg(test)]
+mod execution_revert_tests {
+    use super::is_execution_revert;
+
+    #[test]
+    fn detects_a_node_rejecting_the_transaction_up_front() {
+        // The shape observed on QA3: the node simulates the call, sees it revert, and returns a
+        // JSON-RPC error. `data` is the verifier's error selector — here InvalidExitCode().
+        let rejected = anyhow::anyhow!(
+            "server returned an error response: error code 3: execution reverted, data: \"0x1fcf9177\""
+        );
+        assert!(is_execution_revert(&rejected));
+    }
+
+    #[test]
+    fn detects_a_transaction_that_reverted_on_chain() {
+        // The message `relay_aggregation_proof` builds itself when `receipt.status()` is false.
+        let reverted = anyhow::anyhow!("Transaction reverted: {:?}", "<receipt>");
+        assert!(is_execution_revert(&reverted));
+    }
+
+    #[test]
+    fn detects_a_revert_through_context_wrapping() {
+        let wrapped = anyhow::anyhow!("error code 3: execution reverted")
+            .context("Failed to send transaction");
+        assert!(is_execution_revert(&wrapped));
+    }
+
+    #[test]
+    fn detects_a_revert_worded_by_another_client() {
+        // EIP-1474 fixes the code, not the text. A client we have not seen must still be
+        // recognised — an unrecognised revert is exactly the stuck-forever case this prevents.
+        let other_wording =
+            anyhow::anyhow!("server returned an error response: error code 3: VM execution error");
+        assert!(is_execution_revert(&other_wording));
+    }
+
+    #[test]
+    fn is_case_insensitive() {
+        // Capitalisation varies by client, and `relay_aggregation_proof` is not the only place in
+        // this file that builds a "... transaction reverted" message. Matching case-sensitively
+        // would make recognition depend on which component happened to phrase it.
+        assert!(is_execution_revert(&anyhow::anyhow!("Execution Reverted")));
+        assert!(is_execution_revert(&anyhow::anyhow!(
+            "Checkpoint block transaction reverted: <receipt>"
+        )));
+    }
+
+    #[test]
+    fn does_not_prefix_match_a_generic_server_error() {
+        // `error code 32000` starts with `error code 3`. It is geth's generic server error — a
+        // delivery failure — and regenerating on it would burn a proof for nothing. This is why
+        // the code match carries a trailing colon.
+        let generic = anyhow::anyhow!("server returned an error response: error code 32000: oops");
+        assert!(!is_execution_revert(&generic));
+    }
+
+    #[test]
+    fn leaves_delivery_failures_alone() {
+        // These say nothing about the proof — regenerating on them would burn an aggregation
+        // proof every time the RPC hiccups.
+        assert!(!is_execution_revert(&anyhow::anyhow!("tcp connect error")));
+        assert!(!is_execution_revert(&anyhow::anyhow!("error trying to connect: dns error")));
+        assert!(!is_execution_revert(&anyhow::anyhow!("nonce too low")));
+        assert!(!is_execution_revert(&anyhow::anyhow!(
+            "timed out waiting for transaction receipt"
+        )));
+        assert!(!is_execution_revert(&anyhow::anyhow!("insufficient funds for gas * price")));
     }
 }
 

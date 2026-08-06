@@ -89,6 +89,23 @@ jobs:
           command: check
           args: --all-targets --all-features --tests
 
+      - name: Check tonic version is unified with sp1-sdk
+        run: |
+          # validity classifies transport faults by downcasting the sp1-sdk's error to
+          # `tonic::Status`. If the two crates resolve DIFFERENT tonic versions the downcast
+          # silently returns None and the classifier degrades to substring matching — no
+          # compile error, no test failure, just a quiet regression to the fragile behaviour
+          # that typed matching was introduced to remove. Several tonic versions already
+          # coexist in this tree, so guard the one pairing that must stay unified.
+          VALIDITY=$(cargo tree -p op-succinct-validity --depth 1 -e normal | grep -oE 'tonic v[0-9.]+' | head -1)
+          SDK=$(cargo tree -p sp1-sdk --depth 1 -e normal | grep -oE 'tonic v[0-9.]+' | head -1)
+          echo "op-succinct-validity: ${VALIDITY:-<none>} / sp1-sdk: ${SDK:-<none>}"
+          if [ -z "$VALIDITY" ] || [ "$VALIDITY" != "$SDK" ]; then
+            echo "::error::tonic version drift: op-succinct-validity (${VALIDITY:-<none>}) and sp1-sdk (${SDK:-<none>}) must resolve the same tonic, otherwise is_transient_transport_error silently falls back to string matching. Update the tonic pin in validity/Cargo.toml."
+            exit 1
+          fi
+          echo "tonic version check passed"
+
       - name: Run cargo fmt
         uses: actions-rs/cargo@v1
         with:

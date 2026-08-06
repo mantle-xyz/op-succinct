@@ -62,10 +62,10 @@ impl Signer {
 
     pub async fn from_env() -> Result<Self> {
         // [MANTLE compat] Existing Mantle deployments configure GCP KMS via two env vars:
-        //   HSM_API_NAME      — full GCP resource path
-        //
-        // projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>[/cryptoKeyVersions/<V>]
-        //   HSM_CREDENTIALS   — hex-encoded JSON service account key
+        //   HSM_API_NAME     — full GCP resource path:
+        //     projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>
+        //     optionally followed by /cryptoKeyVersions/<V>
+        //   HSM_CREDENTIALS  — hex-encoded JSON service account key
         // Production posture forbids writing service-account JSON to disk, so this path
         // pipes the decoded JSON straight into gcloud-sdk's TokenSourceType::Json — the
         // credential never touches the filesystem.
