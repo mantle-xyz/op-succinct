@@ -313,21 +313,89 @@ mod tests {
         assert_eq!(
             modifiers_on_propose_l2_output(),
             vec!["external", "payable", "whenNotOptimistic"],
-            "the set of modifiers on the validity proposeL2Output changed: `guards_on_the_validity              _path` only scans the function body and `whenNotOptimistic`, so a `require` inside any              other modifier is invisible to the test above — scan the new one too, or classify its              guards"
+            "the modifiers on the validity proposeL2Output changed. `guards_on_the_validity_path` \
+             scans only the function body and `whenNotOptimistic`, so a `require` inside any other \
+             modifier is invisible to the assertion above: scan the new modifier there too, or \
+             classify its guards"
         );
     }
 
     /// Everything between the signature's closing `)` and the opening `{` of the body.
     ///
-    /// Set equality, so ADDING a modifier fails rather than passing unnoticed. That matters
-    /// because [`guards_on_the_validity_path`] can only scan the scopes it is told about: a
-    /// `require` in an unscanned modifier is classified as `RebuildableGuard`, which burns one
-    /// aggregation proof per pass until someone notices.
+    /// Compared as an exact sequence, not a set — reordering `external payable` is legal Solidity
+    /// and would fail this too. That is deliberate: erring toward a false failure is safe here,
+    /// whereas a missed modifier is not. [`guards_on_the_validity_path`] can only scan the scopes
+    /// it is told about, and a `require` in an unscanned one classifies as `RebuildableGuard`,
+    /// which burns one aggregation proof per pass until someone notices.
     fn modifiers_on_propose_l2_output() -> Vec<&'static str> {
         let body = propose_l2_output_body();
         let open = body.find(')').expect("the signature has a closing paren");
         let brace = body.find('{').expect("the function has a body");
         body[open + 1..brace].split_whitespace().collect()
+    }
+
+    /// Custom-error reverts on the validity path, as `(name, has_arguments)`.
+    ///
+    /// [`guards_on_the_validity_path`] can only see `require(cond, "L2OutputOracle: …")`. A guard
+    /// written as `revert SomeGuard();` carries no string at all, so that scan is blind to it —
+    /// and modern Solidity prefers custom errors, which makes this the likelier way the next
+    /// guard arrives.
+    fn custom_error_reverts_on_the_validity_path() -> Vec<(&'static str, bool)> {
+        let mut found: Vec<(&str, bool)> = propose_l2_output_body()
+            .split("revert ")
+            .skip(1)
+            .chain(when_not_optimistic_body().split("revert ").skip(1))
+            .filter_map(|rest| {
+                let open = rest.find('(')?;
+                let close = rest.find(')')?;
+                Some((rest[..open].trim(), !rest[open + 1..close].trim().is_empty()))
+            })
+            .collect();
+
+        found.sort_unstable();
+        found.dedup();
+        found
+    }
+
+    /// Every custom-error guard on the validity path must decode to something other than
+    /// `UnknownRevert`.
+    ///
+    /// Not a hardcoded list: the selector is derived from the contract source and pushed through
+    /// the real classifier, so adding `revert Whatever();` to `proposeL2Output` fails here until
+    /// it is declared in `utils/host/src/contract.rs`. Until it is, such a guard classifies as
+    /// `UnknownRevert` and rebuilds — burning one aggregation proof per pass, forever, against a
+    /// condition no proof can change.
+    #[test]
+    fn every_custom_error_guard_on_the_validity_path_is_classified() {
+        let found = custom_error_reverts_on_the_validity_path();
+        assert!(
+            !found.is_empty(),
+            "the scan found nothing; `revert` is no longer spelled this way"
+        );
+
+        for (name, has_arguments) in found {
+            assert!(
+                !has_arguments,
+                "`revert {name}(…)` takes arguments, so its selector is not keccak(\"{name}()\") \
+                 and this test cannot derive it. Classify it by hand in `classify_revert_data`."
+            );
+
+            let selector: [u8; 4] = alloy_primitives::keccak256(format!("{name}()").as_bytes())
+                [..4]
+                .try_into()
+                .expect("a keccak digest has at least four bytes");
+
+            assert!(
+                !matches!(
+                    classify_revert_data(&selector_only(selector)),
+                    RelayRejection::UnknownRevert { .. }
+                ),
+                "`revert {name}()` is reachable from the validity proposeL2Output but is not \
+                 declared in utils/host/src/contract.rs, so it decodes as UnknownRevert and the \
+                 proposer rebuilds against it every pass. Declare it there and give it a class in \
+                 `classify_revert_data`."
+            );
+        }
     }
 
     #[test]

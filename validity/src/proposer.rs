@@ -65,7 +65,8 @@ const MAX_CONSECUTIVE_POLL_FAILURES: u32 = 3;
 ///
 /// `None` (no completed range proof has a recorded `l1_head_block_number`) falls back to `safe`.
 ///
-/// [UPSTREAM #923] Backported verbatim from succinctlabs/op-succinct#923 (upstream v3.10.0), which
+/// [UPSTREAM #923] Body and signature backported verbatim from succinctlabs/op-succinct#923
+/// (upstream v3.10.0); this doc comment is reworded and drops upstream's `(256 blocks)`. Upstream
 /// replaced `BlockId::latest()` here. That PR's own description records the failure it fixes as
 /// having "Hit 3× on Mantle": the checkpoint head is pinned by hash while the guest's header range
 /// is fetched by number, so a tip reorg between the two orphans the checkpoint and the guest
@@ -172,21 +173,30 @@ fn checkpoint_plan(
     }
 }
 
-/// Whether a pass's `submit_agg_proofs` moved the contract's `latestBlockNumber()` forward.
+/// [MANTLE] Whether `create_aggregation_proofs` can trust the contract head it just read.
 ///
-/// [MANTLE] `create_aggregation_proofs` reads that head to decide where the next aggregation
+/// `create_aggregation_proofs` reads `latestBlockNumber()` to decide where the next aggregation
 /// starts, and `fetch_active_agg_proofs_count` deliberately excludes `Relayed` rows (see
-/// `db/client.rs`). So if a relay lands and create then reads a head from an L1 endpoint that is
-/// a few blocks behind, the just-relayed range is neither reflected in the head nor counted as
-/// active, and the pass builds a second aggregation over it — proven, then rejected on relay, and
-/// wasted. Skipping create for one `LOOP_INTERVAL` after a successful relay closes that window.
+/// `db/client.rs` — a proposer restarted against a different contract must not count them). So if
+/// a relay lands and create then reads that head from an L1 endpoint lagging behind our own
+/// transaction, the just-proposed range is neither reflected in the head nor counted as active,
+/// and the pass builds a second aggregation over it: proven, rejected on relay, wasted.
 ///
-/// A rejection is `No`: it does not advance the head, so create must still run — that is what
-/// builds the replacement for the request `handle_relay_rejection` just failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AdvancedContractHead {
-    Yes,
-    No,
+/// A relay that landed this pass proposed `end_block` as `_l2BlockNumber`, so the head is now at
+/// least that. Reading less than it is proof the endpoint is behind, whatever the lag. Comparing
+/// against it therefore closes the window outright, rather than assuming the endpoint catches up
+/// within some interval.
+///
+/// `relayed_end_block` is `None` when nothing was relayed this pass — no aggregation was pending,
+/// one was rejected (a rejection does not move the head, and create is what builds its
+/// replacement), or the transaction was never delivered. In all three, create runs as usual.
+///
+/// Deliberately a per-pass value rather than remembered state: an L1 reorg can drop a proposal
+/// that was already confirmed, and a floor that outlived the pass would keep the proposer building
+/// from a start block the contract never reached, failing every proof against a pre-root that does
+/// not match.
+fn create_should_run(latest_proposed_block_number: i64, relayed_end_block: Option<i64>) -> bool {
+    relayed_end_block.is_none_or(|end_block| latest_proposed_block_number >= end_block)
 }
 
 /// What the L1 node did with a `proposeL2Output` transaction, decided from the send result alone.
@@ -1085,7 +1095,7 @@ where
     /// Only creates an Aggregation proof if there's not an Aggregation proof in progress with the
     /// same start block.
     #[tracing::instrument(name = "proposer.create_aggregation_proofs", skip(self))]
-    pub async fn create_aggregation_proofs(&self) -> Result<()> {
+    pub async fn create_aggregation_proofs(&self, relayed_end_block: Option<i64>) -> Result<()> {
         // Check if there's an Aggregation proof with the same start block AND range verification
         // key commitment AND aggregation vkey. If so, return.
         let latest_proposed_block_number = get_latest_proposed_block_number(
@@ -1093,6 +1103,21 @@ where
             self.driver_config.fetcher.as_ref(),
         )
         .await? as i64;
+
+        // [MANTLE] See `create_should_run`. Warn rather than debug: this means an L1 endpoint is
+        // answering with a head that predates a transaction we have a receipt for, which is worth
+        // knowing about even though the pass recovers on its own.
+        if !create_should_run(latest_proposed_block_number, relayed_end_block) {
+            warn!(
+                head = latest_proposed_block_number,
+                relayed_end_block,
+                "The L1 endpoint reports a head behind the aggregation just relayed; skipping \
+                 creation this pass rather than building a duplicate over an already-proposed \
+                 range. ACTION: none if isolated. If it repeats, the L1 RPC behind L1_RPC is \
+                 lagging or load-balancing across nodes at different heights."
+            );
+            return Ok(());
+        }
 
         // Get all active Aggregation proofs with the same start block, range vkey commitment, and
         // aggregation vkey.
@@ -1562,14 +1587,7 @@ where
 
     /// Relay all completed aggregation proofs to the contract.
     #[tracing::instrument(name = "proposer.submit_agg_proofs", skip(self))]
-    async fn submit_agg_proofs(&self) -> Result<AdvancedContractHead> {
-        // Cleared unconditionally and up front rather than on each exit path. Every early return
-        // below either propagates (`?`) or reports no rejection, so setting it here is what keeps
-        // a stale 1 from outliving the guard that set it — an operator who clears optimistic mode
-        // while the L1 endpoint happens to be down would otherwise keep reading "blocked by a
-        // contract guard" for as long as the endpoint stays down.
-        ValidityGauge::AggProofBlockedByContractGuard.set(0.0);
-
+    async fn submit_agg_proofs(&self) -> Result<Option<i64>> {
         let latest_proposed_block_number = get_latest_proposed_block_number(
             self.contract_config.l2oo_address,
             self.driver_config.fetcher.as_ref(),
@@ -1592,11 +1610,18 @@ where
         // If there are no completed aggregation proofs, do nothing.
         let completed_agg_proof = match completed_agg_proof {
             Some(proof) => proof,
-            None => return Ok(AdvancedContractHead::No),
+            None => {
+                // Nothing was pending, so nothing was refused either.
+                ValidityGauge::AggProofBlockedByContractGuard.set(0.0);
+                return Ok(None);
+            }
         };
 
         let transaction_hash = match self.relay_aggregation_proof(&completed_agg_proof).await {
-            Ok(RelayOutcome::Relayed(transaction_hash)) => transaction_hash,
+            Ok(RelayOutcome::Relayed(transaction_hash)) => {
+                ValidityGauge::AggProofBlockedByContractGuard.set(0.0);
+                transaction_hash
+            }
             Ok(RelayOutcome::Rejected(rejection)) => {
                 ValidityGauge::RelayAggProofErrorCount.increment(1.0);
                 self.handle_relay_rejection(&completed_agg_proof, rejection).await;
@@ -1608,13 +1633,15 @@ where
                 //
                 // A rejection does not advance the contract head, so the caller must still create
                 // this pass — that is what builds the replacement `handle_relay_rejection` just
-                // made room for.
-                return Ok(AdvancedContractHead::No);
+                // made room for. The gauge is set by `handle_relay_rejection` from the
+                // classification, so it is deliberately not touched here.
+                return Ok(None);
             }
             Err(e) => {
                 // No revert data at all: the transaction was never delivered (nonce, funds, a dead
                 // RPC). That says nothing about the proof, so it keeps the existing retry
-                // behaviour.
+                // behaviour — and nothing was refused by a guard.
+                ValidityGauge::AggProofBlockedByContractGuard.set(0.0);
                 ValidityGauge::RelayAggProofErrorCount.increment(1.0);
                 return Err(e);
             }
@@ -1632,7 +1659,7 @@ where
             )
             .await?;
 
-        Ok(AdvancedContractHead::Yes)
+        Ok(Some(completed_agg_proof.end_block))
     }
 
     /// Log a rejected aggregation and, unless the chain's own state is what refused it, fail the
@@ -2296,8 +2323,8 @@ where
         // `fetch_failed_agg_request_with_checkpointed_block_hash` reads `Failed`. Running submit
         // first is therefore what lets the same pass build the replacement for a rejected
         // aggregation; reverting to create-then-submit costs a full `LOOP_INTERVAL` per rejection.
-        let advanced = match self.submit_agg_proofs().await {
-            Ok(advanced) => advanced,
+        let relayed_end_block = match self.submit_agg_proofs().await {
+            Ok(relayed_end_block) => relayed_end_block,
             Err(e) => {
                 ValidityGauge::TotalErrorCount.increment(1.0);
                 error!(
@@ -2310,21 +2337,19 @@ where
                      the proposer's balance and nonce, and that DGF_ADDRESS is unset on this \
                      contract baseline."
                 );
-                // Nothing was delivered, so the head did not move and create must still run.
-                AdvancedContractHead::No
+                // Either nothing was delivered, or the relay landed but recording it failed —
+                // in which case the row is still `Complete` and `fetch_active_agg_proofs_count`
+                // sees it, so create is safe either way. No floor is claimed.
+                None
             }
         };
 
         // Create aggregation proofs based on the completed range proofs. Checkpoints the block hash
         // associated with the aggregation proof in advance.
         //
-        // [MANTLE] Skipped for one pass after a successful relay — see [`AdvancedContractHead`].
-        if advanced == AdvancedContractHead::Yes {
-            debug!(
-                "Relayed an aggregation this pass; deferring creation for one interval so the \
-                 contract head is read after it has propagated."
-            );
-        } else if let Err(e) = self.create_aggregation_proofs().await {
+        // [MANTLE] Skipped only if the head read inside it is behind a relay this pass just
+        // landed — see [`create_should_run`], which is where that comparison happens.
+        if let Err(e) = self.create_aggregation_proofs(relayed_end_block).await {
             ValidityGauge::TotalErrorCount.increment(1.0);
             error!(
                 error = ?e,
@@ -2580,12 +2605,18 @@ mod send_outcome_tests {
         assert_ne!(tx_hash, B256::ZERO);
     }
 
-    /// The mined-and-reverted `warn!` is the only place these two numbers reach an operator, and
-    /// `gas_used == gas_limit` is the evidence for out of gas — the one cause the replay cannot
-    /// reproduce, since the cloned request predates the signer's gas filling. A receipt that
-    /// silently defaulted them would make that log say nothing.
+    /// Two fields alloy would otherwise default silently, both load-bearing.
+    ///
+    /// `block_number` is not just log material: `classify_by_replay` replays at
+    /// `receipt.block_number.map_or(BlockId::latest(), BlockId::number)`, so a defaulted `None`
+    /// moves the replay off the mined block and onto the tip, attributing the rejection to
+    /// whatever state happens to be current. `gas_used` and `effective_gas_price` are what the
+    /// mined-and-reverted `warn!` reports; out of gas is the one cause the replay cannot
+    /// reproduce (the cloned request predates the signer's gas filling), and `gas_used` is half
+    /// of that evidence — the receipt carries no `gas_limit`, so an operator still needs
+    /// `cast tx <hash>` for the other half.
     #[test]
-    fn a_reverted_receipt_carries_the_fields_the_out_of_gas_diagnosis_needs() {
+    fn a_reverted_receipt_carries_the_fields_that_are_load_bearing_downstream() {
         let receipt = receipt("0x0");
         assert_eq!(receipt.block_number, Some(0x10f2c));
         assert_eq!(receipt.effective_gas_price, 0x3b9aca00);
@@ -2673,6 +2704,43 @@ mod send_outcome_tests {
             replay_verdict(Err(elapsed)),
             RelayRejection::NoVerdict { reason: NoVerdictReason::ReplayTimedOut }
         );
+    }
+}
+
+/// [MANTLE] Tests for the per-pass floor that keeps a lagging L1 read endpoint from causing a
+/// duplicate aggregation. See [`create_should_run`].
+#[cfg(test)]
+mod create_should_run_tests {
+    use super::create_should_run;
+
+    /// Inverted, this is a silent permanent stall: creation would run ONLY right after a relay,
+    /// but a relay needs an aggregation that only creation produces. Nothing else in the suite
+    /// notices, and nothing in production logs it.
+    #[test]
+    fn creation_runs_whenever_nothing_was_relayed_this_pass() {
+        // No aggregation pending, one rejected, or a transaction never delivered. A rejection in
+        // particular MUST create: `handle_relay_rejection` failed the request earlier in this same
+        // pass precisely so the replacement is built now rather than an interval later.
+        assert!(create_should_run(1_000, None));
+        assert!(create_should_run(0, None));
+    }
+
+    #[test]
+    fn creation_runs_once_the_head_reflects_the_relay() {
+        // Equality is the normal case: `proposeL2Output` passes `end_block` as `_l2BlockNumber`,
+        // so a head that has caught up reads exactly it.
+        assert!(create_should_run(1_000, Some(1_000)));
+        // Ahead of it — another proposer, or our own next relay already mined.
+        assert!(create_should_run(1_001, Some(1_000)));
+    }
+
+    #[test]
+    fn creation_is_skipped_while_the_head_is_behind_the_relay() {
+        // The endpoint is answering with a head that predates a transaction we hold a receipt
+        // for. Building here would duplicate an already-proposed range and waste the proof on the
+        // revert that follows. Any lag is caught, not just one shorter than a loop interval.
+        assert!(!create_should_run(999, Some(1_000)));
+        assert!(!create_should_run(0, Some(1_000)));
     }
 }
 

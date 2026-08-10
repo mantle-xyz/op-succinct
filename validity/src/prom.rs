@@ -105,7 +105,7 @@ pub enum ValidityGauge {
     // have. Nothing will conflict on a sync; keep them. See MANTLE_CHANGES.md §3.9.
     #[strum(
         serialize = "succinct_agg_proof_blocked_by_contract_guard",
-        message = "1 while proposeL2Output is refused by a contract guard no proof can satisfy (optimistic mode, proposer approval, future timestamp, zero output root); needs operator action, not a new proof. Cleared at the top of every submit_agg_proofs pass and set only by a rejection within that pass, so it cannot outlive the guard that set it."
+        message = "1 while proposeL2Output is refused by a contract guard no proof can satisfy (optimistic mode, proposer approval, future timestamp, zero output root); needs operator action, not a new proof. Written on every submit_agg_proofs pass that reaches a verdict — relayed, rejected, or undelivered — so it cannot outlive the guard that set it. A pass that aborts earlier (a dead L1 endpoint fails validate_contract_config first) leaves the previous value, so read it alongside succinct_total_error_count."
     )]
     AggProofBlockedByContractGuard,
     #[strum(
