@@ -31,8 +31,7 @@ impl Default for ZkvmOpEvmFactory {
 }
 
 impl EvmFactory for ZkvmOpEvmFactory {
-    type Evm<DB: Database, I: Inspector<OpEvmContext<DB>>> =
-        OpEvm<DB, I, OpZkvmPrecompiles, OpTx>;
+    type Evm<DB: Database, I: Inspector<OpEvmContext<DB>>> = OpEvm<DB, I, OpZkvmPrecompiles, OpTx>;
     // [MANTLE] alloy_op_evm::OpEvmContext<DB> is Context<BlockEnv, OpTx, CfgEnv<OpSpecId>, DB, ...>
     // — the OpTx newtype is what implements FromTxWithEncoded<OpTxEnvelope> +
     // FromRecoveredTx<OpTxEnvelope> + OpTxEnv that kona-proof's KonaExecutor requires.

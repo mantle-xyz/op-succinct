@@ -590,9 +590,7 @@ impl OPSuccinctDataFetcher {
 
         if !status.is_success() {
             let snippet: String = body_text.chars().take(256).collect();
-            return Err(anyhow::anyhow!(
-                "HTTP {status} calling {method}: {snippet}"
-            ));
+            return Err(anyhow::anyhow!("HTTP {status} calling {method}: {snippet}"));
         }
 
         let response: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| {

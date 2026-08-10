@@ -72,8 +72,8 @@ pub fn revert_data_of_anyhow(err: &anyhow::Error) -> Option<Bytes> {
 ///
 /// Deliberately a list of the *unsatisfiable* ones rather than of all guards: a `require` added
 /// upstream falls through to [`RelayRejection::RebuildableGuard`], which wastes a proof rather than
-/// stalling the head. `guard_list_still_matches_the_contract` fails when the contract's set
-/// changes, so the new one gets classified deliberately instead of by default.
+/// stalling the head. `every_guard_on_the_validity_path_is_classified_exactly_once` fails when the
+/// contract's set changes, so the new one gets classified deliberately instead of by default.
 const UNSATISFIABLE_GUARDS: [&str; 4] = [
     "L2OutputOracle: optimistic mode is enabled",
     "L2OutputOracle: only approved proposers can propose new outputs",
@@ -97,8 +97,22 @@ pub enum NoVerdictReason {
 /// What the chain said when it refused `proposeL2Output`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelayRejection {
-    /// A verdict on the proof bytes: the same bytes will be refused on every resubmission.
+    /// A verdict from the SP1 verifier on the proof bytes: the same bytes will be refused on every
+    /// resubmission.
     ProofRejected {
+        /// The 4-byte error selector, for logs and for `cast 4byte`.
+        selector: [u8; 4],
+        /// Solidity name of the error.
+        name: &'static str,
+    },
+    /// The checkpointed L1 head this aggregation was built against is unusable: the contract holds
+    /// no hash at that block number, or the block is outside the `blockhash` window.
+    ///
+    /// Kept separate from [`Self::ProofRejected`] because the proof bytes are not at fault — the
+    /// same bytes are accepted once a usable checkpoint exists. It still rebuilds, since
+    /// rebuilding is what re-checkpoints; the distinction is what the operator is told to look
+    /// at.
+    CheckpointUnusable {
         /// The 4-byte error selector, for logs and for `cast 4byte`.
         selector: [u8; 4],
         /// Solidity name of the error.
@@ -112,8 +126,11 @@ pub enum RelayRejection {
     /// after an operator raises `submissionInterval` and is fixed by aggregating a wider range.
     /// Also the fallback for any `require` message not in [`UNSATISFIABLE_GUARDS`].
     RebuildableGuard { message: String },
-    /// The contract hit a Solidity `assert` / arithmetic panic. Not something a proof can fix, but
-    /// also not something we can attribute, so it rebuilds.
+    /// The contract hit a Solidity `assert` / arithmetic panic.
+    ///
+    /// Not attributable either way: a panic usually means contract state is inconsistent, but a
+    /// verifier decoding malformed proof bytes can also panic. It rebuilds, on the same "cannot
+    /// prove it is harmless" reasoning as the rest.
     ContractPanic { code: u64 },
     /// Revert data that decoded to none of the known surfaces — most likely the contract or the
     /// verifier was upgraded. Rebuilds, and logs the selector so it can be added here.
@@ -135,6 +152,7 @@ impl RelayRejection {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::ProofRejected { .. } => "proof_rejected",
+            Self::CheckpointUnusable { .. } => "checkpoint_unusable",
             Self::UnsatisfiableGuard { .. } => "unsatisfiable_guard",
             Self::RebuildableGuard { .. } => "rebuildable_guard",
             Self::ContractPanic { .. } => "contract_panic",
@@ -167,7 +185,7 @@ pub fn classify_revert_data(data: &Bytes) -> RelayRejection {
             ContractError::Panic(panic) => {
                 RelayRejection::ContractPanic { code: panic.code.saturating_to() }
             }
-            ContractError::CustomError(err) => RelayRejection::ProofRejected {
+            ContractError::CustomError(err) => RelayRejection::CheckpointUnusable {
                 selector: err.selector(),
                 name: oracle_error_name(&err),
             },
@@ -196,7 +214,9 @@ fn classify_require_message(message: String) -> RelayRejection {
 }
 
 /// Both oracle custom errors mean the checkpointed L1 head is unusable, which a fresh aggregation
-/// re-checkpoints.
+/// re-checkpoints. `L1BlockHashNotCheckpointed` means the contract holds no hash at that number;
+/// `L1BlockHashNotAvailable` can only come from `checkpointBlockHash` itself, so seeing it on the
+/// relay path means the aggregation carried a checkpoint that was never successfully written.
 fn oracle_error_name(err: &OPSuccinctL2OutputOracleErrors) -> &'static str {
     match err {
         OPSuccinctL2OutputOracleErrors::L1BlockHashNotCheckpointed(_) => {
@@ -239,32 +259,63 @@ mod tests {
         selector.to_vec().into()
     }
 
-    #[test]
-    fn guard_list_still_matches_the_contract() {
-        // Turns "these are pinned" into an actual check: a reword upstream fails here instead of
-        // silently reclassifying that guard as rebuildable.
-        for guard in UNSATISFIABLE_GUARDS {
-            assert!(L2OO_SOURCE.contains(guard), "no longer in the contract: {guard}");
-        }
-        assert!(L2OO_SOURCE.contains(REBUILDABLE_GUARD), "no longer in the contract");
-
-        // Scoped to `proposeL2Output`'s own body — the file has ~27 `L2OutputOracle: ` messages
-        // overall, so counting all of them would prove nothing. Four live in the body; the fifth
-        // (optimistic mode) is in the `whenNotOptimistic` modifier.
+    /// The body of `proposeL2Output`, from its signature to the next top-level `function`.
+    ///
+    /// Scoped because the file carries ~27 `L2OutputOracle: ` messages overall — several of the
+    /// guards also appear verbatim in the optimistic-mode overload, so a whole-file search would be
+    /// satisfied by a copy that the validity path never reaches.
+    fn propose_l2_output_body() -> &'static str {
         let start =
             L2OO_SOURCE.find("function proposeL2Output").expect("proposeL2Output still exists");
         let rest = &L2OO_SOURCE[start..];
         let end = rest[1..].find("\n    function ").map_or(rest.len(), |i| i + 1);
-        let body = &rest[..end];
+        &rest[..end]
+    }
+
+    /// Every `L2OutputOracle: …` literal reachable from the validity `proposeL2Output`: the ones in
+    /// its own body plus the one in the `whenNotOptimistic` modifier it applies.
+    fn guards_on_the_validity_path() -> Vec<&'static str> {
+        let mut found: Vec<&str> = propose_l2_output_body()
+            .split('"')
+            .filter(|s| s.starts_with("L2OutputOracle: "))
+            .collect();
+
+        let modifier = L2OO_SOURCE
+            .find("modifier whenNotOptimistic")
+            .expect("whenNotOptimistic modifier still exists");
+        found.extend(
+            L2OO_SOURCE[modifier..]
+                .split('"')
+                .take(2)
+                .filter(|s| s.starts_with("L2OutputOracle: ")),
+        );
+
+        found.sort_unstable();
+        found
+    }
+
+    #[test]
+    fn every_guard_on_the_validity_path_is_classified_exactly_once() {
+        // Set equality, not `contains`. Three weaker forms of this check were all satisfiable by a
+        // broken list: substring matching accepts a message the contract has since EXTENDED with a
+        // suffix; a whole-file search is satisfied by the optimistic-mode overload's copy even
+        // after the validity one is reworded; and counting alone cannot see a member
+        // removed from `UNSATISFIABLE_GUARDS` (which would silently downgrade that guard to
+        // "rebuild", burning an aggregation proof every loop for e.g. optimistic mode).
+        let mut expected: Vec<&str> =
+            UNSATISFIABLE_GUARDS.iter().copied().chain([REBUILDABLE_GUARD]).collect();
+        expected.sort_unstable();
 
         assert_eq!(
-            body.matches("\"L2OutputOracle: ").count(),
-            4,
-            "proposeL2Output gained or lost a require: classify the new one as unsatisfiable or \
-             leave it rebuildable, then update this count"
+            guards_on_the_validity_path(),
+            expected,
+            "every require reachable from proposeL2Output must be classified exactly once: add a \
+             new one to UNSATISFIABLE_GUARDS if no proof can satisfy it, or leave it out to let it \
+             rebuild — and update a reworded one to match the contract verbatim"
         );
+
         assert!(
-            body.contains("whenNotOptimistic"),
+            propose_l2_output_body().contains("whenNotOptimistic"),
             "the optimistic-mode guard is no longer applied to proposeL2Output"
         );
     }
@@ -310,26 +361,46 @@ mod tests {
     }
 
     #[test]
-    fn verdicts_on_the_proof_bytes_are_recognised_by_selector() {
-        // Selectors verified with `cast sig`.
-        let cases: [([u8; 4], &str); 4] = [
+    fn verifier_verdicts_on_the_proof_bytes_are_recognised_by_selector() {
+        // Selectors verified with `cast sig`. These two come from the SP1 verifier and bubble up
+        // through `verifyProof`, so they really are statements about the proof bytes.
+        let cases: [([u8; 4], &str); 2] = [
             ([0x09, 0xbd, 0xe3, 0x39], "InvalidProof"),
             ([0x1f, 0xcf, 0x91, 0x77], "InvalidExitCode"),
-            ([0x22, 0xaa, 0x3a, 0x98], "L1BlockHashNotCheckpointed"),
-            ([0x84, 0xc0, 0x68, 0x64], "L1BlockHashNotAvailable"),
         ];
 
         for (selector, name) in cases {
-            let r = classify_relay_rejection(
-                Some(&selector_only(selector)),
-                NoVerdictReason::ReplayUnreachable,
-            );
+            let r = classify_revert_data(&selector_only(selector));
             assert_eq!(
                 r,
                 RelayRejection::ProofRejected { selector, name },
                 "selector {selector:?}"
             );
             assert!(r.should_rebuild());
+        }
+    }
+
+    #[test]
+    fn oracle_checkpoint_errors_are_not_proof_verdicts() {
+        // Both mean the checkpointed L1 head is unusable. They rebuild — that is what
+        // re-checkpoints — but they must NOT be reported as a verdict on the proof: the
+        // same bytes are accepted once a usable checkpoint exists, and telling an operator
+        // to go check the aggregation vkey would send them somewhere with nothing to find.
+        // A lagging L1 endpoint answering `historicBlockHashes` produces the first of these
+        // for a checkpoint that does exist.
+        let cases: [([u8; 4], &str); 2] = [
+            ([0x22, 0xaa, 0x3a, 0x98], "L1BlockHashNotCheckpointed"),
+            ([0x84, 0xc0, 0x68, 0x64], "L1BlockHashNotAvailable"),
+        ];
+
+        for (selector, name) in cases {
+            let r = classify_revert_data(&selector_only(selector));
+            assert_eq!(
+                r,
+                RelayRejection::CheckpointUnusable { selector, name },
+                "selector {selector:?}"
+            );
+            assert!(r.should_rebuild(), "rebuilding is what re-checkpoints");
         }
     }
 
@@ -411,12 +482,74 @@ mod tests {
         assert_eq!(revert_data_of_rpc_error(&no_data), None);
     }
 
+    /// `revert_data_of_anyhow` is the production entry point for the common path — alloy's gas
+    /// filler rejects a deterministic revert at `eth_estimateGas`, so the data arrives on the send
+    /// error rather than on a receipt. It had no test at all, and replacing its body with `None`
+    /// silently returns the proposer to the pre-fix behaviour (resubmit the same bytes forever).
+    #[test]
+    fn anyhow_context_layers_do_not_hide_the_revert_data() {
+        use anyhow::Context;
+
+        let data = Bytes::from(vec![0x1f, 0xcf, 0x91, 0x77]);
+        let payload = || alloy_json_rpc::ErrorPayload {
+            code: 3,
+            message: "execution reverted".into(),
+            data: Some(serde_json::value::to_raw_value(&data).expect("serialisable")),
+        };
+
+        // One layer, matching `utils/signer/src/lib.rs`'s `.context("Failed to send
+        // transaction")?`.
+        let one = Err::<(), _>(RpcError::<TransportErrorKind>::ErrorResp(payload()))
+            .context("Failed to send transaction")
+            .unwrap_err();
+        assert_eq!(revert_data_of_anyhow(&one), Some(data.clone()));
+
+        // Nested layers must also resolve, so a caller adding its own context cannot blind the
+        // classifier.
+        let two = Err::<(), _>(RpcError::<TransportErrorKind>::ErrorResp(payload()))
+            .context("Failed to send transaction")
+            .context("relaying aggregation proof")
+            .unwrap_err();
+        assert_eq!(revert_data_of_anyhow(&two), Some(data));
+
+        // No revert data: nonce, funds, a dead RPC. The caller must retry unchanged rather than
+        // spend an aggregation proof.
+        assert_eq!(revert_data_of_anyhow(&anyhow::anyhow!("nonce too low")), None);
+    }
+
+    /// Documents a real limitation as an assertion rather than a comment.
+    ///
+    /// `anyhow`'s `downcast_ref` walks its own context layers, NOT `std::error::Error::source()`.
+    /// So an `RpcError` nested inside another concrete error type is invisible here. That is
+    /// fine today — the relay path's errors come from `fill` / `send_transaction`, which
+    /// propagate `RpcError` directly — but if this path ever starts surfacing
+    /// `PendingTransactionError` (from `get_receipt()`) or `alloy_contract::Error`, this
+    /// function must be changed to walk the source chain, and this test is what will say so.
+    #[test]
+    fn revert_data_is_invisible_through_a_concrete_error_wrapper() {
+        let data = Bytes::from(vec![0x1f, 0xcf, 0x91, 0x77]);
+        let inner = RpcError::<TransportErrorKind>::ErrorResp(alloy_json_rpc::ErrorPayload {
+            code: 3,
+            message: "execution reverted".into(),
+            data: Some(serde_json::value::to_raw_value(&data).expect("serialisable")),
+        });
+
+        let wrapped =
+            anyhow::Error::new(alloy_provider::PendingTransactionError::TransportError(inner));
+        assert_eq!(
+            revert_data_of_anyhow(&wrapped),
+            None,
+            "known limitation: anyhow's downcast does not traverse Error::source()"
+        );
+    }
+
     #[test]
     fn kind_labels_are_distinct() {
         // These strings end up in logs and metrics, so a duplicate would silently merge two
         // different situations.
         let all = [
             RelayRejection::ProofRejected { selector: [0; 4], name: "x" }.kind(),
+            RelayRejection::CheckpointUnusable { selector: [0; 4], name: "x" }.kind(),
             RelayRejection::UnsatisfiableGuard { message: String::new() }.kind(),
             RelayRejection::RebuildableGuard { message: String::new() }.kind(),
             RelayRejection::ContractPanic { code: 0 }.kind(),

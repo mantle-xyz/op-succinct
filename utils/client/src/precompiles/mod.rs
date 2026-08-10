@@ -216,8 +216,7 @@ where
 mod tests {
     use super::*;
     use alloc::vec::Vec;
-    use alloy_primitives::U256;
-    use alloy_primitives::B256;
+    use alloy_primitives::{B256, U256};
     use op_revm::{precompiles::bn254_pair, DefaultOp as _, OpContext};
     use revm::{
         bytecode::Bytecode,

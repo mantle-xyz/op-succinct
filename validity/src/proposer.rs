@@ -74,6 +74,35 @@ fn select_checkpoint_block_number(safe_block_number: u64, batch_max_l1_head: Opt
     batch_max_l1_head.map_or(safe_block_number, |max| max.max(safe_block_number))
 }
 
+/// What a classified rejection makes the proposer do.
+///
+/// Split out from `handle_relay_rejection` because that function needs a chain, a database and a
+/// metrics recorder, so its decision was untestable — and a mutation testing pass found that every
+/// single change to it went unnoticed, including flipping the condition that decides whether the
+/// request is failed at all. That flip returns the proposer to the incident this whole path exists
+/// to prevent: a rejected aggregation left `Complete` keeps counting toward
+/// `fetch_active_agg_proofs_count`, so no replacement is ever built and the contract head freezes.
+#[derive(Debug, PartialEq, Eq)]
+struct RejectionAction {
+    /// The status to move the request to, or `None` to leave it where it is.
+    ///
+    /// A concrete status rather than a bool so that changing the target — `Failed` to anything
+    /// else — also fails the table test.
+    next_status: Option<RequestStatus>,
+    /// Value for `AggProofBlockedByContractGuard`: this rejection needs an operator, not a new
+    /// proof.
+    blocked_by_guard: bool,
+}
+
+/// Decide what to do about a rejection. See [`RejectionAction`].
+fn rejection_action(rejection: &RelayRejection) -> RejectionAction {
+    if rejection.should_rebuild() {
+        RejectionAction { next_status: Some(RequestStatus::Failed), blocked_by_guard: false }
+    } else {
+        RejectionAction { next_status: None, blocked_by_guard: true }
+    }
+}
+
 /// Whether an aggregation proof landed on chain, or was refused and why.
 ///
 /// A refusal is an outcome rather than an error: `Err` from `relay_aggregation_proof` is reserved
@@ -1484,11 +1513,7 @@ where
     /// attribute — rebuilds instead: leaving a rejected proof `Complete` keeps it counted by
     /// `fetch_active_agg_proofs_count`, which blocks a replacement from ever being created and
     /// freezes the contract head until someone edits the database by hand.
-    async fn handle_relay_rejection(
-        &self,
-        agg: &OPSuccinctRequest,
-        rejection: RelayRejection,
-    ) -> () {
+    async fn handle_relay_rejection(&self, agg: &OPSuccinctRequest, rejection: RelayRejection) {
         let id = agg.id;
         let start_block = agg.start_block;
         let end_block = agg.end_block;
@@ -1501,10 +1526,23 @@ where
                 error = name,
                 selector = %format!("0x{}", hex::encode(selector)),
                 ?checkpointed_l1_block,
-                "The chain rejected this aggregation proof; failing it so a new one is built. \
-                 ACTION: none required if this clears on the rebuild. If it repeats on the same \
-                 range, inspect the covered range proofs (a non-zero guest exit code surfaces here \
-                 as InvalidExitCode) and confirm the deployed verifier matches the aggregation vkey."
+                "The SP1 verifier rejected this aggregation proof; failing it so a new one is built. \
+                 ACTION: a rebuild over the same range produces the same bytes, so if this repeats, \
+                 the input is at fault rather than the proving run — inspect the covered range \
+                 proofs (a non-zero guest exit code surfaces here as InvalidExitCode) and confirm \
+                 the deployed verifier matches the aggregation vkey."
+            ),
+            RelayRejection::CheckpointUnusable { selector, name } => warn!(
+                request_id = id, start_block, end_block, kind,
+                error = name,
+                selector = %format!("0x{}", hex::encode(selector)),
+                ?checkpointed_l1_block,
+                "The checkpointed L1 head this aggregation was built against is unusable; failing \
+                 it so a new one re-checkpoints. The proof bytes are NOT at fault. ACTION: none \
+                 required if this clears on the rebuild. If it repeats, check whether the \
+                 checkpoint transaction is being confirmed, whether an L1 reorg removed it, and \
+                 whether the L1 endpoint answering `historicBlockHashes` lags behind the one that \
+                 sent it — a lagging node reports this for a checkpoint that does exist."
             ),
             RelayRejection::UnsatisfiableGuard { message } => warn!(
                 request_id = id, start_block, end_block, kind,
@@ -1548,29 +1586,31 @@ where
             ),
         }
 
-        if !rejection.should_rebuild() {
-            ValidityGauge::AggProofBlockedByContractGuard.set(1.0);
-            return;
-        }
+        let action = rejection_action(&rejection);
+        ValidityGauge::AggProofBlockedByContractGuard.set(if action.blocked_by_guard {
+            1.0
+        } else {
+            0.0
+        });
 
-        ValidityGauge::AggProofBlockedByContractGuard.set(0.0);
-        ValidityGauge::AggProofRebuiltAfterRejection.increment(1.0);
+        let Some(next_status) = action.next_status else {
+            return;
+        };
 
         // Do not propagate a DB error: a failed transition just means the next loop resubmits and
         // is rejected again, which is recoverable, whereas losing the classification above
         // from the logs is what makes an incident take a day to diagnose.
-        if let Err(db_err) = self
-            .driver_config
-            .driver_db_client
-            .update_request_status(id, RequestStatus::Failed)
-            .await
-        {
-            warn!(
+        match self.driver_config.driver_db_client.update_request_status(id, next_status).await {
+            // Counted only once the transition actually landed. Incrementing before the write would
+            // make this gauge — the only evidence of a rebuild loop — read high on a DB failure
+            // that rebuilt nothing, and tick again on every retry.
+            Ok(_) => ValidityGauge::AggProofRebuiltAfterRejection.increment(1.0),
+            Err(db_err) => warn!(
                 request_id = id,
                 error = ?db_err,
                 "Could not mark the rejected aggregation as Failed; it will be resubmitted and \
                  rejected again until this transition succeeds"
-            );
+            ),
         }
     }
 
@@ -1636,6 +1676,23 @@ where
             // Mined and reverted. A `TransactionReceipt` carries no revert data, so the only way to
             // learn why is to replay the call.
             Ok(receipt) => {
+                // Logged here because the receipt does not survive into `handle_relay_rejection`,
+                // and these are the only numbers that can confirm the most likely
+                // cause of a mined-and-reverted proposal: out of gas. The replay
+                // below carries no gas limit, so it cannot reproduce that case and
+                // will report `ReplayDidNotRevert` — at which point `gas_used ==
+                // gas_limit` here is the evidence.
+                warn!(
+                    request_id = completed_agg_proof.id,
+                    start_block = completed_agg_proof.start_block,
+                    end_block = completed_agg_proof.end_block,
+                    tx_hash = ?receipt.transaction_hash(),
+                    block_number = ?receipt.block_number,
+                    gas_used = receipt.gas_used,
+                    effective_gas_price = receipt.effective_gas_price,
+                    "proposeL2Output was mined but reverted; replaying it to recover the reason"
+                );
+
                 Ok(RelayOutcome::Rejected(self.classify_by_replay(replay_request, &receipt).await))
             }
 
@@ -2104,15 +2161,43 @@ where
         // Add new range requests to the database.
         self.add_new_ranges().await?;
 
+        // Submit any aggregation proofs that are complete.
+        //
+        // Deliberately BEFORE `create_aggregation_proofs`: delivering work that is already finished
+        // must not depend on being able to produce new work. The two touch disjoint rows within a
+        // single pass — this reads only `Complete` aggregations, while `create_aggregation_proofs`
+        // inserts `Unrequested` ones that cannot reach `Complete` until a later pass (witness
+        // generation and proving run in spawned tasks) — so the order is free to choose. Submitting
+        // first also means the checkpoint below is computed against a contract head this pass just
+        // advanced, rather than one pass stale.
+        self.submit_agg_proofs().await?;
+
         // Create aggregation proofs based on the completed range proofs. Checkpoints the block hash
         // associated with the aggregation proof in advance.
-        self.create_aggregation_proofs().await?;
+        //
+        // Failures here are logged rather than propagated. This step depends on external conditions
+        // that resolve on their own — most sharply, `checkpointBlockHash` reads `blockhash()`,
+        // which only covers the last 256 L1 blocks, so a `safe` head that falls outside
+        // that window during an L1 finality stall makes the checkpoint transaction revert
+        // until `safe` catches up. Propagating that would abort the whole iteration, which
+        // costs far more than the step it failed: `update_chain_lock` below would be
+        // skipped (letting the lock lapse so a second proposer starts), and `run` would
+        // retry on its 10s error path instead of `LOOP_INTERVAL`. Producing new work is
+        // allowed to fail; the pass still finishes.
+        if let Err(e) = self.create_aggregation_proofs().await {
+            ValidityGauge::TotalErrorCount.increment(1.0);
+            warn!(
+                error = ?e,
+                "Could not create an aggregation proof this pass; the iteration continues so \
+                 already-completed proofs are still submitted and the chain lock is renewed. \
+                 ACTION: usually none — this retries next loop. If it persists, check that the L1 \
+                 `safe` head is advancing and within 256 blocks of `latest` (checkpointBlockHash \
+                 reverts otherwise), and that the checkpoint transaction is being confirmed."
+            );
+        }
 
         // Request all unrequested proofs from the prover network.
         self.request_queued_proofs().await?;
-
-        // Submit any aggregation proofs that are complete.
-        self.submit_agg_proofs().await?;
 
         // Update the chain lock.
         self.proof_requester
@@ -2207,6 +2292,52 @@ fn highest_proven_contiguous_block(completed_range_proofs: &[(i64, i64)]) -> Opt
         current_end = end;
     }
     Some(current_end)
+}
+
+#[cfg(test)]
+mod rejection_action_tests {
+    use alloy_primitives::Bytes;
+
+    use super::{rejection_action, RejectionAction, RequestStatus};
+    use crate::relay_rejection::{NoVerdictReason, RelayRejection};
+
+    /// Pins the policy for every variant, so a change to it has to be deliberate.
+    ///
+    /// Exactly one rejection class keeps the request where it is. Everything else — including
+    /// revert data this build cannot decode, and a failure whose reason could not be recovered
+    /// at all — is failed so the next pass rebuilds. Wasting one aggregation proof is strictly
+    /// preferable to leaving a rejected one `Complete`, which blocks any replacement from being
+    /// created and freezes the contract head until someone edits the database by hand.
+    #[test]
+    fn only_an_unsatisfiable_guard_leaves_the_request_alone() {
+        let rebuild =
+            RejectionAction { next_status: Some(RequestStatus::Failed), blocked_by_guard: false };
+        let park = RejectionAction { next_status: None, blocked_by_guard: true };
+
+        let cases = [
+            (
+                RelayRejection::ProofRejected { selector: [0x09, 0xbd, 0xe3, 0x39], name: "x" },
+                &rebuild,
+            ),
+            (
+                RelayRejection::CheckpointUnusable {
+                    selector: [0x22, 0xaa, 0x3a, 0x98],
+                    name: "x",
+                },
+                &rebuild,
+            ),
+            (RelayRejection::RebuildableGuard { message: "m".into() }, &rebuild),
+            (RelayRejection::ContractPanic { code: 0x11 }, &rebuild),
+            (RelayRejection::UnknownRevert { data: Bytes::from(vec![0x1a]) }, &rebuild),
+            (RelayRejection::NoVerdict { reason: NoVerdictReason::ReplayTimedOut }, &rebuild),
+            // The one exception.
+            (RelayRejection::UnsatisfiableGuard { message: "m".into() }, &park),
+        ];
+
+        for (rejection, expected) in cases {
+            assert_eq!(rejection_action(&rejection), *expected, "{}", rejection.kind());
+        }
+    }
 }
 
 /// [UPSTREAM #923] Tests for the checkpoint selection this backport introduced.

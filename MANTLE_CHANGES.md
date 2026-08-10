@@ -348,7 +348,18 @@ a test instead of silently changing behaviour.
 **No schema change.** No migration, no new `RequestStatus`. A rejected aggregation still goes to
 `Failed`.
 
-**b. Transport faults no longer bisect a healthy range** (`702246c1`, `afaf9bc7`).
+**No rebuild cap, deliberately.** An earlier attempt bounded rebuilds with `MAX_AGG_REGENERATIONS`
+plus a time window over `COUNT(*)` of `Failed` rows. Every cap of that shape recreates an absorbing
+state: `Failed` rows are never deleted and the count only resets when an aggregation lands, which is
+precisely what the cap prevents — so an operator who fixed the root cause still had to edit the
+database by hand, and deploying onto an already-stuck proposer tripped the cap on its first pass. The
+window meant to release it then had to outlast the rebuild cycle, which nothing guarantees. Bounding
+the cost is therefore left to observation (`succinct_agg_proof_rebuilt_after_rejection_count` plus a
+per-class `warn!` with an operator ACTION) rather than to a mechanism that can wedge the chain.
+Note the rebuild cycle is one aggregation witnessgen+prove, not `PROVING_TIMEOUT` — a rejection is
+followed by a rebuild on the very next pass.
+
+**b. Transport faults no longer bisect a healthy range** (`e315e944`, `3ab9c5a1`).
 
 | File | Change |
 |---|---|
@@ -365,6 +376,14 @@ an `ErrorPayload` to pin that classification never consults the client's message
 so a future sync should *drop our copy* rather than merge it — the opposite of what `[MANTLE]`
 markers mean. Grep `[UPSTREAM #923]` when syncing to v3.10.0 or later and delete each hit, keeping
 upstream's version.
+
+Two caveats when doing that. The marker also sits on **our own tests**
+(`checkpoint_selection_tests`, `test_get_max_l1_head_block_number_for_range*`) — keep those and point
+their assertions at upstream's version, since they are the only thing covering a runtime query that
+has no compile-time SQL check, and their three distinct `bytea` fixtures are what catch a swapped
+binding. And if `get_max_l1_head_block_number_for_range` has been changed by then (e.g. to distrust a
+partially-NULL batch), it is no longer a byte-for-byte copy and the marker should be downgraded to
+`[MANTLE]` first.
 
 Upstream PR: `succinctlabs/op-succinct#923` by Farhad-Shabani, merged 2026-06-05, released in
 upstream **v3.10.0**. Its own description records the failure as having **"Hit 3× on Mantle"** — it

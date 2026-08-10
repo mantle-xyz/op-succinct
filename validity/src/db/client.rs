@@ -1258,6 +1258,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(max, Some(1010), "only covered, Complete, same-chain Range rows count");
+
+        // A narrower window where the batch's FIRST segment is the only match. The wide query above
+        // cannot see `start_block >= $5` tightening to `>`, because its boundary row (100,200) does
+        // not carry the maximum — so without this assertion that single character can be changed
+        // freely, and the floor would then omit the earliest range proof whose l1Head can well be
+        // the largest (e.g. after that segment was re-proved).
+        let first_segment_only = c
+            .get_max_l1_head_block_number_for_range(100, 200, &distinct_commitment(), L1ID, L2ID)
+            .await
+            .unwrap();
+        assert_eq!(first_segment_only, Some(1000), "the start boundary row must be included");
     }
 
     #[tokio::test]
