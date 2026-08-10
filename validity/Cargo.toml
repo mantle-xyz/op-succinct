@@ -78,7 +78,6 @@ op-succinct-build-utils.workspace = true
 [dev-dependencies]
 postgresql_embedded = { version = "0.20", features = ["bundled"] }
 alloy-json-rpc.workspace = true
-serde_json.workspace = true
 
 [features]
 default = []

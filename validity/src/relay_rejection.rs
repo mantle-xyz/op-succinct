@@ -1,4 +1,8 @@
-//! Classifying a rejected `proposeL2Output` from **typed revert data**.
+//! [MANTLE] Classifying a rejected `proposeL2Output` from **typed revert data**.
+//!
+//! Upstream has no equivalent of this module — it has no relay-rejection path at all — so nothing
+//! here will conflict on a sync and nothing will prompt a reviewer to look. Keep it. See
+//! MANTLE_CHANGES.md §3.9.
 //!
 //! # Why not match the rendered error text
 //!
@@ -40,13 +44,11 @@ use op_succinct_host_utils::{
 
 /// Pull the contract's revert data out of a failed JSON-RPC call.
 ///
-/// Deliberately does NOT use alloy's [`ErrorPayload::as_revert_data`], which first checks
+/// Deliberately does NOT use alloy's `ErrorPayload::as_revert_data`, which first checks
 /// `message.contains("revert")`. A client that returns the data without that word in its message —
 /// Nethermind answers `"VM execution error."` — would then yield `None`, and a real verdict on the
 /// proof would be misread as "no revert data was recoverable". `try_data_as` reads the `data` field
 /// directly and never looks at the message.
-///
-/// [`ErrorPayload::as_revert_data`]: alloy_transport::RpcError
 pub fn revert_data_of_rpc_error(err: &RpcError<TransportErrorKind>) -> Option<Bytes> {
     err.as_error_resp()?.try_data_as::<Bytes>().and_then(Result::ok)
 }
@@ -308,10 +310,24 @@ mod tests {
              rebuild — and update a reworded one to match the contract verbatim"
         );
 
-        assert!(
-            propose_l2_output_body().contains("whenNotOptimistic"),
-            "the optimistic-mode guard is no longer applied to proposeL2Output"
+        assert_eq!(
+            modifiers_on_propose_l2_output(),
+            vec!["external", "payable", "whenNotOptimistic"],
+            "the set of modifiers on the validity proposeL2Output changed: `guards_on_the_validity              _path` only scans the function body and `whenNotOptimistic`, so a `require` inside any              other modifier is invisible to the test above — scan the new one too, or classify its              guards"
         );
+    }
+
+    /// Everything between the signature's closing `)` and the opening `{` of the body.
+    ///
+    /// Set equality, so ADDING a modifier fails rather than passing unnoticed. That matters
+    /// because [`guards_on_the_validity_path`] can only scan the scopes it is told about: a
+    /// `require` in an unscanned modifier is classified as `RebuildableGuard`, which burns one
+    /// aggregation proof per pass until someone notices.
+    fn modifiers_on_propose_l2_output() -> Vec<&'static str> {
+        let body = propose_l2_output_body();
+        let open = body.find(')').expect("the signature has a closing paren");
+        let brace = body.find('{').expect("the function has a body");
+        body[open + 1..brace].split_whitespace().collect()
     }
 
     #[test]

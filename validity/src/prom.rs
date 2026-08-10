@@ -101,9 +101,11 @@ pub enum ValidityGauge {
         message = "Number of network prover call timeouts"
     )]
     NetworkCallTimeoutCount,
+    // [MANTLE] Both gauges below belong to the relay-rejection path, which upstream does not
+    // have. Nothing will conflict on a sync; keep them. See MANTLE_CHANGES.md §3.9.
     #[strum(
         serialize = "succinct_agg_proof_blocked_by_contract_guard",
-        message = "1 while proposeL2Output is refused by a contract guard no proof can satisfy (optimistic mode, proposer approval, future timestamp, zero output root); needs operator action, not a new proof. Set on every submit_agg_proofs pass, so it clears by itself once the chain accepts a proposal."
+        message = "1 while proposeL2Output is refused by a contract guard no proof can satisfy (optimistic mode, proposer approval, future timestamp, zero output root); needs operator action, not a new proof. Cleared at the top of every submit_agg_proofs pass and set only by a rejection within that pass, so it cannot outlive the guard that set it."
     )]
     AggProofBlockedByContractGuard,
     #[strum(

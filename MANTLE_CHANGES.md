@@ -338,7 +338,7 @@ two days while 486 range proofs piled up ~90k blocks ahead of a frozen contract 
 | `validity/src/relay_rejection.rs` (new) | `classify_revert_data`: a pure function over `&Bytes` returning `RelayRejection` (`ProofRejected` / `CheckpointUnusable` / `UnsatisfiableGuard` / `RebuildableGuard` / `ContractPanic` / `UnknownRevert` / `NoVerdict`). `require(cond, "…")` is decoded via `alloy_sol_types::Revert` back to the original string; every other surface by 4-byte selector. Also `revert_data_of_rpc_error`, which reads the `data` field with `try_data_as` rather than alloy's `as_revert_data()` — the latter first checks `message.contains("revert")`, so a client answering `"VM execution error."` (Nethermind) would hide a real verdict. |
 | `validity/src/proposer.rs` (`relay_aggregation_proof`) | Returns `RelayOutcome::{Relayed, Rejected}` instead of `Result<B256>`. A rejection is an outcome, not an error: `Err` is now reserved for a transaction that was never delivered (nonce, funds, dead RPC), the only case where retrying unchanged is right. Pre-flight rejections are read straight off the send error — the common path, since alloy's gas filler runs `eth_estimateGas` first and a deterministic revert never reaches a block. A mined-and-reverted transaction is replayed as `eth_call` at its own block (a receipt carries no revert data), bounded by `NETWORK_CALLS_TIMEOUT`. The two decisions are pure functions — `send_outcome(Result<TransactionReceipt>)` and `replay_verdict(Result<Result<Bytes, RpcError>, Elapsed>)` — because inside the `await` they were unreachable from any test; a mutation pass confirmed both were then free to silently degrade (e.g. dropping the `receipt.status()` check, which would mark a reverted proposal as relayed). |
 | `validity/src/proposer.rs` (`handle_relay_rejection`) | One `warn!` per rejection class carrying the decoded reason, the selector in hex, and an explicit operator ACTION. Only `UnsatisfiableGuard` keeps the request `Complete`; everything else — including unrecognised selectors and unrecoverable reasons — transitions to `Failed` so the next loop builds a replacement. Wasting one proof is strictly preferable to freezing the head. All paths return `Ok(())`, so the loop keeps `LOOP_INTERVAL` and `update_chain_lock` still runs. |
-| `validity/src/proposer.rs` (`run_loop_iteration`) | Two changes a sync must not undo. **Order**: `submit_agg_proofs` runs BEFORE `create_aggregation_proofs`, so delivering finished work does not depend on producing new work — they touch disjoint rows within a pass (submit reads only `Complete`, create inserts `Unrequested`, and nothing in the iteration moves a row between those states since witnessgen and proving run in spawned tasks). **Error policy**: both of these steps — the only two that broadcast an L1 transaction — log and continue instead of propagating, because an L1 revert that waits on the chain (`blockhash()`'s 256-block window for `checkpointBlockHash`, `TX_CONFIRMATION_TIMEOUT` under congestion for `proposeL2Output`) says nothing about whether the rest of the pass can progress, while aborting skips `request_queued_proofs` (range proofs stop being produced) and `update_chain_lock` (whose lease is exactly `LOOP_INTERVAL`). Every other step still propagates. |
+| `validity/src/proposer.rs` (`run_loop_iteration`) | Three changes a sync must not undo. **Order**: `submit_agg_proofs` runs BEFORE `create_aggregation_proofs`. This is required, not a preference: `handle_relay_rejection` moves the rejected row from `Complete` to `Failed` within this same pass, and `fetch_active_agg_proofs_count` counts `Complete` while `fetch_failed_agg_request_with_checkpointed_block_hash` reads `Failed` — so running submit first is what lets one pass both reject and rebuild. Create-then-submit costs a full `LOOP_INTERVAL` per rejection. **Skip-after-relay**: that order opens a window in the *success* case, since `fetch_active_agg_proofs_count` excludes `Relayed` (deliberately — see `db/client.rs`) and a slightly-lagging L1 read endpoint would report a head that does not yet include the relay, so the pass would build a duplicate aggregation over a range already proposed and waste it on the inevitable revert. `submit_agg_proofs` therefore returns `AdvancedContractHead`, and create is deferred one interval after a successful relay. A rejection returns `No`, so the rebuild path above is unaffected. **Error policy**: both of these steps — the only two that broadcast an L1 transaction — log and continue instead of propagating, because an L1 revert that waits on the chain (`blockhash()`'s 256-block window for `checkpointBlockHash`, `TX_CONFIRMATION_TIMEOUT` under congestion for `proposeL2Output`) says nothing about whether the rest of the pass can progress, while aborting skips `request_queued_proofs` (range proofs stop being produced) and `update_chain_lock` (whose lease is exactly `LOOP_INTERVAL`). Every other step still propagates. |
 | `validity/src/prom.rs` | `succinct_agg_proof_blocked_by_contract_guard` (0/1, set on every `submit_agg_proofs` pass so it clears itself) and `succinct_agg_proof_rebuilt_after_rejection_count`. |
 
 `UNSATISFIABLE_GUARDS` lists only the four `require`s that no proof can satisfy; anything else —
@@ -374,8 +374,19 @@ replacement is built in the SAME pass.
 | `validity/Cargo.toml` | Pinned `tonic = "0.12"` (default-features off) to match the sp1-sdk's tonic — `Cargo.lock` carries four tonic versions, and a mismatch would make the downcast silently return `None`, i.e. everything bisects. |
 
 New dependencies on `validity`: `alloy-transport` (downcasting to `RpcError`), `alloy-rpc-types-eth`
-(the replay request/receipt types), and `alloy-json-rpc` + `serde_json` as dev-dependencies (building
-an `ErrorPayload` to pin that classification never consults the client's message wording).
+(the replay request/receipt types), and `alloy-json-rpc` as a dev-dependency (building an
+`ErrorPayload` to pin that classification never consults the client's message wording).
+
+**Known test gap: the wiring, not the decisions.** Every decision on this path is a pure function
+with a table test behind it, and a mutation pass killed 64 of 64 mutations across them — including
+the contract-source pins and the new SQL predicates. The surviving mutations are all in the handful
+of lines that connect those functions to `Proposer`: whether `handle_relay_rejection` applies
+`rejection_action`'s verdict at all, whether `submit_agg_proofs` calls it, how the four `SendOutcome`
+variants map onto `RelayOutcome`, and whether #923's floor is actually passed to
+`select_checkpoint_block_number`. Deleting any one of those still leaves the suite green. Closing
+them means mocking `Proposer<P, H>` — a fetcher, a signer, a contract and a database — which costs
+more than it returns at this size. Recorded here so it is a known gap rather than a false sense of
+coverage: **if this path is reworked, re-check those call sites by hand.**
 
 ### 3.10 Upstream backport — succinctlabs/op-succinct#923 (agg checkpoint anchored to `safe`)
 
@@ -384,11 +395,20 @@ so a future sync should *drop our copy* rather than merge it — the opposite of
 markers mean. Grep `[UPSTREAM #923]` when syncing to v3.10.0 or later and delete each hit, keeping
 upstream's version.
 
-Two caveats when doing that. The marker also sits on **our own tests**
-(`checkpoint_selection_tests`, `test_get_max_l1_head_block_number_for_range*`) — keep those and point
-their assertions at upstream's version, since they are the only thing covering a runtime query that
-has no compile-time SQL check, and their three distinct `bytea` fixtures are what catch a swapped
-binding. And if `get_max_l1_head_block_number_for_range` has been changed by then (e.g. to distrust a
+Three caveats when doing that.
+
+**Not every marked test is ours to keep.** `checkpoint_selection_tests` duplicates three tests
+upstream #923 already ships (`checkpoint_falls_back_to_safe_when_no_batch_max` and friends) — drop
+ours and take upstream's. `test_get_max_l1_head_block_number_for_range*` has no upstream equivalent:
+keep it and point it at upstream's version, since it is the only thing covering a runtime query with
+no compile-time SQL check, and its three distinct `bytea` fixtures are what catch a swapped binding.
+
+**`checkpoint_plan_tests` must be kept, and is easy to delete by mistake.** It carries the
+`[UPSTREAM #923]` marker but has no upstream counterpart: upstream implements the reuse gate as an
+inline `if/else`, which nothing can test, so upstream's coverage of it is zero. Deleting our module
+on a grep-and-drop pass would silently take that coverage to zero too.
+
+**If `get_max_l1_head_block_number_for_range` has been changed by then** (e.g. to distrust a
 partially-NULL batch), it is no longer a byte-for-byte copy and the marker should be downgraded to
 `[MANTLE]` first.
 
@@ -404,7 +424,7 @@ one aggregation proof is wasted.
 | File | Change |
 |---|---|
 | `validity/src/proposer.rs` | Added `select_checkpoint_block_number(safe, batch_max_l1_head)` (verbatim from upstream) and switched the fresh-checkpoint path from `BlockId::latest()` to `BlockId::safe()`, floored at the batch's max `l1Head`. `safe` is reorg-stable and inside the EVM `blockhash` window; the floor guarantees coverage under `L1_BLOCK_TAG=latest`, where a range `l1Head` can exceed `safe`. |
-| `validity/src/proposer.rs` (`checkpoint_plan`) | The reuse-or-recheckpoint decision, extracted as a pure function returning `CheckpointPlan::{Reuse, Fresh{anchor, reason}}`. It adds the same floor as a reuse gate: a cached checkpoint below the batch's max `l1Head` is discarded, because a matching on-chain hash only proves the block was not reorged out between writing the row and the checkpoint transaction executing — not that the guest can reach every range proof's `l1Head` from it. Returning the `anchor` rather than reading it inline is what makes this backport testable at all: a mutation pass found that changing it back to `BlockId::latest()` — the entire bug #923 fixes — left the whole suite green. |
+| `validity/src/proposer.rs` (`checkpoint_plan`) | **Behaviour is upstream's; the shape is ours.** #923 also gates checkpoint *reuse* on the batch's max `l1Head` — a cached checkpoint below it is discarded, because a matching on-chain hash only proves the block was not reorged out between writing the row and the checkpoint transaction executing, not that the guest can reach every range proof's `l1Head` from it. Upstream writes that as an inline `if/else`; we extracted it as a pure function returning `CheckpointPlan::{Reuse, Fresh{anchor, reason}}`. Returning the `anchor` rather than reading it inline is what makes the backport testable at all: a mutation pass found that changing it back to `BlockId::latest()` — the entire bug #923 fixes — left the whole suite green. |
 | `validity/src/db/client.rs` | Added `get_max_l1_head_block_number_for_range`, kept under upstream's name and body. One deviation: upstream's WHERE also carries `invalidated_at IS NULL`, a column introduced by #951 which this baseline lacks — drop that deviation if #951 is ever backported. Its WHERE clause must stay in sync with `get_consecutive_complete_range_proofs` so the MAX covers exactly the range proofs the aggregation consumes. |
 
 Not backported (tracked, larger): **#951/#952** (`invalidated_at` / `Invalidated` status /
