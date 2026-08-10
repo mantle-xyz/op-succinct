@@ -29,6 +29,28 @@ sol! {
         external
         payable
         whenNotOptimistic;
+
+        // [MANTLE] The oracle's custom errors. Declared so a rejected `proposeL2Output` can be
+        // classified from TYPED revert data instead of by matching the rendered error string —
+        // see `validity/src/relay_rejection.rs`. Without these declarations the generated
+        // `OPSuccinctL2OutputOracleErrors` enum is empty and nothing can be decoded.
+        error L1BlockHashNotCheckpointed();
+        error L1BlockHashNotAvailable();
+    }
+}
+
+// [MANTLE] Errors raised by the SP1 verifier and bubbled up through `proposeL2Output`'s
+// `verifyProof` call, so a relay rejection can carry one of these rather than an oracle error.
+//
+// `InvalidProof()` matches the vendored verifier
+// (`contracts/lib/sp1-contracts/contracts/src/v3.0.0/SP1VerifierGroth16.sol:18`).
+// `InvalidExitCode()` is NOT in the vendored copy — the deployed verifier is newer — but its
+// selector `0x1fcf9177` was observed on QA3 when the guest halted abnormally, so it is declared
+// here from the selector. See MANTLE_CHANGES.md §3.9.
+sol! {
+    interface SP1Verifier {
+        error InvalidProof();
+        error InvalidExitCode();
     }
 }
 

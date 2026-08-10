@@ -1,8 +1,9 @@
 use std::{collections::HashMap, ops::Range, str::FromStr, sync::Arc, time::Duration};
 
 use alloy_eips::BlockId;
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{hex, Address, B256, U256};
 use alloy_provider::{network::ReceiptResponse, Provider};
+use alloy_rpc_types_eth::{TransactionReceipt, TransactionRequest};
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use futures_util::{stream, StreamExt, TryStreamExt};
@@ -35,12 +36,54 @@ use tracing::{debug, info, warn};
 use crate::{
     db::{DriverDBClient, OPSuccinctRequest, RequestMode, RequestStatus, RequestType},
     find_gaps, get_latest_proposed_block_number, get_ranges_to_prove_by_blocks,
-    get_ranges_to_prove_by_gas, CommitmentConfig, ContractConfig, OPSuccinctProofRequester,
-    ProgramConfig, RequestExecutionStatistics, RequesterConfig, ValidityGauge,
+    get_ranges_to_prove_by_gas,
+    relay_rejection::{
+        classify_revert_data, revert_data_of_anyhow, revert_data_of_rpc_error, NoVerdictReason,
+        RelayRejection,
+    },
+    CommitmentConfig, ContractConfig, OPSuccinctProofRequester, ProgramConfig,
+    RequestExecutionStatistics, RequesterConfig, ValidityGauge,
 };
 
 /// Number of consecutive poll failures before a cluster proof is marked as permanently failed.
 const MAX_CONSECUTIVE_POLL_FAILURES: u32 = 3;
+
+/// Choose the L1 block to checkpoint for an aggregation.
+///
+/// The aggregation guest walks L1 headers back from the checkpointed head *by hash* and requires
+/// every range proof's `l1Head` to lie on that chain, so the checkpoint must be at or after
+/// `batch_max_l1_head` (the largest `l1Head` among the aggregated range proofs). A reorg-stable
+/// `safe` head is floored at that value:
+///
+/// - `safe` keeps the checkpoint inside the EVM `blockhash` window and immune to tip reorgs. Under
+///   `L1_BLOCK_TAG=finalized|safe`, range `l1Head`s are <= safe, so `safe` is the selected block.
+/// - The floor guarantees coverage under `L1_BLOCK_TAG=latest`, where a range `l1Head` can be newer
+///   than `safe`. Note the floor is by *number* while the guest enforces by *hash*, so the two
+///   agree only on the canonical chain: a boot `l1Head` above `safe` that is later orphaned stays
+///   reorg-exposed — inherent to `latest`, not resolved here.
+///
+/// `None` (no completed range proof has a recorded `l1_head_block_number`) falls back to `safe`.
+///
+/// [UPSTREAM #923] Backported verbatim from succinctlabs/op-succinct#923 (upstream v3.10.0), which
+/// replaced `BlockId::latest()` here. That PR's own description records the failure it fixes as
+/// having "Hit 3× on Mantle": the checkpoint head is pinned by hash while the guest's header range
+/// is fetched by number, so a tip reorg between the two orphans the checkpoint and the guest
+/// rejects the input, wasting one aggregation proof. Kept under the upstream name so a future sync
+/// can drop this copy cleanly.
+fn select_checkpoint_block_number(safe_block_number: u64, batch_max_l1_head: Option<u64>) -> u64 {
+    batch_max_l1_head.map_or(safe_block_number, |max| max.max(safe_block_number))
+}
+
+/// Whether an aggregation proof landed on chain, or was refused and why.
+///
+/// A refusal is an outcome rather than an error: `Err` from `relay_aggregation_proof` is reserved
+/// for a transaction that was never delivered, which is the only case where retrying unchanged is
+/// the right response.
+#[derive(Debug)]
+enum RelayOutcome {
+    Relayed(B256),
+    Rejected(RelayRejection),
+}
 
 /// Marker the self-hosted proof-router/gateway attaches to an admission-shed
 /// gRPC `Status` (trailer + message prefix) when its concurrency pool is full.
@@ -954,6 +997,24 @@ where
                 )
                 .await?;
 
+            // [UPSTREAM #923] The L1 head the guest must be able to walk back to: the largest
+            // `l1Head` among the range proofs this aggregation will consume. Gates both the reuse
+            // path below and the fresh checkpoint.
+            let batch_max_l1_head = self
+                .driver_config
+                .driver_db_client
+                .get_max_l1_head_block_number_for_range(
+                    latest_proposed_block_number,
+                    highest_proven_contiguous_block_number,
+                    &self.program_config.commitments,
+                    self.requester_config.l1_chain_id,
+                    self.requester_config.l2_chain_id,
+                )
+                .await?
+                .map(u64::try_from)
+                .transpose()
+                .context("Range proof l1_head_block_number is negative")?;
+
             // If there's an existing aggregation request with the same start block, end block, and
             // commitment config, try to reuse its checkpoint as long as it still matches the
             // on-chain mapping.
@@ -986,6 +1047,20 @@ where
                         "Historic block hash mismatch between database and contract; re-checkpointing."
                     );
                     None
+                } else if batch_max_l1_head.is_some_and(|max| existing_l1_block_number_u64 < max) {
+                    // [UPSTREAM #923] A matching hash only proves the block was not reorged out
+                    // between writing the row and the checkpoint transaction executing — not that
+                    // the guest can reach every range proof's `l1Head` from it.
+                    // Reusing a checkpoint below the batch's max would fail the
+                    // guest's header-chain assertion on every attempt, and
+                    // because a reused checkpoint is copied verbatim into each rebuilt
+                    // row, that failure would repeat indefinitely.
+                    warn!(
+                        block_number = existing_l1_block_number,
+                        ?batch_max_l1_head,
+                        "Cached checkpoint is below the batch's max l1Head; re-checkpointing."
+                    );
+                    None
                 } else {
                     debug!(
                         block_number = existing_l1_block_number,
@@ -1003,15 +1078,27 @@ where
             {
                 reuse
             } else {
-                // Checkpoint an L1 block hash that will be used to create the aggregation proof.
-                let latest_header =
-                    self.driver_config.fetcher.get_l1_header(BlockId::latest()).await?;
+                // [UPSTREAM #923] Checkpoint a reorg-stable `safe` head, floored at the batch's max
+                // l1Head so the aggregation guest's header walk covers every range proof. This
+                // replaced `BlockId::latest()`, whose tip reorgs orphaned the checkpoint and wasted
+                // an aggregation proof each time — observed 3× on Mantle. See
+                // `select_checkpoint_block_number`.
+                let safe_header = self.driver_config.fetcher.get_l1_header(BlockId::safe()).await?;
+
+                let checkpoint_number =
+                    select_checkpoint_block_number(safe_header.number, batch_max_l1_head);
+
+                let checkpoint_header = if checkpoint_number == safe_header.number {
+                    safe_header
+                } else {
+                    self.driver_config.fetcher.get_l1_header(checkpoint_number.into()).await?
+                };
 
                 // Checkpoint the L1 block hash.
                 let transaction_request = self
                     .contract_config
                     .l2oo_contract
-                    .checkpointBlockHash(U256::from(latest_header.number))
+                    .checkpointBlockHash(U256::from(checkpoint_header.number))
                     .into_transaction_request();
 
                 let receipt = self
@@ -1029,9 +1116,9 @@ where
                     return Err(anyhow!("Checkpoint block transaction reverted: {:?}", receipt));
                 }
 
-                tracing::info!("Checkpointed L1 block number: {:?}.", latest_header.number);
+                tracing::info!("Checkpointed L1 block number: {:?}.", checkpoint_header.number);
 
-                (latest_header.hash_slow(), latest_header.number as i64)
+                (checkpoint_header.hash_slow(), checkpoint_header.number as i64)
             };
 
             // Create an aggregation proof request to cover the range with the checkpointed L1 block
@@ -1342,13 +1429,33 @@ where
         // If there are no completed aggregation proofs, do nothing.
         let completed_agg_proof = match completed_agg_proof {
             Some(proof) => proof,
-            None => return Ok(()),
+            None => {
+                // Nothing pending, so nothing is being refused. This runs on every pass, which is
+                // what lets the guard gauge clear itself without any explicit reset elsewhere.
+                ValidityGauge::AggProofBlockedByContractGuard.set(0.0);
+                return Ok(());
+            }
         };
 
-        // Relay the aggregation proof.
         let transaction_hash = match self.relay_aggregation_proof(&completed_agg_proof).await {
-            Ok(transaction_hash) => transaction_hash,
+            Ok(RelayOutcome::Relayed(transaction_hash)) => {
+                ValidityGauge::AggProofBlockedByContractGuard.set(0.0);
+                transaction_hash
+            }
+            Ok(RelayOutcome::Rejected(rejection)) => {
+                ValidityGauge::RelayAggProofErrorCount.increment(1.0);
+                self.handle_relay_rejection(&completed_agg_proof, rejection).await;
+                // Deliberately Ok: a rejection is an outcome, not an error. Returning Err would
+                // make `run` retry after a fixed 10s instead of `LOOP_INTERVAL`,
+                // and would skip `update_chain_lock` at the end of the iteration —
+                // letting the lock lapse and a second proposer start alongside this
+                // one.
+                return Ok(());
+            }
             Err(e) => {
+                // No revert data at all: the transaction was never delivered (nonce, funds, a dead
+                // RPC). That says nothing about the proof, so it keeps the existing retry
+                // behaviour.
                 ValidityGauge::RelayAggProofErrorCount.increment(1.0);
                 return Err(e);
             }
@@ -1369,6 +1476,104 @@ where
         Ok(())
     }
 
+    /// Log a rejected aggregation and, unless the chain's own state is what refused it, fail the
+    /// request so the next loop builds a replacement.
+    ///
+    /// Only [`RelayRejection::UnsatisfiableGuard`] keeps the request `Complete`. See
+    /// `relay_rejection`'s module docs for why every other class — including revert data we cannot
+    /// attribute — rebuilds instead: leaving a rejected proof `Complete` keeps it counted by
+    /// `fetch_active_agg_proofs_count`, which blocks a replacement from ever being created and
+    /// freezes the contract head until someone edits the database by hand.
+    async fn handle_relay_rejection(
+        &self,
+        agg: &OPSuccinctRequest,
+        rejection: RelayRejection,
+    ) -> () {
+        let id = agg.id;
+        let start_block = agg.start_block;
+        let end_block = agg.end_block;
+        let checkpointed_l1_block = agg.checkpointed_l1_block_number;
+        let kind = rejection.kind();
+
+        match &rejection {
+            RelayRejection::ProofRejected { selector, name } => warn!(
+                request_id = id, start_block, end_block, kind,
+                error = name,
+                selector = %format!("0x{}", hex::encode(selector)),
+                ?checkpointed_l1_block,
+                "The chain rejected this aggregation proof; failing it so a new one is built. \
+                 ACTION: none required if this clears on the rebuild. If it repeats on the same \
+                 range, inspect the covered range proofs (a non-zero guest exit code surfaces here \
+                 as InvalidExitCode) and confirm the deployed verifier matches the aggregation vkey."
+            ),
+            RelayRejection::UnsatisfiableGuard { message } => warn!(
+                request_id = id, start_block, end_block, kind,
+                guard = %message,
+                "proposeL2Output is refused by a contract guard that no proof can satisfy; NOT \
+                 rebuilding. The proof itself is valid and stays Complete for resubmission. \
+                 ACTION: an operator has to change contract state (or, for the timestamp guard, \
+                 simply wait). Rebuilding would burn an aggregation proof for nothing."
+            ),
+            RelayRejection::RebuildableGuard { message } => warn!(
+                request_id = id, start_block, end_block, kind,
+                guard = %message,
+                "A contract guard refused this aggregation, but a rebuild can clear it; failing it \
+                 so a new one is built over a current range. ACTION: usually none — this is the \
+                 expected path after submissionInterval is raised. If the guard is one you do not \
+                 recognise, add it to UNSATISFIABLE_GUARDS if a rebuild cannot fix it."
+            ),
+            RelayRejection::ContractPanic { code } => warn!(
+                request_id = id, start_block, end_block, kind,
+                panic_code = %format!("0x{code:02x}"),
+                "proposeL2Output hit a Solidity panic; failing the aggregation so a new one is \
+                 built. ACTION: a panic is a contract bug, not a proof problem — decode the code \
+                 (0x11 overflow, 0x12 division by zero, 0x01 assert) and check the oracle's state."
+            ),
+            RelayRejection::UnknownRevert { data } => warn!(
+                request_id = id, start_block, end_block, kind,
+                selector = %format!("0x{}", hex::encode(data.get(..4).unwrap_or_default())),
+                revert_data = %format!("0x{}", hex::encode(data)),
+                "proposeL2Output reverted with an error this build cannot decode; failing the \
+                 aggregation so a new one is built rather than stalling the head. ACTION: the \
+                 contract or verifier was likely upgraded — decode with `cast 4byte <selector>` and \
+                 declare it in utils/host/src/contract.rs so it is classified precisely next time."
+            ),
+            RelayRejection::NoVerdict { reason } => warn!(
+                request_id = id, start_block, end_block, kind,
+                cause = ?reason,
+                "The relay failed but no revert reason was recoverable; failing the aggregation so \
+                 a new one is built rather than risking a permanent stall. ACTION: for \
+                 ReplayDidNotRevert the likely cause is out of gas — the replay carries no gas \
+                 limit so it cannot reproduce; compare the receipt's gas_used against its gas_limit."
+            ),
+        }
+
+        if !rejection.should_rebuild() {
+            ValidityGauge::AggProofBlockedByContractGuard.set(1.0);
+            return;
+        }
+
+        ValidityGauge::AggProofBlockedByContractGuard.set(0.0);
+        ValidityGauge::AggProofRebuiltAfterRejection.increment(1.0);
+
+        // Do not propagate a DB error: a failed transition just means the next loop resubmits and
+        // is rejected again, which is recoverable, whereas losing the classification above
+        // from the logs is what makes an incident take a day to diagnose.
+        if let Err(db_err) = self
+            .driver_config
+            .driver_db_client
+            .update_request_status(id, RequestStatus::Failed)
+            .await
+        {
+            warn!(
+                request_id = id,
+                error = ?db_err,
+                "Could not mark the rejected aggregation as Failed; it will be resubmitted and \
+                 rejected again until this transition succeeds"
+            );
+        }
+    }
+
     /// Submit the transaction to create a validity dispute game.
     ///
     /// If the DGF address is set, use it to create a new validity dispute game that will resolve
@@ -1376,7 +1581,7 @@ where
     async fn relay_aggregation_proof(
         &self,
         completed_agg_proof: &OPSuccinctRequest,
-    ) -> Result<B256> {
+    ) -> Result<RelayOutcome> {
         // Get the output at the end block of the last completed aggregation proof.
         let output = self
             .driver_config
@@ -1410,7 +1615,11 @@ where
             )
             .into_transaction_request();
 
-        let receipt = self
+        // Cloned before sending because the signer consumes the request, and a transaction that
+        // reverts on chain has to be replayed to recover why.
+        let replay_request = transaction_request.clone();
+
+        match self
             .driver_config
             .signer
             .send_transaction_request_with_timeout(
@@ -1418,14 +1627,65 @@ where
                 transaction_request,
                 self.requester_config.tx_confirmation_timeout,
             )
-            .await?;
+            .await
+        {
+            Ok(receipt) if receipt.status() => {
+                Ok(RelayOutcome::Relayed(receipt.transaction_hash()))
+            }
 
-        // If the transaction reverted, log the error.
-        if !receipt.status() {
-            return Err(anyhow!("Transaction reverted: {:?}", receipt));
+            // Mined and reverted. A `TransactionReceipt` carries no revert data, so the only way to
+            // learn why is to replay the call.
+            Ok(receipt) => {
+                Ok(RelayOutcome::Rejected(self.classify_by_replay(replay_request, &receipt).await))
+            }
+
+            Err(e) => match revert_data_of_anyhow(&e) {
+                // Rejected before broadcast. This is the common case, not the exception: alloy's
+                // gas filler runs `eth_estimateGas` first, so a deterministic
+                // revert is caught there and the transaction never reaches a block.
+                // The error carries the revert data directly, so no replay is
+                // needed.
+                Some(data) => Ok(RelayOutcome::Rejected(classify_revert_data(&data))),
+                // No revert data means the transaction was never delivered — nonce, funds, a dead
+                // RPC. Nothing to classify; let the caller retry as before.
+                None => Err(e),
+            },
         }
+    }
 
-        Ok(receipt.transaction_hash())
+    /// Recover a mined-and-reverted transaction's rejection by replaying it as `eth_call`.
+    ///
+    /// Replayed at the mined block and as the same sender, so the call observes the closest state
+    /// we can address. Two caveats are inherent and bounded rather than fixed here: `eth_call`
+    /// at block N sees N's post-state rather than the exact pre-state of our slot, so a
+    /// same-block transaction that changed guard state can mislead the attribution; and the
+    /// cloned request predates the signer's gas filling, so an out-of-gas failure cannot
+    /// reproduce and lands in [`NoVerdictReason::ReplayDidNotRevert`].
+    async fn classify_by_replay(
+        &self,
+        mut replay_request: TransactionRequest,
+        receipt: &TransactionReceipt,
+    ) -> RelayRejection {
+        replay_request.from = Some(receipt.from);
+        let block = receipt.block_number.map_or(BlockId::latest(), BlockId::number);
+
+        // Bounded: the provider is built on a plain reqwest client with no request timeout, so an
+        // L1 endpoint that accepts the connection and then stalls would hang the whole
+        // proposer loop here without logging anything.
+        let replay = tokio::time::timeout(
+            Duration::from_secs(self.requester_config.network_calls_timeout),
+            self.contract_config.l2oo_contract.provider().call(replay_request).block(block),
+        )
+        .await;
+
+        match replay {
+            Ok(Err(e)) => match revert_data_of_rpc_error(&e) {
+                Some(data) => classify_revert_data(&data),
+                None => RelayRejection::NoVerdict { reason: NoVerdictReason::ReplayUnreachable },
+            },
+            Ok(Ok(_)) => RelayRejection::NoVerdict { reason: NoVerdictReason::ReplayDidNotRevert },
+            Err(_) => RelayRejection::NoVerdict { reason: NoVerdictReason::ReplayTimedOut },
+        }
     }
 
     /// Validate the requester config matches the contract.
@@ -1947,6 +2207,36 @@ fn highest_proven_contiguous_block(completed_range_proofs: &[(i64, i64)]) -> Opt
         current_end = end;
     }
     Some(current_end)
+}
+
+/// [UPSTREAM #923] Tests for the checkpoint selection this backport introduced.
+#[cfg(test)]
+mod checkpoint_selection_tests {
+    use super::select_checkpoint_block_number;
+
+    #[test]
+    fn falls_back_to_safe_when_no_range_proof_records_an_l1_head() {
+        // Proofs predating the `l1_head_block_number` column. `safe` is still reorg-stable, which
+        // is the whole point of moving off `latest`.
+        assert_eq!(select_checkpoint_block_number(1000, None), 1000);
+    }
+
+    #[test]
+    fn uses_safe_when_it_already_covers_the_batch() {
+        // The normal case under L1_BLOCK_TAG=finalized|safe: every range l1Head is at or below
+        // safe.
+        assert_eq!(select_checkpoint_block_number(1000, Some(900)), 1000);
+        // Exactly equal is covered — the guest starts at the checkpoint itself, so it only has to
+        // reach that head, not exceed it.
+        assert_eq!(select_checkpoint_block_number(1000, Some(1000)), 1000);
+    }
+
+    #[test]
+    fn floors_at_the_batch_max_when_a_range_head_is_newer_than_safe() {
+        // Reachable under L1_BLOCK_TAG=latest. Without the floor the guest could not walk back to
+        // that range proof's l1Head and the aggregation would fail on its header-chain assertion.
+        assert_eq!(select_checkpoint_block_number(1000, Some(1005)), 1005);
+    }
 }
 
 #[cfg(test)]

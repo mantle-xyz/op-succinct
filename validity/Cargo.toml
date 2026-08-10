@@ -42,6 +42,10 @@ alloy-eips.workspace = true
 alloy-provider = { workspace = true }
 alloy-signer-local.workspace = true
 alloy-sol-types.workspace = true
+alloy-rpc-types-eth.workspace = true
+# Needed to downcast a relay failure to `RpcError` and read its revert data as bytes, instead of
+# classifying the rejection by matching the rendered error string. See src/relay_rejection.rs.
+alloy-transport.workspace = true
 
 anyhow.workspace = true
 dotenv.workspace = true
@@ -73,6 +77,8 @@ op-succinct-build-utils.workspace = true
 
 [dev-dependencies]
 postgresql_embedded = { version = "0.20", features = ["bundled"] }
+alloy-json-rpc.workspace = true
+serde_json.workspace = true
 
 [features]
 default = []

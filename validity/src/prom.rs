@@ -101,6 +101,16 @@ pub enum ValidityGauge {
         message = "Number of network prover call timeouts"
     )]
     NetworkCallTimeoutCount,
+    #[strum(
+        serialize = "succinct_agg_proof_blocked_by_contract_guard",
+        message = "1 while proposeL2Output is refused by a contract guard no proof can satisfy (optimistic mode, proposer approval, future timestamp, zero output root); needs operator action, not a new proof. Set on every submit_agg_proofs pass, so it clears by itself once the chain accepts a proposal."
+    )]
+    AggProofBlockedByContractGuard,
+    #[strum(
+        serialize = "succinct_agg_proof_rebuilt_after_rejection_count",
+        message = "Number of aggregation proofs failed and rebuilt because the chain rejected the previous one"
+    )]
+    AggProofRebuiltAfterRejection,
 }
 
 impl MetricsGauge for ValidityGauge {}

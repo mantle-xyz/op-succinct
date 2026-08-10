@@ -139,12 +139,12 @@ pub async fn read_proposer_env() -> Result<EnvironmentConfig> {
         // exceed the heaviest *legitimate* witnessgen. 30 min suits normal / gas-bounded ranges;
         // note a full 1800-block, ~190k-tx range took ~40 min in QA stress tests — raise
         // WITNESSGEN_TIMEOUT for such heavy workloads or witnessgen will falsely time out.
-        witnessgen_timeout: get_env_var("WITNESSGEN_TIMEOUT", Some(1800))?,      // 30 minutes
-        network_calls_timeout: get_env_var("NETWORK_CALLS_TIMEOUT", Some(15))?,  // 15 seconds
+        witnessgen_timeout: get_env_var("WITNESSGEN_TIMEOUT", Some(1800))?, // 30 minutes
+        network_calls_timeout: get_env_var("NETWORK_CALLS_TIMEOUT", Some(15))?, // 15 seconds
         range_cycle_limit: get_env_var("RANGE_CYCLE_LIMIT", Some(1_000_000_000_000))?, // 1 trillion
         range_gas_limit: get_env_var("RANGE_GAS_LIMIT", Some(1_000_000_000_000))?, // 1 trillion
         agg_cycle_limit: get_env_var("AGG_CYCLE_LIMIT", Some(1_000_000_000_000))?, // 1 trillion
-        agg_gas_limit: get_env_var("AGG_GAS_LIMIT", Some(1_000_000_000_000))?,   // 1 trillion
+        agg_gas_limit: get_env_var("AGG_GAS_LIMIT", Some(1_000_000_000_000))?, // 1 trillion
         whitelist: parse_whitelist(&get_env_var("WHITELIST", Some("".to_string()))?)?,
         min_auction_period: get_env_var("MIN_AUCTION_PERIOD", Some(1))?,
         auction_timeout: get_env_var("AUCTION_TIMEOUT", Some(60))?, // 1 minute

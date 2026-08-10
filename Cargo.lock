@@ -6975,10 +6975,13 @@ name = "op-succinct-validity"
 version = "3.8.1"
 dependencies = [
  "alloy-eips 2.0.4",
+ "alloy-json-rpc 2.0.4",
  "alloy-primitives",
  "alloy-provider",
+ "alloy-rpc-types-eth 2.0.4",
  "alloy-signer-local 2.0.4",
  "alloy-sol-types",
+ "alloy-transport",
  "anyhow",
  "base64 0.22.1",
  "bincode",
