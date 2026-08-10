@@ -162,19 +162,6 @@ impl RelayRejection {
     }
 }
 
-/// Classify a rejected `proposeL2Output` from the revert data the node returned.
-///
-/// `None` means no revert data was recoverable; the caller supplies why via `no_verdict_reason`.
-pub fn classify_relay_rejection(
-    revert_data: Option<&Bytes>,
-    no_verdict_reason: NoVerdictReason,
-) -> RelayRejection {
-    match revert_data {
-        Some(data) => classify_revert_data(data),
-        None => RelayRejection::NoVerdict { reason: no_verdict_reason },
-    }
-}
-
 /// Classify revert data that is known to be present.
 pub fn classify_revert_data(data: &Bytes) -> RelayRejection {
     // `ContractError` covers the two standard surfaces (`Error(string)` from `require`,
@@ -272,23 +259,30 @@ mod tests {
         &rest[..end]
     }
 
+    /// The body of the `whenNotOptimistic` modifier, from its signature to its closing brace.
+    fn when_not_optimistic_body() -> &'static str {
+        let start = L2OO_SOURCE
+            .find("modifier whenNotOptimistic")
+            .expect("whenNotOptimistic modifier still exists");
+        let rest = &L2OO_SOURCE[start..];
+        // Modifiers are short; the first `\n    }` at the contract's indentation level closes it.
+        let end = rest.find("\n    }").map_or(rest.len(), |i| i + 1);
+        &rest[..end]
+    }
+
     /// Every `L2OutputOracle: …` literal reachable from the validity `proposeL2Output`: the ones in
-    /// its own body plus the one in the `whenNotOptimistic` modifier it applies.
+    /// its own body plus those in the `whenNotOptimistic` modifier it applies.
+    ///
+    /// Both scopes are scanned in full. An earlier version took only the first two `"`-delimited
+    /// pieces after the modifier's signature, which meant a `require` ADDED to the modifier was
+    /// invisible — it would fall through to `RebuildableGuard` and burn an aggregation proof every
+    /// pass, while this test stayed green.
     fn guards_on_the_validity_path() -> Vec<&'static str> {
         let mut found: Vec<&str> = propose_l2_output_body()
             .split('"')
+            .chain(when_not_optimistic_body().split('"'))
             .filter(|s| s.starts_with("L2OutputOracle: "))
             .collect();
-
-        let modifier = L2OO_SOURCE
-            .find("modifier whenNotOptimistic")
-            .expect("whenNotOptimistic modifier still exists");
-        found.extend(
-            L2OO_SOURCE[modifier..]
-                .split('"')
-                .take(2)
-                .filter(|s| s.starts_with("L2OutputOracle: ")),
-        );
 
         found.sort_unstable();
         found
@@ -323,10 +317,7 @@ mod tests {
     #[test]
     fn unsatisfiable_guards_do_not_rebuild() {
         for guard in UNSATISFIABLE_GUARDS {
-            let r = classify_relay_rejection(
-                Some(&require_revert(guard)),
-                NoVerdictReason::ReplayUnreachable,
-            );
+            let r = classify_revert_data(&require_revert(guard));
             assert_eq!(
                 r,
                 RelayRejection::UnsatisfiableGuard { message: guard.to_string() },
@@ -341,10 +332,7 @@ mod tests {
         // After an operator raises `submissionInterval`, an aggregation whose `end_block` came from
         // the old interval can ONLY recover by being rebuilt over a wider range. Treating it as
         // unsatisfiable would leave it `Complete` forever, blocking any replacement.
-        let r = classify_relay_rejection(
-            Some(&require_revert(REBUILDABLE_GUARD)),
-            NoVerdictReason::ReplayUnreachable,
-        );
+        let r = classify_revert_data(&require_revert(REBUILDABLE_GUARD));
         assert_eq!(r, RelayRejection::RebuildableGuard { message: REBUILDABLE_GUARD.to_string() });
         assert!(r.should_rebuild());
     }
@@ -352,10 +340,7 @@ mod tests {
     #[test]
     fn an_unlisted_require_rebuilds_rather_than_stalling() {
         // A `require` added upstream must waste a proof, not freeze the contract head.
-        let r = classify_relay_rejection(
-            Some(&require_revert("L2OutputOracle: some future guard")),
-            NoVerdictReason::ReplayUnreachable,
-        );
+        let r = classify_revert_data(&require_revert("L2OutputOracle: some future guard"));
         assert!(matches!(r, RelayRejection::RebuildableGuard { .. }));
         assert!(r.should_rebuild());
     }
@@ -409,23 +394,24 @@ mod tests {
         // The contract or verifier was upgraded. Rebuilding wastes a proof; not rebuilding would
         // freeze the head. The data is preserved so the log can name the selector.
         let data = selector_only([0x1a, 0x2b, 0x3c, 0x4d]);
-        let r = classify_relay_rejection(Some(&data), NoVerdictReason::ReplayUnreachable);
+        let r = classify_revert_data(&data);
         assert_eq!(r, RelayRejection::UnknownRevert { data });
         assert!(r.should_rebuild());
     }
 
     #[test]
-    fn no_revert_data_carries_the_callers_reason_and_rebuilds() {
+    fn a_missing_verdict_rebuilds_whatever_the_reason() {
         for reason in [
             NoVerdictReason::ReplayDidNotRevert,
             NoVerdictReason::ReplayUnreachable,
             NoVerdictReason::ReplayTimedOut,
         ] {
-            let r = classify_relay_rejection(None, reason.clone());
-            assert_eq!(r, RelayRejection::NoVerdict { reason });
             // Out of gas cannot reproduce on replay (it carries no gas limit), so this bucket must
             // not be a place where a genuinely dead proof can hide forever.
-            assert!(r.should_rebuild());
+            assert!(
+                RelayRejection::NoVerdict { reason: reason.clone() }.should_rebuild(),
+                "{reason:?} must rebuild"
+            );
         }
     }
 
@@ -433,7 +419,7 @@ mod tests {
     fn a_solidity_panic_is_distinguished_from_a_revert() {
         let mut data = alloy_sol_types::Panic::SELECTOR.to_vec();
         data.extend_from_slice(&alloy_primitives::U256::from(0x11).abi_encode());
-        let r = classify_relay_rejection(Some(&data.into()), NoVerdictReason::ReplayUnreachable);
+        let r = classify_revert_data(&data.into());
         assert_eq!(r, RelayRejection::ContractPanic { code: 0x11 });
         assert!(r.should_rebuild());
     }
@@ -517,14 +503,20 @@ mod tests {
         assert_eq!(revert_data_of_anyhow(&anyhow::anyhow!("nonce too low")), None);
     }
 
-    /// Documents a real limitation as an assertion rather than a comment.
+    /// Pins a real limitation as an assertion rather than a comment.
     ///
-    /// `anyhow`'s `downcast_ref` walks its own context layers, NOT `std::error::Error::source()`.
-    /// So an `RpcError` nested inside another concrete error type is invisible here. That is
-    /// fine today — the relay path's errors come from `fill` / `send_transaction`, which
-    /// propagate `RpcError` directly — but if this path ever starts surfacing
-    /// `PendingTransactionError` (from `get_receipt()`) or `alloy_contract::Error`, this
-    /// function must be changed to walk the source chain, and this test is what will say so.
+    /// `anyhow`'s `downcast_ref` walks its own context layers, NOT `std::error::Error::source()`,
+    /// so an `RpcError` nested inside another concrete error type is invisible here.
+    ///
+    /// Note what the fix would NOT be. Walking `source()` does not recover this case either:
+    /// `PendingTransactionError::TransportError` is `#[error(transparent)]`, so the `source()`
+    /// thiserror generates forwards *past* the `RpcError` to whatever is inside it — the
+    /// `RpcError` itself never appears on the chain. Reading data out of that shape needs an
+    /// explicit `downcast_ref::<PendingTransactionError>()` per wrapper type.
+    ///
+    /// None of this bites today: the relay path's errors come from `fill` / `send_transaction`,
+    /// which propagate `RpcError` directly, and `PendingTransactionError` only arises from
+    /// `get_receipt()` — by which point the transaction is mined and carries no revert data.
     #[test]
     fn revert_data_is_invisible_through_a_concrete_error_wrapper() {
         let data = Bytes::from(vec![0x1f, 0xcf, 0x91, 0x77]);

@@ -322,7 +322,9 @@ aggregation SP1 programs. Two Mantle-specific tweaks:
 ### 3.9 Validity proposer — relay-rejection handling and transport-fault classification
 
 Two independent problems in the aggregation submission path, neither of which upstream addresses.
-Upstream's `relay_aggregation_proof` is **byte-for-byte identical from v3.8.1 through v4.6.1**: a
+Upstream's `relay_aggregation_proof` is **byte-for-byte identical from v3.8.1 through v4.6.1**
+(compared via the GitHub contents API at those tags — the local `upstream` remote's tag set predates
+v3.8.1, so `git show v4.6.1:...` cannot reproduce this; run `git remote update upstream` first): a
 revert returns `Err`, the main loop logs it and sleeps 10s, and the next pass resubmits the same
 proof unchanged. Because `Complete` counts toward `fetch_active_agg_proofs_count`, a genuinely
 invalid proof there is a permanent stall — observed on QA3, where an aggregation sat `Complete` for
@@ -333,17 +335,21 @@ two days while 486 range proofs piled up ~90k blocks ahead of a frozen contract 
 | File | Change |
 |---|---|
 | `utils/host/src/contract.rs` | Added the oracle's `error L1BlockHashNotCheckpointed()` / `error L1BlockHashNotAvailable()` declarations, plus a separate `sol! { interface SP1Verifier { error InvalidProof(); error InvalidExitCode(); } }`. Without these the generated `OPSuccinctL2OutputOracleErrors` enum is empty and no revert can be decoded. `InvalidExitCode()` is not in the vendored `sp1-contracts` copy (the deployed verifier is newer); it is declared from its selector `0x1fcf9177`, observed on QA3. |
-| `validity/src/relay_rejection.rs` (new) | `classify_relay_rejection` / `classify_revert_data`: a pure function over `Option<&Bytes>` returning `RelayRejection` (`ProofRejected` / `UnsatisfiableGuard` / `RebuildableGuard` / `ContractPanic` / `UnknownRevert` / `NoVerdict`). `require(cond, "…")` is decoded via `alloy_sol_types::Revert` back to the original string; every other surface by 4-byte selector. Also `revert_data_of_rpc_error`, which reads the `data` field with `try_data_as` rather than alloy's `as_revert_data()` — the latter first checks `message.contains("revert")`, so a client answering `"VM execution error."` (Nethermind) would hide a real verdict. |
-| `validity/src/proposer.rs` (`relay_aggregation_proof`) | Returns `RelayOutcome::{Relayed, Rejected}` instead of `Result<B256>`. A rejection is an outcome, not an error: `Err` is now reserved for a transaction that was never delivered (nonce, funds, dead RPC), the only case where retrying unchanged is right. Pre-flight rejections are read straight off the send error — the common path, since alloy's gas filler runs `eth_estimateGas` first and a deterministic revert never reaches a block. A mined-and-reverted transaction is replayed as `eth_call` at its own block (a receipt carries no revert data), bounded by `NETWORK_CALLS_TIMEOUT`. |
+| `validity/src/relay_rejection.rs` (new) | `classify_revert_data`: a pure function over `&Bytes` returning `RelayRejection` (`ProofRejected` / `CheckpointUnusable` / `UnsatisfiableGuard` / `RebuildableGuard` / `ContractPanic` / `UnknownRevert` / `NoVerdict`). `require(cond, "…")` is decoded via `alloy_sol_types::Revert` back to the original string; every other surface by 4-byte selector. Also `revert_data_of_rpc_error`, which reads the `data` field with `try_data_as` rather than alloy's `as_revert_data()` — the latter first checks `message.contains("revert")`, so a client answering `"VM execution error."` (Nethermind) would hide a real verdict. |
+| `validity/src/proposer.rs` (`relay_aggregation_proof`) | Returns `RelayOutcome::{Relayed, Rejected}` instead of `Result<B256>`. A rejection is an outcome, not an error: `Err` is now reserved for a transaction that was never delivered (nonce, funds, dead RPC), the only case where retrying unchanged is right. Pre-flight rejections are read straight off the send error — the common path, since alloy's gas filler runs `eth_estimateGas` first and a deterministic revert never reaches a block. A mined-and-reverted transaction is replayed as `eth_call` at its own block (a receipt carries no revert data), bounded by `NETWORK_CALLS_TIMEOUT`. The two decisions are pure functions — `send_outcome(Result<TransactionReceipt>)` and `replay_verdict(Result<Result<Bytes, RpcError>, Elapsed>)` — because inside the `await` they were unreachable from any test; a mutation pass confirmed both were then free to silently degrade (e.g. dropping the `receipt.status()` check, which would mark a reverted proposal as relayed). |
 | `validity/src/proposer.rs` (`handle_relay_rejection`) | One `warn!` per rejection class carrying the decoded reason, the selector in hex, and an explicit operator ACTION. Only `UnsatisfiableGuard` keeps the request `Complete`; everything else — including unrecognised selectors and unrecoverable reasons — transitions to `Failed` so the next loop builds a replacement. Wasting one proof is strictly preferable to freezing the head. All paths return `Ok(())`, so the loop keeps `LOOP_INTERVAL` and `update_chain_lock` still runs. |
+| `validity/src/proposer.rs` (`run_loop_iteration`) | Two changes a sync must not undo. **Order**: `submit_agg_proofs` runs BEFORE `create_aggregation_proofs`, so delivering finished work does not depend on producing new work — they touch disjoint rows within a pass (submit reads only `Complete`, create inserts `Unrequested`, and nothing in the iteration moves a row between those states since witnessgen and proving run in spawned tasks). **Error policy**: both of these steps — the only two that broadcast an L1 transaction — log and continue instead of propagating, because an L1 revert that waits on the chain (`blockhash()`'s 256-block window for `checkpointBlockHash`, `TX_CONFIRMATION_TIMEOUT` under congestion for `proposeL2Output`) says nothing about whether the rest of the pass can progress, while aborting skips `request_queued_proofs` (range proofs stop being produced) and `update_chain_lock` (whose lease is exactly `LOOP_INTERVAL`). Every other step still propagates. |
 | `validity/src/prom.rs` | `succinct_agg_proof_blocked_by_contract_guard` (0/1, set on every `submit_agg_proofs` pass so it clears itself) and `succinct_agg_proof_rebuilt_after_rejection_count`. |
 
 `UNSATISFIABLE_GUARDS` lists only the four `require`s that no proof can satisfy; anything else —
 including a `require` added upstream — falls through to `RebuildableGuard`, which wastes a proof
-rather than stalling. `guard_list_still_matches_the_contract` reads
-`contracts/src/validity/OPSuccinctL2OutputOracle.sol` with `include_str!` and asserts both the
-strings and the count inside `proposeL2Output`'s body, so a reword or a new `require` upstream fails
-a test instead of silently changing behaviour.
+rather than stalling. `every_guard_on_the_validity_path_is_classified_exactly_once` reads
+`contracts/src/validity/OPSuccinctL2OutputOracle.sol` with `include_str!` and asserts SET EQUALITY
+between the guards reachable from `proposeL2Output` (its body plus the `whenNotOptimistic` modifier it
+applies) and `UNSATISFIABLE_GUARDS ∪ {the rebuildable one}`. Set equality rather than substring or
+count checks, each of which a broken list satisfied: substrings accept a message the contract has
+since extended, a whole-file search is satisfied by the optimistic-mode overload's copy after the
+validity one is reworded, and a count cannot see a member removed from the list.
 
 **No schema change.** No migration, no new `RequestStatus`. A rejected aggregation still goes to
 `Failed`.
@@ -356,8 +362,9 @@ database by hand, and deploying onto an already-stuck proposer tripped the cap o
 window meant to release it then had to outlast the rebuild cycle, which nothing guarantees. Bounding
 the cost is therefore left to observation (`succinct_agg_proof_rebuilt_after_rejection_count` plus a
 per-class `warn!` with an operator ACTION) rather than to a mechanism that can wedge the chain.
-Note the rebuild cycle is one aggregation witnessgen+prove, not `PROVING_TIMEOUT` — a rejection is
-followed by a rebuild on the very next pass.
+Note the rebuild cycle is one aggregation witnessgen+prove, not `PROVING_TIMEOUT`: a rejection frees
+the `fetch_active_agg_proofs_count` slot immediately, so with submit running before create the
+replacement is built in the SAME pass.
 
 **b. Transport faults no longer bisect a healthy range** (`e315e944`, `3ab9c5a1`).
 
@@ -397,7 +404,7 @@ one aggregation proof is wasted.
 | File | Change |
 |---|---|
 | `validity/src/proposer.rs` | Added `select_checkpoint_block_number(safe, batch_max_l1_head)` (verbatim from upstream) and switched the fresh-checkpoint path from `BlockId::latest()` to `BlockId::safe()`, floored at the batch's max `l1Head`. `safe` is reorg-stable and inside the EVM `blockhash` window; the floor guarantees coverage under `L1_BLOCK_TAG=latest`, where a range `l1Head` can exceed `safe`. |
-| `validity/src/proposer.rs` (checkpoint reuse) | Added the same floor as a reuse gate: a cached checkpoint below the batch's max `l1Head` is discarded. A matching on-chain hash only proves the block was not reorged out between writing the row and the checkpoint transaction executing — not that the guest can reach every range proof's `l1Head` from it. |
+| `validity/src/proposer.rs` (`checkpoint_plan`) | The reuse-or-recheckpoint decision, extracted as a pure function returning `CheckpointPlan::{Reuse, Fresh{anchor, reason}}`. It adds the same floor as a reuse gate: a cached checkpoint below the batch's max `l1Head` is discarded, because a matching on-chain hash only proves the block was not reorged out between writing the row and the checkpoint transaction executing — not that the guest can reach every range proof's `l1Head` from it. Returning the `anchor` rather than reading it inline is what makes this backport testable at all: a mutation pass found that changing it back to `BlockId::latest()` — the entire bug #923 fixes — left the whole suite green. |
 | `validity/src/db/client.rs` | Added `get_max_l1_head_block_number_for_range`, kept under upstream's name and body. One deviation: upstream's WHERE also carries `invalidated_at IS NULL`, a column introduced by #951 which this baseline lacks — drop that deviation if #951 is ever backported. Its WHERE clause must stay in sync with `get_consecutive_complete_range_proofs` so the MAX covers exactly the range proofs the aggregation consumes. |
 
 Not backported (tracked, larger): **#951/#952** (`invalidated_at` / `Invalidated` status /
