@@ -11,7 +11,7 @@ synchronizing future upstream changes.
 | Item | Value |
 |---|---|
 | Upstream tracking point | succinctlabs/op-succinct tag `v3.8.1` @ `1e8e32e0` |
-| Mantle branch | `mantle/op-succinct-v3.8.1` (this repo, `origin` = `mantle-xyz/op-succinct`) |
+| Mantle branch | `mantle/proposer-hardening` (this repo, `origin` = `mantle-xyz/op-succinct`). Branched from `main` after the v3.8.1 baseline merge (PR #43); the former `mantle/op-succinct-v3.8.1` branch was deleted once merged. |
 | Older Mantle fork (deprecated) | `origin/main` HEAD `664a1bd4` (≈ v3.4.1 era + 68 ad-hoc commits; superseded by this branch) |
 | Rust toolchain | 1.94 (see `rust-toolchain.toml`) |
 | Dependency source: kona / op-alloy / alloy-op-evm | `mantlenetworkio/mantle-v2` rust subtree @ `13b367fc` (on `mantle-elysium`, one commit past the former tip `d2e4ebea`). `13b367fc` adds the Osaka/BPO1/BPO2 L1 blob params to kona's `default_blob_schedule()` — the actual fix for the Sepolia derivation divergence. The intermediate `d2e4ebea` bump (from `29e41dad`) is kept for its `05b2cca3e`/`05079251c` fixes but did NOT resolve the divergence on its own. See §3.1a. |
@@ -319,6 +319,73 @@ aggregation SP1 programs. Two Mantle-specific tweaks:
 | `rust-toolchain.toml` | `nightly-2026-02-15` (rustc 1.95-nightly) | Upstream v3.8.1 pinned `nightly-2025-09-15` (rustc 1.92-nightly). After Phase 2 swapped deps to mantle-v2, those crates' `rust-version = "1.94"` declaration started rejecting 1.92-nightly. Bumped to 1.95-nightly which keeps the `rustc-dev` component build scripts need. |
 | `mise.toml` | `forge = cast = anvil = "1.4.3"`, `svm-rs = "0.5.19"` | Upstream v3.8.1's `bindings/build.rs` calls `forge bind` to generate `bindings/src/codegen/` (gitignored). Without forge on PATH, build.rs prints a warning and skips generation, then `lib.rs:7 mod codegen;` fails to find the module. `forge bind` from 1.2.x generates alloy-0.x-flavoured Rust (3-arg `RawCallBuilder`, the old `Transport` trait) which won't compile against this workspace's alloy 2.0.4 deps — pin **1.4.x** instead (mantle-v2/mise.toml's 1.2.3 stays because mantle-v2 has no `bindings/` crate). `rust` is intentionally NOT pinned here — `rust-toolchain.toml` already drives it and a mise rust pin would silently override (we hit exactly this with mantle-v2's mise.toml earlier). |
 
+### 3.9 Validity proposer — relay-rejection handling and transport-fault classification
+
+Two independent problems in the aggregation submission path, neither of which upstream addresses.
+Upstream's `relay_aggregation_proof` is **byte-for-byte identical from v3.8.1 through v4.6.1**: a
+revert returns `Err`, the main loop logs it and sleeps 10s, and the next pass resubmits the same
+proof unchanged. Because `Complete` counts toward `fetch_active_agg_proofs_count`, a genuinely
+invalid proof there is a permanent stall — observed on QA3, where an aggregation sat `Complete` for
+two days while 486 range proofs piled up ~90k blocks ahead of a frozen contract head.
+
+**a. Relay rejections are classified from typed revert data, and rebuilt unless proven harmless.**
+
+| File | Change |
+|---|---|
+| `utils/host/src/contract.rs` | Added the oracle's `error L1BlockHashNotCheckpointed()` / `error L1BlockHashNotAvailable()` declarations, plus a separate `sol! { interface SP1Verifier { error InvalidProof(); error InvalidExitCode(); } }`. Without these the generated `OPSuccinctL2OutputOracleErrors` enum is empty and no revert can be decoded. `InvalidExitCode()` is not in the vendored `sp1-contracts` copy (the deployed verifier is newer); it is declared from its selector `0x1fcf9177`, observed on QA3. |
+| `validity/src/relay_rejection.rs` (new) | `classify_relay_rejection` / `classify_revert_data`: a pure function over `Option<&Bytes>` returning `RelayRejection` (`ProofRejected` / `UnsatisfiableGuard` / `RebuildableGuard` / `ContractPanic` / `UnknownRevert` / `NoVerdict`). `require(cond, "…")` is decoded via `alloy_sol_types::Revert` back to the original string; every other surface by 4-byte selector. Also `revert_data_of_rpc_error`, which reads the `data` field with `try_data_as` rather than alloy's `as_revert_data()` — the latter first checks `message.contains("revert")`, so a client answering `"VM execution error."` (Nethermind) would hide a real verdict. |
+| `validity/src/proposer.rs` (`relay_aggregation_proof`) | Returns `RelayOutcome::{Relayed, Rejected}` instead of `Result<B256>`. A rejection is an outcome, not an error: `Err` is now reserved for a transaction that was never delivered (nonce, funds, dead RPC), the only case where retrying unchanged is right. Pre-flight rejections are read straight off the send error — the common path, since alloy's gas filler runs `eth_estimateGas` first and a deterministic revert never reaches a block. A mined-and-reverted transaction is replayed as `eth_call` at its own block (a receipt carries no revert data), bounded by `NETWORK_CALLS_TIMEOUT`. |
+| `validity/src/proposer.rs` (`handle_relay_rejection`) | One `warn!` per rejection class carrying the decoded reason, the selector in hex, and an explicit operator ACTION. Only `UnsatisfiableGuard` keeps the request `Complete`; everything else — including unrecognised selectors and unrecoverable reasons — transitions to `Failed` so the next loop builds a replacement. Wasting one proof is strictly preferable to freezing the head. All paths return `Ok(())`, so the loop keeps `LOOP_INTERVAL` and `update_chain_lock` still runs. |
+| `validity/src/prom.rs` | `succinct_agg_proof_blocked_by_contract_guard` (0/1, set on every `submit_agg_proofs` pass so it clears itself) and `succinct_agg_proof_rebuilt_after_rejection_count`. |
+
+`UNSATISFIABLE_GUARDS` lists only the four `require`s that no proof can satisfy; anything else —
+including a `require` added upstream — falls through to `RebuildableGuard`, which wastes a proof
+rather than stalling. `guard_list_still_matches_the_contract` reads
+`contracts/src/validity/OPSuccinctL2OutputOracle.sol` with `include_str!` and asserts both the
+strings and the count inside `proposeL2Output`'s body, so a reword or a new `require` upstream fails
+a test instead of silently changing behaviour.
+
+**No schema change.** No migration, no new `RequestStatus`. A rejected aggregation still goes to
+`Failed`.
+
+**b. Transport faults no longer bisect a healthy range** (`702246c1`, `afaf9bc7`).
+
+| File | Change |
+|---|---|
+| `validity/src/proposer.rs` | `is_transient_transport_error`: a gRPC `UNAVAILABLE` means the prover backend was unreachable, not that the proof failed, so the range is retried unchanged instead of being bisected. Classified by **typed** `tonic::Status` code via `downcast_ref` (the sp1-sdk's own `retry.rs` does the same), with the old string match kept only as a fallback for errors that are not a downcastable `Status`. |
+| `validity/Cargo.toml` | Pinned `tonic = "0.12"` (default-features off) to match the sp1-sdk's tonic — `Cargo.lock` carries four tonic versions, and a mismatch would make the downcast silently return `None`, i.e. everything bisects. |
+
+New dependencies on `validity`: `alloy-transport` (downcasting to `RpcError`), `alloy-rpc-types-eth`
+(the replay request/receipt types), and `alloy-json-rpc` + `serde_json` as dev-dependencies (building
+an `ErrorPayload` to pin that classification never consults the client's message wording).
+
+### 3.10 Upstream backport — succinctlabs/op-succinct#923 (agg checkpoint anchored to `safe`)
+
+**Marked `[UPSTREAM #923]` in code, not `[MANTLE]`.** These sites are a backport of upstream work,
+so a future sync should *drop our copy* rather than merge it — the opposite of what `[MANTLE]`
+markers mean. Grep `[UPSTREAM #923]` when syncing to v3.10.0 or later and delete each hit, keeping
+upstream's version.
+
+Upstream PR: `succinctlabs/op-succinct#923` by Farhad-Shabani, merged 2026-06-05, released in
+upstream **v3.10.0**. Its own description records the failure as having **"Hit 3× on Mantle"** — it
+was written for our chain and we simply never took it.
+
+The proposer checkpointed `BlockId::latest()`. The checkpoint head is pinned **by hash** while the
+aggregation guest's header range is fetched **by number**, so a tip reorg between the two orphans
+the checkpoint, the guest's `assert_eq!` (`programs/aggregation/src/main.rs`) rejects the input, and
+one aggregation proof is wasted.
+
+| File | Change |
+|---|---|
+| `validity/src/proposer.rs` | Added `select_checkpoint_block_number(safe, batch_max_l1_head)` (verbatim from upstream) and switched the fresh-checkpoint path from `BlockId::latest()` to `BlockId::safe()`, floored at the batch's max `l1Head`. `safe` is reorg-stable and inside the EVM `blockhash` window; the floor guarantees coverage under `L1_BLOCK_TAG=latest`, where a range `l1Head` can exceed `safe`. |
+| `validity/src/proposer.rs` (checkpoint reuse) | Added the same floor as a reuse gate: a cached checkpoint below the batch's max `l1Head` is discarded. A matching on-chain hash only proves the block was not reorged out between writing the row and the checkpoint transaction executing — not that the guest can reach every range proof's `l1Head` from it. |
+| `validity/src/db/client.rs` | Added `get_max_l1_head_block_number_for_range`, kept under upstream's name and body. One deviation: upstream's WHERE also carries `invalidated_at IS NULL`, a column introduced by #951 which this baseline lacks — drop that deviation if #951 is ever backported. Its WHERE clause must stay in sync with `get_consecutive_complete_range_proofs` so the MAX covers exactly the range proofs the aggregation consumes. |
+
+Not backported (tracked, larger): **#951/#952** (`invalidated_at` / `Invalidated` status /
+`reconcile_completed_range_canonicality` cascade) and the CAS state transitions from v3.11.x. Note
+#951's migration is numbered `05_add_request_invalidation.sql` upstream, which **collides with our
+`05_add_requests_indexes.sql`** — renumber it to `06_` when taking it.
+
 ## 4. Sync workflow
 
 When a new upstream Succinct Labs release lands (e.g. v3.9.0, v4.0.0):
@@ -340,6 +407,8 @@ git merge --abort
 git checkout -b mantle/op-succinct-v<X.Y.Z> mantle/op-succinct-v3.8.1
 git merge v<X.Y.Z>
 # resolve conflicts — `[MANTLE]` comments mark every site we touched
+# `[UPSTREAM #nnn]` marks a BACKPORT: if the sync target already contains that PR,
+# DELETE our copy and keep upstream's rather than merging the two.
 ```
 
 Resolve order:
