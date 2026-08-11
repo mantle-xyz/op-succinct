@@ -11,7 +11,7 @@ synchronizing future upstream changes.
 | Item | Value |
 |---|---|
 | Upstream tracking point | succinctlabs/op-succinct tag `v3.8.1` @ `1e8e32e0` |
-| Mantle branch | `mantle/op-succinct-v3.8.1` (this repo, `origin` = `mantle-xyz/op-succinct`) |
+| Mantle branch | `mantle/proposer-hardening` (this repo, `origin` = `mantle-xyz/op-succinct`). Branched from `main` after the v3.8.1 baseline merge (PR #43); the former `mantle/op-succinct-v3.8.1` branch was deleted once merged. |
 | Older Mantle fork (deprecated) | `origin/main` HEAD `664a1bd4` (≈ v3.4.1 era + 68 ad-hoc commits; superseded by this branch) |
 | Rust toolchain | 1.94 (see `rust-toolchain.toml`) |
 | Dependency source: kona / op-alloy / alloy-op-evm | `mantlenetworkio/mantle-v2` rust subtree @ `13b367fc` (on `mantle-elysium`, one commit past the former tip `d2e4ebea`). `13b367fc` adds the Osaka/BPO1/BPO2 L1 blob params to kona's `default_blob_schedule()` — the actual fix for the Sepolia derivation divergence. The intermediate `d2e4ebea` bump (from `29e41dad`) is kept for its `05b2cca3e`/`05079251c` fixes but did NOT resolve the divergence on its own. See §3.1a. |
@@ -319,6 +319,128 @@ aggregation SP1 programs. Two Mantle-specific tweaks:
 | `rust-toolchain.toml` | `nightly-2026-02-15` (rustc 1.95-nightly) | Upstream v3.8.1 pinned `nightly-2025-09-15` (rustc 1.92-nightly). After Phase 2 swapped deps to mantle-v2, those crates' `rust-version = "1.94"` declaration started rejecting 1.92-nightly. Bumped to 1.95-nightly which keeps the `rustc-dev` component build scripts need. |
 | `mise.toml` | `forge = cast = anvil = "1.4.3"`, `svm-rs = "0.5.19"` | Upstream v3.8.1's `bindings/build.rs` calls `forge bind` to generate `bindings/src/codegen/` (gitignored). Without forge on PATH, build.rs prints a warning and skips generation, then `lib.rs:7 mod codegen;` fails to find the module. `forge bind` from 1.2.x generates alloy-0.x-flavoured Rust (3-arg `RawCallBuilder`, the old `Transport` trait) which won't compile against this workspace's alloy 2.0.4 deps — pin **1.4.x** instead (mantle-v2/mise.toml's 1.2.3 stays because mantle-v2 has no `bindings/` crate). `rust` is intentionally NOT pinned here — `rust-toolchain.toml` already drives it and a mise rust pin would silently override (we hit exactly this with mantle-v2's mise.toml earlier). |
 
+### 3.9 Validity proposer — relay-rejection handling and transport-fault classification
+
+Two independent problems in the aggregation submission path, neither of which upstream addresses.
+Upstream's `relay_aggregation_proof` is **byte-for-byte identical from v3.8.1 through v4.6.1**
+(compared via the GitHub contents API at those tags — the local `upstream` remote's tag set predates
+v3.8.1, so `git show v4.6.1:...` cannot reproduce this; run `git remote update upstream` first): a
+revert returns `Err`, the main loop logs it and sleeps 10s, and the next pass resubmits the same
+proof unchanged. Because `Complete` counts toward `fetch_active_agg_proofs_count`, a genuinely
+invalid proof there is a permanent stall — observed on QA3, where an aggregation sat `Complete` for
+two days while 486 range proofs piled up ~90k blocks ahead of a frozen contract head.
+
+**a. Relay rejections are classified from typed revert data, and rebuilt unless proven harmless.**
+
+| File | Change |
+|---|---|
+| `utils/host/src/contract.rs` | Added the oracle's `error L1BlockHashNotCheckpointed()` / `error L1BlockHashNotAvailable()` declarations, plus a separate `sol! { interface SP1Verifier { error InvalidProof(); error InvalidExitCode(); } }`. Without these the generated `OPSuccinctL2OutputOracleErrors` enum is empty and no revert can be decoded. `InvalidExitCode()` is not in the vendored `sp1-contracts` copy (the deployed verifier is newer); it is declared from its selector `0x1fcf9177`, observed on QA3. |
+| `validity/src/relay_rejection.rs` (new) | `classify_revert_data`: a pure function over `&Bytes` returning `RelayRejection` (`ProofRejected` / `CheckpointUnusable` / `UnsatisfiableGuard` / `RebuildableGuard` / `ContractPanic` / `UnknownRevert` / `NoVerdict`). `require(cond, "…")` is decoded via `alloy_sol_types::Revert` back to the original string; every other surface by 4-byte selector. Also `revert_data_of_rpc_error`, which reads the `data` field with `try_data_as` rather than alloy's `as_revert_data()` — the latter first checks `message.contains("revert")`, so a client answering `"VM execution error."` (Nethermind) would hide a real verdict. |
+| `validity/src/proposer.rs` (`relay_aggregation_proof`) | Returns `RelayOutcome::{Relayed, Rejected}` instead of `Result<B256>`. A rejection is an outcome, not an error: `Err` is now reserved for a transaction that was never delivered (nonce, funds, dead RPC), the only case where retrying unchanged is right. Pre-flight rejections are read straight off the send error — the common path, since alloy's gas filler runs `eth_estimateGas` first and a deterministic revert never reaches a block. A mined-and-reverted transaction is replayed as `eth_call` at its own block (a receipt carries no revert data), bounded by `NETWORK_CALLS_TIMEOUT`. The two decisions are pure functions — `send_outcome(Result<TransactionReceipt>)` and `replay_verdict(Result<Result<Bytes, RpcError>, Elapsed>)` — because inside the `await` they were unreachable from any test; a mutation pass confirmed both were then free to silently degrade (e.g. dropping the `receipt.status()` check, which would mark a reverted proposal as relayed). |
+| `validity/src/proposer.rs` (`handle_relay_rejection`) | One `warn!` per rejection class carrying the decoded reason, the selector in hex, and an explicit operator ACTION. Only `UnsatisfiableGuard` keeps the request `Complete`; everything else — including unrecognised selectors and unrecoverable reasons — transitions to `Failed` so the next loop builds a replacement. Wasting one proof is strictly preferable to freezing the head. All paths return `Ok(())`, so the loop keeps `LOOP_INTERVAL` and `update_chain_lock` still runs. |
+| `validity/src/proposer.rs` (`run_loop_iteration`) | Three changes a sync must not undo. **Order**: `submit_agg_proofs` runs BEFORE `create_aggregation_proofs`. This is required, not a preference: `handle_relay_rejection` moves the rejected row from `Complete` to `Failed` within this same pass, and `fetch_active_agg_proofs_count` counts `Complete` while `fetch_failed_agg_request_with_checkpointed_block_hash` reads `Failed` — so running submit first is what lets one pass both reject and rebuild. Create-then-submit costs a full `LOOP_INTERVAL` per rejection. **Per-pass relay floor**: that order opens a window in the *success* case, since `fetch_active_agg_proofs_count` excludes `Relayed` (deliberately — see `db/client.rs`) and an L1 read endpoint lagging behind our own transaction would report a head that does not yet include the relay, so the pass would build a duplicate aggregation over a range already proposed and waste it on the inevitable revert. `submit_agg_proofs` therefore returns the `end_block` it relayed, and `create_aggregation_proofs` compares the head it reads against it (`create_should_run`), skipping the pass when the head is behind. An earlier version simply deferred create for one `LOOP_INTERVAL` after any successful relay; that only narrowed the window to a lag shorter than one interval — beyond it the row is already `Relayed`, `fetch_completed_agg_proof_after_block` no longer returns it, and the next pass creates the duplicate anyway — while costing throughput on every aggregation. Comparing against the floor closes it at any lag and costs nothing when the endpoint is current. The floor is deliberately per-pass: an L1 reorg can drop a confirmed proposal, and a remembered floor would keep the proposer building from a start block the contract never reached. **Error policy**: both of these steps — the only two that broadcast an L1 transaction — log and continue instead of propagating, because an L1 revert that waits on the chain (`blockhash()`'s 256-block window for `checkpointBlockHash`, `TX_CONFIRMATION_TIMEOUT` under congestion for `proposeL2Output`) says nothing about whether the rest of the pass can progress, while aborting skips `request_queued_proofs` (range proofs stop being produced) and `update_chain_lock` (whose lease is exactly `LOOP_INTERVAL`). Every other step still propagates. |
+| `validity/src/prom.rs` | `succinct_agg_proof_blocked_by_contract_guard` (0/1, set on every `submit_agg_proofs` pass so it clears itself) and `succinct_agg_proof_rebuilt_after_rejection_count`. |
+
+`UNSATISFIABLE_GUARDS` lists only the four `require`s that no proof can satisfy; anything else —
+including a `require` added upstream — falls through to `RebuildableGuard`, which wastes a proof
+rather than stalling. `every_guard_on_the_validity_path_is_classified_exactly_once` reads
+`contracts/src/validity/OPSuccinctL2OutputOracle.sol` with `include_str!` and asserts SET EQUALITY
+between the guards reachable from `proposeL2Output` (its body plus the `whenNotOptimistic` modifier it
+applies) and `UNSATISFIABLE_GUARDS ∪ {the rebuildable one}`. Set equality rather than substring or
+count checks, each of which a broken list satisfied: substrings accept a message the contract has
+since extended, a whole-file search is satisfied by the optimistic-mode overload's copy after the
+validity one is reworded, and a count cannot see a member removed from the list.
+
+**No schema change.** No migration, no new `RequestStatus`. A rejected aggregation still goes to
+`Failed`.
+
+**No rebuild cap, deliberately.** An earlier attempt bounded rebuilds with `MAX_AGG_REGENERATIONS`
+plus a time window over `COUNT(*)` of `Failed` rows. Every cap of that shape recreates an absorbing
+state: `Failed` rows are never deleted and the count only resets when an aggregation lands, which is
+precisely what the cap prevents — so an operator who fixed the root cause still had to edit the
+database by hand, and deploying onto an already-stuck proposer tripped the cap on its first pass. The
+window meant to release it then had to outlast the rebuild cycle, which nothing guarantees. Bounding
+the cost is therefore left to observation (`succinct_agg_proof_rebuilt_after_rejection_count` plus a
+per-class `warn!` with an operator ACTION) rather than to a mechanism that can wedge the chain.
+Note the rebuild cycle is one aggregation witnessgen+prove, not `PROVING_TIMEOUT`: a rejection frees
+the `fetch_active_agg_proofs_count` slot immediately, so with submit running before create the
+replacement is built in the SAME pass.
+
+**b. Transport faults no longer bisect a healthy range** (`e315e944`, `3ab9c5a1`).
+
+| File | Change |
+|---|---|
+| `validity/src/proposer.rs` | `is_transient_transport_error`: a gRPC `UNAVAILABLE` means the prover backend was unreachable, not that the proof failed, so the range is retried unchanged instead of being bisected. Classified by **typed** `tonic::Status` code via `downcast_ref` (the sp1-sdk's own `retry.rs` does the same), with the old string match kept only as a fallback for errors that are not a downcastable `Status`. |
+| `validity/Cargo.toml` | Pinned `tonic = "0.12"` (default-features off) to match the sp1-sdk's tonic — `Cargo.lock` carries four tonic versions, and a mismatch would make the downcast silently return `None`, i.e. everything bisects. |
+
+New dependencies on `validity`: `alloy-transport` (downcasting to `RpcError`), `alloy-rpc-types-eth`
+(the replay request/receipt types), and `alloy-json-rpc` as a dev-dependency (building an
+`ErrorPayload` to pin that classification never consults the client's message wording).
+
+**Known test gap: the wiring, not the decisions.** Each decision on this path is a pure function
+with a table test behind it — `classify_revert_data`, `rejection_action`, `guard_gauge_value`,
+`send_outcome`, `replay_verdict`, `checkpoint_plan`, `select_checkpoint_block_number`,
+`create_should_run` — and repeated mutation passes have killed every mutation inside them, including
+the ones against the contract-source scans and the SQL predicates.
+
+What survives is the handful of lines connecting those functions to `Proposer`, which cannot be
+reached without mocking a fetcher, a signer, a contract and a database. Specifically: whether
+`handle_relay_rejection` applies `rejection_action`'s verdict at all; whether `submit_agg_proofs`
+calls it; how the four `SendOutcome` variants map onto `RelayOutcome`; whether #923's floor reaches
+`select_checkpoint_block_number`; and whether `submit_agg_proofs` reports the `end_block` it relayed
+rather than `None`. Deleting any one still leaves the suite green.
+
+The boundary is worth stating precisely, because it was drawn wrong once: the per-pass relay floor
+was first written as a bare `if` in `run_loop_iteration` and filed under this gap. It did not belong
+here — inverting that `if` stops the proposer permanently and silently, and covering it needed a
+pure function, not a mock. Anything expressible as a function of its inputs belongs above this
+paragraph. **If this path is reworked, re-check the call sites listed here by hand.**
+
+### 3.10 Upstream backport — succinctlabs/op-succinct#923 (agg checkpoint anchored to `safe`)
+
+**Marked `[UPSTREAM #923]` in code, not `[MANTLE]`.** These sites are a backport of upstream work,
+so a future sync should *drop our copy* rather than merge it — the opposite of what `[MANTLE]`
+markers mean. Grep `[UPSTREAM #923]` when syncing to v3.10.0 or later and delete each hit, keeping
+upstream's version.
+
+Three caveats when doing that.
+
+**Not every marked test is ours to keep.** `checkpoint_selection_tests` is semantically equivalent to three tests
+upstream #923 already ships (`checkpoint_falls_back_to_safe_when_no_batch_max` and friends; the
+names and literals differ, so grepping for ours upstream finds nothing) — drop ours and take
+upstream's. `test_get_max_l1_head_block_number_for_range*` has no upstream equivalent:
+keep it and point it at upstream's version, since it is the only thing covering a runtime query with
+no compile-time SQL check, and its three distinct `bytea` fixtures are what catch a swapped binding.
+
+**`checkpoint_plan_tests` must be kept, and is easy to delete by mistake.** It carries the
+`[UPSTREAM #923]` marker but has no upstream counterpart: upstream implements the reuse gate as an
+inline `if/else`, which nothing can test, so upstream's coverage of it is zero. Deleting our module
+on a grep-and-drop pass would silently take that coverage to zero too.
+
+**If `get_max_l1_head_block_number_for_range` has been changed by then** (e.g. to distrust a
+partially-NULL batch), it is no longer a byte-for-byte copy and the marker should be downgraded to
+`[MANTLE]` first.
+
+Upstream PR: `succinctlabs/op-succinct#923` by Farhad-Shabani, merged 2026-06-05, released in
+upstream **v3.10.0**. Its own description records the failure as having **"Hit 3× on Mantle"** — it
+was written for our chain and we simply never took it.
+
+The proposer checkpointed `BlockId::latest()`. The checkpoint head is pinned **by hash** while the
+aggregation guest's header range is fetched **by number**, so a tip reorg between the two orphans
+the checkpoint, the guest's `assert_eq!` (`programs/aggregation/src/main.rs`) rejects the input, and
+one aggregation proof is wasted.
+
+| File | Change |
+|---|---|
+| `validity/src/proposer.rs` | Added `select_checkpoint_block_number(safe, batch_max_l1_head)` (body and signature verbatim from upstream; its doc comment is reworded) and switched the fresh-checkpoint path from `BlockId::latest()` to `BlockId::safe()`, floored at the batch's max `l1Head`. `safe` is reorg-stable and inside the EVM `blockhash` window; the floor guarantees coverage under `L1_BLOCK_TAG=latest`, where a range `l1Head` can exceed `safe`. |
+| `validity/src/proposer.rs` (`checkpoint_plan`) | **Behaviour is upstream's; the shape is ours.** #923 also gates checkpoint *reuse* on the batch's max `l1Head` — a cached checkpoint below it is discarded, because a matching on-chain hash only proves the block was not reorged out between writing the row and the checkpoint transaction executing, not that the guest can reach every range proof's `l1Head` from it. Upstream writes that as an inline `if/else`; we extracted it as a pure function returning `CheckpointPlan::{Reuse, Fresh{anchor, reason}}`. Returning the `anchor` rather than reading it inline is what makes the backport testable at all: a mutation pass found that changing it back to `BlockId::latest()` — the entire bug #923 fixes — left the whole suite green. |
+| `validity/src/db/client.rs` | Added `get_max_l1_head_block_number_for_range` under upstream's name and signature. **The body matches upstream `main`, NOT #923 as merged** — #923 shipped a compile-time `sqlx::query!` macro with an `AS max_l1_head` alias, and upstream later rewrote it as a runtime `sqlx::query_scalar` with `.bind()`; ours follows the rewrite. Two consequences when syncing. (1) Taking #923's version verbatim breaks the build: `query!` needs a `.sqlx` cache entry and `validity/.sqlx/` has none for this query, so `SQLX_OFFLINE` fails immediately — take upstream `main`'s runtime version, or regenerate the cache. (2) `invalidated_at IS NULL` is in upstream `main`'s WHERE but was **not** in #923; it arrived with #951, whose column this baseline lacks — drop that deviation only if #951 is backported. The WHERE clause must also stay in sync with `get_consecutive_complete_range_proofs` so the MAX covers exactly the range proofs the aggregation consumes. |
+
+Not backported (tracked, larger): **#951/#952** (`invalidated_at` / `Invalidated` status /
+`reconcile_completed_range_canonicality` cascade) and the CAS state transitions from v3.11.x. Note
+#951's migration is numbered `05_add_request_invalidation.sql` upstream, which **collides with our
+`05_add_requests_indexes.sql`** — renumber it to `06_` when taking it.
+
 ## 4. Sync workflow
 
 When a new upstream Succinct Labs release lands (e.g. v3.9.0, v4.0.0):
@@ -340,6 +462,8 @@ git merge --abort
 git checkout -b mantle/op-succinct-v<X.Y.Z> mantle/op-succinct-v3.8.1
 git merge v<X.Y.Z>
 # resolve conflicts — `[MANTLE]` comments mark every site we touched
+# `[UPSTREAM #nnn]` marks a BACKPORT: if the sync target already contains that PR,
+# DELETE our copy and keep upstream's rather than merging the two.
 ```
 
 Resolve order:

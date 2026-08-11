@@ -118,6 +118,9 @@ alloy-signer-local = { version = "2.0.4" }
 alloy-provider = { version = "2.0.4" }
 alloy-transport = { version = "2.0.4" }
 alloy-transport-http = { version = "2.0.4" }
+# [MANTLE] Test-only: constructing `ErrorPayload` to pin that relay-rejection classification reads
+# revert data from the `data` field and never from the client's message wording.
+alloy-json-rpc = { version = "2.0.4" }
 alloy-contract = { version = "2.0.4" }
 alloy-network = { version = "2.0.4" }
 

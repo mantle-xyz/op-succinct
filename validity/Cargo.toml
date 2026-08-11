@@ -31,12 +31,21 @@ op-succinct-signer-utils.workspace = true
 # sp1
 sp1-sdk.workspace = true
 sp1-cluster-utils.workspace = true
+# [MANTLE] Pinned to the tonic the pinned sp1-sdk uses (0.12.x) so downcasting an
+# SDK RPC error to `tonic::Status` resolves the SAME type the SDK produced — a
+# version mismatch would silently make the downcast return None. Only the core
+# `Status`/`Code` types are needed, so no transport/codegen features.
+tonic = { version = "0.12", default-features = false }
 
 # alloy
 alloy-eips.workspace = true
 alloy-provider = { workspace = true }
 alloy-signer-local.workspace = true
 alloy-sol-types.workspace = true
+alloy-rpc-types-eth.workspace = true
+# Needed to downcast a relay failure to `RpcError` and read its revert data as bytes, instead of
+# classifying the rejection by matching the rendered error string. See src/relay_rejection.rs.
+alloy-transport.workspace = true
 
 anyhow.workspace = true
 dotenv.workspace = true
@@ -68,6 +77,7 @@ op-succinct-build-utils.workspace = true
 
 [dev-dependencies]
 postgresql_embedded = { version = "0.20", features = ["bundled"] }
+alloy-json-rpc.workspace = true
 
 [features]
 default = []

@@ -294,6 +294,45 @@ impl DriverDBClient {
         Ok(requests)
     }
 
+    /// Fetch the maximum `l1_head_block_number` across the consecutive complete range proofs that
+    /// will be aggregated over `[start_block, end_block]`.
+    ///
+    /// This is the L1 head the aggregation guest must anchor to: the guest walks headers back from
+    /// the checkpointed head and requires every range proof's `l1Head` to appear in that chain, so
+    /// the checkpoint must be at or after this block. Returns `None` if no matching range proof has
+    /// an `l1_head_block_number` recorded (e.g. proofs predating that column).
+    ///
+    /// The WHERE clause must stay in sync with [`Self::get_consecutive_complete_range_proofs`] so
+    /// the MAX is taken over exactly the set of range proofs the aggregation will consume.
+    ///
+    /// [UPSTREAM #923] Backported from succinctlabs/op-succinct#923 (in upstream v3.10.0), keeping
+    /// upstream's name and body so a future sync can drop this copy cleanly. The one deviation:
+    /// upstream's WHERE also carries `invalidated_at IS NULL`, a column added by #951 which this
+    /// baseline does not have. Drop that deviation if #951 is ever backported.
+    pub async fn get_max_l1_head_block_number_for_range(
+        &self,
+        start_block: i64,
+        end_block: i64,
+        commitment: &CommitmentConfig,
+        l1_chain_id: i64,
+        l2_chain_id: i64,
+    ) -> Result<Option<i64>, Error> {
+        let result = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT MAX(l1_head_block_number) FROM requests WHERE range_vkey_commitment = $1 AND rollup_config_hash = $2 AND status = $3 AND req_type = $4 AND start_block >= $5 AND end_block <= $6 AND l1_chain_id = $7 AND l2_chain_id = $8",
+        )
+        .bind(&commitment.range_vkey_commitment[..])
+        .bind(&commitment.rollup_config_hash[..])
+        .bind(RequestStatus::Complete as i16)
+        .bind(RequestType::Range as i16)
+        .bind(start_block)
+        .bind(end_block)
+        .bind(l1_chain_id)
+        .bind(l2_chain_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(result)
+    }
+
     /// Fetch the checkpointed block hash and number for an aggregation request with the same start
     /// block, end block, and commitment config.
     pub async fn fetch_failed_agg_request_with_checkpointed_block_hash(
@@ -833,6 +872,7 @@ mod tests {
         rollup_config_hash: B256,
         l1_chain_id: i64,
         l2_chain_id: i64,
+        l1_head_block_number: Option<i64>,
     }
 
     impl Default for RequestBuilder {
@@ -848,6 +888,7 @@ mod tests {
                 rollup_config_hash: B256::ZERO,
                 l1_chain_id: L1ID,
                 l2_chain_id: L2ID,
+                l1_head_block_number: None,
             }
         }
     }
@@ -890,6 +931,14 @@ mod tests {
             self
         }
 
+        /// The L1 head the range proof was generated against. Written during witness generation, so
+        /// a request that never got that far leaves it NULL — which is why the default is
+        /// `None`.
+        fn l1_head(mut self, l1_head_block_number: i64) -> Self {
+            self.l1_head_block_number = Some(l1_head_block_number);
+            self
+        }
+
         fn build(self) -> OPSuccinctRequest {
             // [MANTLE] Use UTC, not Local — the DB column is TIMESTAMP WITHOUT TIME ZONE and
             // `update_request_status` sets it to PG `NOW()` (UTC). With Local::now().naive_local()
@@ -926,7 +975,7 @@ mod tests {
                 l2_chain_id: self.l2_chain_id,
                 contract_address: None,
                 prover_address: None,
-                l1_head_block_number: None,
+                l1_head_block_number: self.l1_head_block_number,
                 cluster_proof_handle: None,
             }
         }
@@ -1115,6 +1164,141 @@ mod tests {
         assert_eq!(result[0].start_block, 100);
         assert_eq!(result[1].start_block, 200);
         assert_eq!(result[2].start_block, 300);
+    }
+
+    // Three DISTINCT byte patterns for the three `bytea` predicates. `default_commitment()` is
+    // all-zero, so with it a swapped `$1`/`$2`/`$3` binding passes every assertion silently — which
+    // matters most for queries built with the runtime API, where no compile-time SQL check exists.
+    const D_RANGE_VKEY: B256 = B256::repeat_byte(0x11);
+    const D_ROLLUP_CFG: B256 = B256::repeat_byte(0x22);
+    const D_AGG_VKEY: B256 = B256::repeat_byte(0x33);
+
+    fn distinct_commitment() -> CommitmentConfig {
+        CommitmentConfig {
+            range_vkey_commitment: D_RANGE_VKEY,
+            agg_vkey_hash: D_AGG_VKEY,
+            rollup_config_hash: D_ROLLUP_CFG,
+        }
+    }
+
+    /// A builder already carrying [`distinct_commitment`]'s three patterns.
+    fn distinct_builder() -> RequestBuilder {
+        RequestBuilder::new().commitment(D_RANGE_VKEY, D_ROLLUP_CFG).agg_vkey(D_AGG_VKEY)
+    }
+
+    /// [UPSTREAM #923] `get_max_l1_head_block_number_for_range` uses the runtime query API, so it
+    /// gets no compile-time SQL check — this test is what catches a malformed query, a swapped
+    /// binding, or a predicate drifting out of sync with
+    /// `get_consecutive_complete_range_proofs`.
+    #[tokio::test]
+    async fn test_get_max_l1_head_block_number_for_range() {
+        let db = TestDb::new().await;
+        let c = db.client();
+
+        let with_head = |start: i64, end: i64, status: RequestStatus, l1_head: i64| {
+            distinct_builder().range(start, end).status(status).l1_head(l1_head).build()
+        };
+
+        let requests = vec![
+            // Covered and Complete: exactly the rows the aggregation will consume. The highest
+            // head sits on the `end_block == $6` boundary row, so tightening `<=` to
+            // `<` changes the answer.
+            with_head(100, 200, RequestStatus::Complete, 1000),
+            with_head(200, 300, RequestStatus::Complete, 1005),
+            with_head(300, 400, RequestStatus::Complete, 1010),
+            // Beyond the end bound — must not raise the result.
+            with_head(400, 500, RequestStatus::Complete, 9999),
+            // Below the start bound. A re-proved older interval legitimately carries a NEWER head,
+            // so dropping `start_block >= $5` would raise the result and force a
+            // pointless re-checkpoint every loop.
+            with_head(50, 150, RequestStatus::Complete, 7777),
+            // Covered but not Complete: the aggregation will not consume it.
+            with_head(100, 200, RequestStatus::Failed, 8888),
+            // Complete but never reached witness generation, so its head is NULL.
+            distinct_builder().range(150, 250).status(RequestStatus::Complete).build(),
+            // An Aggregation row carrying a head: `req_type` is what must exclude it.
+            distinct_builder()
+                .range(100, 400)
+                .req_type(RequestType::Aggregation)
+                .status(RequestStatus::Complete)
+                .l1_head(6666)
+                .build(),
+            // Same shape as a covered row but on another chain / another commitment. Each exists
+            // so that deleting the corresponding predicate fails this test rather than
+            // passing silently.
+            distinct_builder()
+                .range(100, 200)
+                .status(RequestStatus::Complete)
+                .l1_head(5555)
+                .chains(999, L2ID)
+                .build(),
+            distinct_builder()
+                .range(100, 200)
+                .status(RequestStatus::Complete)
+                .l1_head(5554)
+                .chains(L1ID, 999)
+                .build(),
+            RequestBuilder::new()
+                .range(100, 200)
+                .status(RequestStatus::Complete)
+                .l1_head(5553)
+                .commitment(B256::repeat_byte(0xEE), D_ROLLUP_CFG)
+                .build(),
+            RequestBuilder::new()
+                .range(100, 200)
+                .status(RequestStatus::Complete)
+                .l1_head(5552)
+                .commitment(D_RANGE_VKEY, B256::repeat_byte(0xEE))
+                .build(),
+        ];
+        insert_requests(c, &requests).await;
+
+        let max = c
+            .get_max_l1_head_block_number_for_range(100, 400, &distinct_commitment(), L1ID, L2ID)
+            .await
+            .unwrap();
+        assert_eq!(max, Some(1010), "only covered, Complete, same-chain Range rows count");
+
+        // A narrower window where the batch's FIRST segment is the only match. The wide query above
+        // cannot see `start_block >= $5` tightening to `>`, because its boundary row (100,200) does
+        // not carry the maximum — so without this assertion that single character can be changed
+        // freely, and the floor would then omit the earliest range proof whose l1Head can well be
+        // the largest (e.g. after that segment was re-proved).
+        let first_segment_only = c
+            .get_max_l1_head_block_number_for_range(100, 200, &distinct_commitment(), L1ID, L2ID)
+            .await
+            .unwrap();
+        assert_eq!(first_segment_only, Some(1000), "the start boundary row must be included");
+    }
+
+    #[tokio::test]
+    async fn test_get_max_l1_head_block_number_for_range_is_none_without_recorded_heads() {
+        let db = TestDb::new().await;
+        let c = db.client();
+
+        // `MAX` over zero rows yields a single NULL row, and so does a set of rows whose
+        // l1_head_block_number is entirely NULL. Both must surface as `None`: defaulting to 0 would
+        // make every checkpoint look new enough and silently disable the floor.
+        let max = c
+            .get_max_l1_head_block_number_for_range(100, 400, &distinct_commitment(), L1ID, L2ID)
+            .await
+            .unwrap();
+        assert_eq!(max, None, "no matching rows at all");
+
+        insert_requests(
+            c,
+            &[
+                distinct_builder().range(100, 200).status(RequestStatus::Complete).build(),
+                distinct_builder().range(200, 300).status(RequestStatus::Complete).build(),
+            ],
+        )
+        .await;
+
+        let max = c
+            .get_max_l1_head_block_number_for_range(100, 400, &distinct_commitment(), L1ID, L2ID)
+            .await
+            .unwrap();
+        assert_eq!(max, None, "rows present but none has a head recorded");
     }
 
     #[tokio::test]

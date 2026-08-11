@@ -9,6 +9,7 @@ mod env;
 mod prom;
 mod proof_requester;
 mod proposer;
+mod relay_rejection;
 mod types;
 mod utils;
 
@@ -19,5 +20,6 @@ pub use env::*;
 pub use prom::*;
 pub use proof_requester::*;
 pub use proposer::*;
+pub use relay_rejection::*;
 pub use types::*;
 pub use utils::*;
