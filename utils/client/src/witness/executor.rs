@@ -1,5 +1,6 @@
 use std::{fmt::Debug, sync::Arc};
 
+use alloy_op_evm::post_exec::PostExecEvmFactoryAdapter;
 use alloy_primitives::Sealed;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -138,7 +139,7 @@ pub trait WitnessExecutor {
             rollup_config.as_ref(),
             l2_provider.clone(),
             l2_provider,
-            alloy_op_evm::post_exec::PostExecEvmFactoryAdapter::new(ZkvmOpEvmFactory::new()),
+            PostExecEvmFactoryAdapter::new(ZkvmOpEvmFactory::new()),
             None,
         );
         let mut driver = Driver::new(cursor, executor, pipeline);

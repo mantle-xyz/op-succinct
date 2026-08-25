@@ -27,6 +27,14 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Generate full artifacts because the bindings expose contract bytecode.
+    let status =
+        Command::new("forge").arg("build").current_dir(&contracts_package_path).status()?;
+
+    if !status.success() {
+        anyhow::bail!("Forge build failed with exit code: {}", status);
+    }
+
     // Use 'forge bind' to generate bindings for only the contracts we need for E2E tests.
     // [MANTLE] Skip the `test/` directory: v117's test files reference older versions of
     // OPSuccinctL2OutputOracle's API (different argument counts on checkpointBlockHash and
@@ -40,6 +48,7 @@ fn main() -> anyhow::Result<()> {
         bindings_codegen_path.as_str(),
         "--module",
         "--overwrite",
+        "--skip-build",
         "--skip-extra-derives",
         "--skip",
         "test/**",

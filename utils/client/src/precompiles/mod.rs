@@ -99,10 +99,12 @@ where
     }
 
     // NOTE: This `run` mirrors the canonical `EthPrecompiles::run` in
-    // revm-handler v15.0.0 / op-revm v15.0.0, with cycle-tracker prints
-    // wrapped around `precompile.execute()` for the zkVM target. Keep the
-    // body in sync when bumping revm-handler / op-revm — see
-    // https://github.com/bluealloy/revm/blob/9bc0c04fda0891e0e8d2e2a6dfd0af81c2af18c4/crates/handler/src/precompile_provider.rs#L99-L160
+    // revm-handler v18.1.0 / op-revm v19.0.0 — the versions mantle-xyz/revm
+    // @ v107-mantle-arsia.1 resolves to, NOT upstream op-succinct's op-revm
+    // v20.0.0 — with cycle-tracker prints wrapped around
+    // `precompile.execute()` for the zkVM target. Keep the body in sync when
+    // bumping revm-handler / op-revm — see
+    // https://github.com/bluealloy/revm/blob/main/crates/handler/src/precompile_provider.rs
     #[inline]
     fn run(
         &mut self,
@@ -223,7 +225,7 @@ mod tests {
         context::LocalContextTr as _,
         database::EmptyDB,
         handler::PrecompileProvider,
-        interpreter::{CallInput, CallScheme, CallValue},
+        interpreter::{CallInput, CallScheme, CallValue, InstructionResult},
         Context,
     };
     use revm_precompile::{bn254, kzg_point_evaluation, secp256k1, secp256r1, PrecompileId};
