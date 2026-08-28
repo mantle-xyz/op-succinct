@@ -481,9 +481,9 @@ verify-git-pins:
 # download time, not the artifacts: cargo resolves by the commit SHA in Cargo.lock either way.
 #
 # `ghcr.io/succinctlabs/sp1` ships an amd64-only image, so on Apple Silicon this runs through
-# Docker's emulation layer — slower, but the output is the same: the target is riscv32im
-# (cross-compiled) and the in-container environment is identical, which is what `--docker`
-# exists for. `.github/workflows/elf.yml` rebuilds on x64 and requires `git status --porcelain
+# Docker's emulation layer — slower, but the output is the same: the guest target is
+# riscv64im-succinct-zkvm-elf (cross-compiled; the committed ELFs are 64-bit RISC-V) and the
+# in-container environment is identical, which is what `--docker` exists for. `.github/workflows/elf.yml` rebuilds on x64 and requires `git status --porcelain
 # elf/` to be empty, so CI is the final arbiter if a host ever does diverge.
 build-elfs: verify-git-pins build-range-elfs build-agg-elf
 

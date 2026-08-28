@@ -321,9 +321,11 @@ aggregation SP1 programs. Two Mantle-specific tweaks:
 
 **Apple Silicon works.** `ghcr.io/succinctlabs/sp1` publishes an amd64-only image (checked for
 both v6.1.0 and v6.4.0 — identical platform lists), so on arm64 hosts the build runs through
-Docker's emulation layer. That costs time, not correctness: the target is riscv32im
-(cross-compiled), and the in-container environment is identical regardless of host — which is
-precisely what `--docker` is for ("reproducible builds"). ELFs have in fact been produced this
+Docker's emulation layer. That costs time, not correctness: the guest target is
+`riscv64im-succinct-zkvm-elf` (cross-compiled — the committed ELFs are 64-bit RISC-V; note
+`cargo-prove` still carries a legacy `CFLAGS_riscv32im_...` env var, which is not the build
+target), and the in-container environment is identical regardless of host — which is precisely
+what `--docker` is for ("reproducible builds"). ELFs have in fact been produced this
 way on an arm64 machine. `.github/workflows/elf.yml` rebuilds on x64 and requires
 `git status --porcelain elf/` to be empty, so CI remains the final arbiter if some host ever
 does diverge.
