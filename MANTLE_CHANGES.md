@@ -314,7 +314,41 @@ aggregation SP1 programs. Two Mantle-specific tweaks:
 | File | Change |
 |---|---|
 | `justfile` (`build-range-elfs`) | Drop the `programs/range/celestia` and `programs/range/eigenda` invocations — Phase 2 deleted those crates (Validity-Oracle-only runtime). Only the `ethereum` block remains. |
+| `justfile` (`verify-git-pins`, gating `build-elfs`) | Checks every tag-pinned git dependency in `Cargo.lock` still resolves to the commit recorded there. `Cargo.lock` pins a 40-char SHA and the `tag=` is only a lookup hint, so cargo reuses a cached commit **with no network access** — a force-pushed mutable tag (anything `-rc`, or a re-cut release) therefore builds the OLD code silently while the manifests claim the tag. Unrecoverable for ELFs, since the guest embeds the cargo-git checkout path (URL hash + short commit) and the resulting vkey maps to code nobody can identify later. |
 | `justfile` (`build-range-elfs` + `build-agg-elf`) | Pass `--ignore-rust-version` to `cargo-prove`. SP1's docker image has historically shipped an older rustc than our mantle-v2 deps declare via `rust-version = "1.94"`. That build compiles those crates fine — the floor is the dep authors' MSRV declaration, not a hard requirement — so we tell cargo to skip the check. **Not yet re-tested against the SP1 v6.4.0 image; if its bundled rustc is ≥ 1.94, drop the flag from both recipes.** |
+
+#### 3.7a ELF builds: host architecture and the cargo cache
+
+**Must run on x86_64.** `ghcr.io/succinctlabs/sp1` publishes an **amd64-only** image, and
+`.github/workflows/elf.yml` rebuilds on x64 and requires `git status --porcelain elf/` to be
+empty — so artifacts produced under emulation cannot be trusted to match and must not be
+committed.
+
+**The private-repo workaround is no longer needed.** `cargo-prove prove build --docker` mounts
+its cargo caches as the named volumes `sp1-cargo-git` / `sp1-cargo-registry`, forwards no
+credentials (no ssh-agent, no .gitconfig, no token) and the image has no `git` CLI. While the
+revm patch pointed at the private `mantle-xyz/revm-ghsa-5vfr-x84h-hmvf` fork, the container hit
+`failed to authenticate`, and the workaround was to pre-seed the volume from a locally
+authenticated clone:
+
+```bash
+docker run --rm -v sp1-cargo-git:/v -v "$HOME/.cargo/git":/host:ro alpine sh -c 'cp -a /host/db /v/'
+```
+
+All git sources are now anonymously reachable (`mantle-xyz/mantle-v2`, `mantle-xyz/revm`, the
+`sp1-patches/*` forks, `succinctlabs/sp1-cluster`), and the private fork is absent from both
+`Cargo.toml` and `Cargo.lock` — the lockfile matters as much, since that is what the container
+resolves. So `just build-elfs` works with no volume seeding.
+
+Seeding the **registry** volume remains a legitimate speed-up for a cold build; seeding the
+**git** volume is now purely optional. Prefer starting clean when the ELFs are going on chain:
+
+```bash
+docker volume rm sp1-cargo-git sp1-cargo-registry   # or: --no-docker-cache
+```
+
+A warm git cache is exactly what makes a moved tag invisible (cargo never reaches the network for
+a commit it already has), which is why `verify-git-pins` gates `build-elfs`.
 
 ### 3.8 Toolchain pins — `rust-toolchain.toml` + `mise.toml`
 

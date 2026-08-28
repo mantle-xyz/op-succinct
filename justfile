@@ -428,8 +428,57 @@ vkeys:
     echo "| EigenDA Range Verification Key | **$EIGEN_RANGE** |"
     echo "| Aggregation Verification Key | **$AGG_KEY** |"
 
+# [MANTLE] Verify every tag-pinned git dependency still resolves to the commit in Cargo.lock.
+#
+# Cargo.lock pins a 40-char commit SHA; the `tag=` is only a hint for finding it. cargo will
+# reuse a commit already present in its git cache WITHOUT any network access, so if a mutable
+# tag (anything `-rc`, or a re-cut release) is force-pushed to a new commit, a build keeps
+# silently using the OLD code — while Cargo.toml and MANTLE_CHANGES.md claim the tag. That is
+# unrecoverable for ELFs: the guest embeds the cargo-git checkout path (URL hash + short
+# commit), so the vkey would correspond to code nobody can identify later.
+#
+# Run this before `build-elfs`, and on any machine where the cargo git cache is warm.
+verify-git-pins:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    tmp=$(mktemp)
+    grep -oE 'git\+https://[^"?]+\?tag=[^#"]+#[0-9a-f]{40}' Cargo.lock | sort -u > "$tmp"
+    echo "Verifying $(wc -l < "$tmp" | tr -d ' ') tag-pinned git dependencies against their remotes..."
+    fail=0
+    while IFS= read -r pin; do
+      url="${pin#git+}"; url="${url%%\?tag=*}"
+      rest="${pin#*\?tag=}"; tag="${rest%%#*}"; sha="${rest##*#}"
+      # Annotated tags need the ^{} peel to reach the commit; fall back for lightweight tags.
+      remote=$(git ls-remote "$url" "refs/tags/$tag^{}" 2>/dev/null | awk 'NR==1{print $1}')
+      if [ -z "$remote" ]; then
+        remote=$(git ls-remote "$url" "refs/tags/$tag" 2>/dev/null | awk 'NR==1{print $1}')
+      fi
+      if [ "$remote" = "$sha" ]; then
+        printf '  OK        %-34s %s\n' "$tag" "${url##*/}"
+      else
+        printf '  MISMATCH  %-34s %s\n            lock:   %s\n            remote: %s\n' \
+          "$tag" "${url##*/}" "$sha" "${remote:-<tag not found>}"
+        fail=1
+      fi
+    done < "$tmp"
+    rm -f "$tmp"
+    if [ "$fail" -ne 0 ]; then
+      echo
+      echo "ERROR: a pinned tag no longer points at the commit Cargo.lock records."
+      echo "Building now would reuse the OLD commit from the cargo git cache without"
+      echo "touching the network, producing ELFs whose vkey does not match the tag."
+      echo "Re-resolve deliberately (cargo update -p <crate>) and re-commit Cargo.lock."
+      exit 1
+    fi
+    echo "All pins agree with their remotes."
+
 # Build all ELF files.
-build-elfs: build-range-elfs build-agg-elf
+#
+# [MANTLE] Gated on `verify-git-pins` — see the rationale there. ELF builds must run on x86_64:
+# the SP1 image (`ghcr.io/succinctlabs/sp1`) ships amd64 only, and `.github/workflows/elf.yml`
+# checks `git status --porcelain elf/` is empty against an x64 rebuild, so artifacts produced
+# under emulation cannot be trusted to match.
+build-elfs: verify-git-pins build-range-elfs build-agg-elf
 
 # Build ELF files for range programs.
 #
