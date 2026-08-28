@@ -651,10 +651,22 @@ cargo-git checkout path, which is derived from the dependency URL and commit.
 
 #### 3.11.1 Deployment notes for this sync
 
-1. **On-chain vkeys must be updated.** SP1 6.4.0 changes both the range and aggregation vkeys;
-   update the v117 oracle's `aggregationVkey` and `rangeVkeyCommitment` (the setter is
-   `updateAggregationVkey` — note the casing). The concrete on-chain update procedure is a known
+1. **On-chain vkeys must be updated.** Both vkeys change in this sync (SP1 6.1.0 → 6.4.0, plus
+   the kona/revm retag — the guest embeds the cargo-git checkout path, so a retag alone moves
+   them). Values produced by `just vkeys` from the ELFs committed here:
+
+   | Program | On-chain field | Value |
+   |---|---|---|
+   | Range | `rangeVkeyCommitment` | `0x327b7c741f8a03af6f1e9104676ce2241d187bbd6b5f98a1349e3d9205dc4974` |
+   | Aggregation | `aggregationVkey` | `0x00b8fef6c23a06a7e7c42cd883e70400fcb1b914c4833d766c895827ce30f9a6` |
+
+   For reference, the range vkey this replaces is `0x1dc93827…` (the value the proving cluster
+   was rejecting requests for). Update the v117 oracle accordingly — the setter is
+   `updateAggregationVkey`, note the casing. The concrete on-chain update procedure is a known
    gap in this document.
+
+   Re-derive at any time with `just vkeys`; it runs SP1 setup() over the `elf/*` files in the
+   working tree, so rebuild and stage the ELFs first or it reports the old artifacts' vkeys.
 2. **The self-hosted proving cluster must be upgraded in lockstep** to a version compatible with
    sp1-cluster client `v2.7.2`. This is the only cross-system dependency in this sync.
 3. **Expect a proposer stall on first start.** Every existing `Complete` range proof predates

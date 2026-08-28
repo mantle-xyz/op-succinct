@@ -398,35 +398,39 @@ remove-config config_name env_file=".env":
         --private-key $PRIVATE_KEY \
         --broadcast
 
-# Generate verification key hashes for all DA variants.
+# Generate verification key hashes.
+#
+# [MANTLE] Ethereum DA only — the celestia/eigenda/altda blocks are gone with those crates
+# (Validity-Oracle-only fork, see MANTLE_CHANGES.md §3.1). They also could not have worked here:
+# `--features celestia` no longer exists, and the original recipe swallowed that error via
+# `2>&1` + grep, printing an empty cell instead of failing.
+#
+# These hashes are what go on chain (`rangeVkeyCommitment` / `aggregationVkey`). `config` runs
+# SP1 setup() over the COMMITTED `elf/*` files, so run it after `just build-elfs` and commit the
+# ELFs — otherwise it reports the vkeys of the old artifacts.
 vkeys:
     #!/usr/bin/env bash
-    set -e
+    set -euo pipefail
 
-    echo "Generating verification key hashes..."
+    echo "Generating verification key hashes from the committed ELFs..."
     echo ""
 
-    # Ethereum DA
-    ETH_OUTPUT=$(RUST_LOG=error cargo run --release --bin config 2>&1)
-    ETH_RANGE=$(echo "$ETH_OUTPUT" | grep "Range Verification Key Hash" | awk '{print $NF}')
-    AGG_KEY=$(echo "$ETH_OUTPUT" | grep "Aggregation Verification Key Hash" | awk '{print $NF}')
+    OUTPUT=$(RUST_LOG=error cargo run --release --bin config)
+    RANGE=$(echo "$OUTPUT" | grep "Range Verification Key Hash" | awk '{print $NF}')
+    AGG=$(echo "$OUTPUT" | grep "Aggregation Verification Key Hash" | awk '{print $NF}')
 
-    # Celestia DA
-    CEL_OUTPUT=$(RUST_LOG=error cargo run --release --bin config --features celestia 2>&1)
-    CEL_RANGE=$(echo "$CEL_OUTPUT" | grep "Range Verification Key Hash" | awk '{print $NF}')
-
-    # EigenDA
-    EIGEN_OUTPUT=$(RUST_LOG=error cargo run --release --bin config --features eigenda 2>&1)
-    EIGEN_RANGE=$(echo "$EIGEN_OUTPUT" | grep "Range Verification Key Hash" | awk '{print $NF}')
+    if [ -z "$RANGE" ] || [ -z "$AGG" ]; then
+      echo "ERROR: could not parse vkeys from \`config\` output:" >&2
+      echo "$OUTPUT" >&2
+      exit 1
+    fi
 
     echo "## Verification Key Hashes"
     echo ""
     echo "| Program | Verification Key Hash |"
     echo "|--------|------------------------|"
-    echo "| Ethereum DA Range Verification Key | **$ETH_RANGE** |"
-    echo "| Celestia DA Range Verification Key | **$CEL_RANGE** |"
-    echo "| EigenDA Range Verification Key | **$EIGEN_RANGE** |"
-    echo "| Aggregation Verification Key | **$AGG_KEY** |"
+    echo "| Range Verification Key (rangeVkeyCommitment) | **$RANGE** |"
+    echo "| Aggregation Verification Key (aggregationVkey) | **$AGG** |"
 
 # [MANTLE] Verify every tag-pinned git dependency still resolves to the commit in Cargo.lock.
 #
