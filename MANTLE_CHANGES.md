@@ -319,10 +319,23 @@ aggregation SP1 programs. Two Mantle-specific tweaks:
 
 #### 3.7a ELF builds: host architecture and the cargo cache
 
-**Must run on x86_64.** `ghcr.io/succinctlabs/sp1` publishes an **amd64-only** image, and
-`.github/workflows/elf.yml` rebuilds on x64 and requires `git status --porcelain elf/` to be
-empty — so artifacts produced under emulation cannot be trusted to match and must not be
-committed.
+**Apple Silicon works.** `ghcr.io/succinctlabs/sp1` publishes an amd64-only image (checked for
+both v6.1.0 and v6.4.0 — identical platform lists), so on arm64 hosts the build runs through
+Docker's emulation layer. That costs time, not correctness: the target is riscv32im
+(cross-compiled), and the in-container environment is identical regardless of host — which is
+precisely what `--docker` is for ("reproducible builds"). ELFs have in fact been produced this
+way on an arm64 machine. `.github/workflows/elf.yml` rebuilds on x64 and requires
+`git status --porcelain elf/` to be empty, so CI remains the final arbiter if some host ever
+does diverge.
+
+**Docker caching is on by default** — the named volumes `sp1-cargo-git` /
+`sp1-cargo-registry`. `cargo-prove --no-docker-cache` disables them (cache then lives in the
+container's ephemeral layer and is discarded on exit). This only changes download time, never
+the artifacts: cargo resolves each git dependency by the commit SHA in `Cargo.lock` whether it
+comes from the volume or the network. If the named volumes do not exist, Docker creates them
+empty and the build simply downloads everything — an empty cache has never been an error, and
+the volumes accumulate incrementally across runs (they are writable and persistent, so they also
+grow without bound; deleting them occasionally is healthy).
 
 **The private-repo workaround is no longer needed.** `cargo-prove prove build --docker` mounts
 its cargo caches as the named volumes `sp1-cargo-git` / `sp1-cargo-registry`, forwards no

@@ -474,10 +474,17 @@ verify-git-pins:
 
 # Build all ELF files.
 #
-# [MANTLE] Gated on `verify-git-pins` — see the rationale there. ELF builds must run on x86_64:
-# the SP1 image (`ghcr.io/succinctlabs/sp1`) ships amd64 only, and `.github/workflows/elf.yml`
-# checks `git status --porcelain elf/` is empty against an x64 rebuild, so artifacts produced
-# under emulation cannot be trusted to match.
+# [MANTLE] Gated on `verify-git-pins` — see the rationale there.
+#
+# Docker caching is ON by default (the named volumes `sp1-cargo-git` /
+# `sp1-cargo-registry`); `cargo-prove --no-docker-cache` turns it off. Caching only affects
+# download time, not the artifacts: cargo resolves by the commit SHA in Cargo.lock either way.
+#
+# `ghcr.io/succinctlabs/sp1` ships an amd64-only image, so on Apple Silicon this runs through
+# Docker's emulation layer — slower, but the output is the same: the target is riscv32im
+# (cross-compiled) and the in-container environment is identical, which is what `--docker`
+# exists for. `.github/workflows/elf.yml` rebuilds on x64 and requires `git status --porcelain
+# elf/` to be empty, so CI is the final arbiter if a host ever does diverge.
 build-elfs: verify-git-pins build-range-elfs build-agg-elf
 
 # Build ELF files for range programs.
