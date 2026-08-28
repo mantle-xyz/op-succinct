@@ -441,6 +441,67 @@ one aggregation proof is wasted.
 | `validity/src/proposer.rs` (`checkpoint_plan`) | **Behaviour is upstream's; the shape is ours — kept through the sync.** #923 gates checkpoint *reuse* on the batch's max `l1Head` — a cached checkpoint below it is discarded, because a matching on-chain hash only proves the block was not reorged out between writing the row and the checkpoint transaction executing, not that the guest can reach every range proof's `l1Head` from it. Upstream writes that as an inline `if/else`; we keep it as a pure function returning `CheckpointPlan::{Reuse, Fresh{anchor, reason}}`. |
 | `validity/src/db/client.rs` | `get_max_l1_head_block_number_for_range` is now upstream's, verbatim. Note it is a **runtime `sqlx::query_scalar`, not the compile-time `sqlx::query!` macro** that #923 originally shipped: the macro form needs a `.sqlx` cache entry, and `validity/.sqlx/` has none for this query, so `SQLX_OFFLINE` would fail immediately. Do not "restore" the macro form on a later sync. Its WHERE clause must stay in sync with `get_consecutive_complete_range_proofs` so the MAX covers exactly the range proofs the aggregation consumes. |
 
+### 3.10a No-bisect failure policy and the observability firewall
+
+Two rules the proposer must keep, both found by reviewing the v3.12.0 sync.
+
+**1. Failures that say nothing about the range must not bisect it.**
+`no_bisect_reason()` in `validity/src/proposer.rs` is the single policy gate; every failure path
+consults it instead of classifying inline. Three classes qualify, and they share one property —
+**no proof was ever produced**, so nothing was learned about the range:
+
+| Class | Predicate | Typical cause |
+|---|---|---|
+| Admission shed | `is_admission_shed_error` | self-hosted prover pool momentarily full |
+| Transient transport | `is_transient_transport_error` (gRPC `UNAVAILABLE`) | gateway down, connection reset |
+| Unsatisfiable precondition | `is_unsatisfiable_precondition_error` (gRPC `FAILED_PRECONDITION`) | **no program registered for our vk_hash** — i.e. the deployed ELF was never registered with the cluster, the predictable failure right after a vkey change |
+
+These reset the row to `Unrequested` and retry the SAME range. Bisecting them is not merely
+useless, it is harmful: each split doubles the request volume aimed at a backend that rejects all
+of it, and the fragmentation is **not undone** once the condition clears, so the range is proved
+as many small pieces forever after.
+
+Note the alternative is not "give up". A `Failed` range is not in the active set
+`add_new_ranges` reads, so it is re-created as a gap next pass regardless — bisecting only
+changes the *shape* of the retry, for the worse.
+
+Both paths that can reach `handle_failed_request` from a classifiable error consult the gate:
+the task-failure path in `handle_ongoing_tasks`, and the cluster-poll path via
+`reset_cluster_request_for_retry`. The remaining two call sites are not classifiable — a task
+panic carries no `tonic::Status`, and `handle_terminal_proof_failure_before_request_details`
+dispatches on SP1 *fulfillment* status rather than a transport error. (For `Unfulfillable`
+specifically, the fix belongs on the cluster side: a backlogged prover must not report a request
+unprovable.)
+
+**2. Observability must never be able to stop the proposer.**
+`log_proposer_metrics` only reads and sets gauges, but it used to propagate with `?` as step 2 of
+the loop. It calls `highest_contiguous_end`, which returns `Err` for a completed range that
+overlaps the contiguous chain or has `end <= start`. Such a row is not self-healing, so a single
+one failed the iteration at step 2 forever — skipping the scheduling gate, delivery, **and**
+`update_chain_lock`, with `run` pinned to its 10s error path. It is now logged and skipped. The
+same bad row is still surfaced by `create_aggregation_proofs`, which is where it actually blocks
+progress.
+
+The upstream helper this replaced (`highest_proven_contiguous_block`) returned `Option` and never
+errored, silently truncating at the overlap — so this strictness is new in v3.12.0. No code path
+creates such rows (`find_gaps` keeps new ranges disjoint, and bisection cannot produce an empty
+range since it requires `end - start > 1`), so a hit means historical bad data or manual
+intervention. Pre-upgrade check:
+
+```sql
+WITH visible AS (
+  SELECT id, start_block, end_block FROM requests
+  WHERE status = 4 AND req_type = 0 AND invalidated_at IS NULL
+    AND range_vkey_commitment = ? AND rollup_config_hash = ?
+    AND l1_chain_id = ? AND l2_chain_id = ?
+    AND start_block >= ?          -- contract latestBlockNumber
+)
+SELECT a.id, b.id FROM visible a JOIN visible b          -- overlap (over-reports:
+  ON a.id < b.id                                          -- the code only errors on the
+ AND a.start_block < b.end_block AND b.start_block < a.end_block;   -- contiguous chain)
+SELECT id, start_block, end_block FROM visible WHERE end_block <= start_block;  -- empty/reversed
+```
+
 ### 3.11 Upstream sync v3.8.1 → v3.12.0
 
 22 upstream commits. What we took, what we held, and the three things that are easy to get wrong.
@@ -552,7 +613,15 @@ cargo-git checkout path, which is derived from the dependency URL and commit.
    `RANGE_METADATA_HYDRATION_LIMIT` (100) rows per loop and returns `false` until it finishes —
    which means the entire scheduling and delivery block is skipped for that whole period.
    Estimate the backfill time from the row count before deploying, and pick a low-traffic window.
-4. `validity/Cargo.toml`'s `tonic` pin exists so `is_transient_transport_error` can downcast to
+4. **Rollback hazard:** once any row is written with `status = 8` (`Invalidated`), reverting to
+   pre-v3.12.0 code will panic in `RequestStatus::From<i16>`, which has no arm for 8. Before
+   rolling back, move those rows to another status.
+5. **Register the new ELFs with the proving cluster before starting the proposer.** Both vkeys
+   change in this sync, and an unregistered program makes the cluster reject every request with
+   `FAILED_PRECONDITION: program not registered for vk_hash <...>`. That is now classified
+   no-bisect (§3.10a), so the proposer retries whole ranges and recovers by itself once the
+   programs are registered — but it produces nothing until then.
+6. `validity/Cargo.toml`'s `tonic` pin exists so `is_transient_transport_error` can downcast to
    the same `tonic::Status` type the pinned sp1-sdk uses. If SP1 6.4.0 pulls a different tonic,
    re-verify that downcast — a silent mismatch sends transient transport faults back into range
    bisection (§3.9).

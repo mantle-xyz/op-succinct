@@ -317,6 +317,77 @@ fn is_transient_transport_error(e: &anyhow::Error) -> bool {
         rendered.contains("error trying to connect")
 }
 
+/// Whether the prover backend rejected the request because its own state does not admit it,
+/// rather than because anything is wrong with the range.
+///
+/// The case this exists for is `FailedPrecondition: program not registered for vk_hash <...>`:
+/// the cluster has no program registered for the vkey this build computes, so it rejects every
+/// request on arrival. That happens whenever the deployed ELF and the cluster's registered
+/// programs drift apart — most predictably right after a dependency bump changes the vkey.
+///
+/// Such a failure must NOT bisect the range. Bisection exists for ranges that fail
+/// *deterministically because they are too big*; here the range is fine and splitting is
+/// actively harmful:
+/// - every split doubles the request volume aimed at a cluster that rejects all of it, and
+/// - the fragmentation is not undone once the program is registered, so the range is proved as many
+///   small pieces forever after, inflating range-proof count and aggregation cost.
+///
+/// Note the alternative is not "give up": a `Failed` range is not in the active set
+/// `add_new_ranges` reads, so it is re-created as a gap on the next pass either way. Bisecting
+/// only changes the *shape* of that retry, for the worse. Resetting to `Unrequested` retries
+/// the same range and recovers on its own once the program is registered.
+///
+/// Keyed on the typed gRPC code, with a string fallback for when the error is not a
+/// downcastable `Status` of our tonic version — same rationale as
+/// [`is_transient_transport_error`].
+///
+/// Why the whole code is treated as no-bisect rather than matching the "program not registered"
+/// text: gRPC defines `FAILED_PRECONDITION` as "the operation was rejected because the system is
+/// not in a state required for the operation's execution [...] the client should not retry until
+/// the system state has been explicitly fixed" — i.e. it describes the *system*, not the request.
+/// A problem with the request itself is `INVALID_ARGUMENT` by the same spec. So the code alone is
+/// the right signal, and it is robust to the cluster rewording its message.
+///
+/// **Failure mode to watch:** if the proving cluster ever uses `FAILED_PRECONDITION` to mean
+/// "this range cannot be proven" (spec-violating, but possible), this predicate would retry such a
+/// range forever instead of bisecting it. The symptom is a range retried indefinitely with a
+/// `reason` mentioning an unsatisfiable precondition while nothing about the cluster is actually
+/// wrong. The fix then is to narrow this to also require the message to name an unregistered
+/// program.
+fn is_unsatisfiable_precondition_error(e: &anyhow::Error) -> bool {
+    if let Some(status) = e.downcast_ref::<tonic::Status>() {
+        return status.code() == tonic::Code::FailedPrecondition;
+    }
+    format!("{e:?}").contains("status: FailedPrecondition")
+}
+
+/// Why this failure must not bisect the range, or `None` if bisection is the right response.
+///
+/// Single source of truth for the no-bisect policy, so every failure path applies the same
+/// classification and adding a class means editing one place. Callers reset the request to
+/// `Unrequested` and retry the SAME range instead of routing it through
+/// `handle_failed_request`, which is what feeds bisection.
+///
+/// The shared property of every class here is that **no proof was ever produced**, so nothing
+/// was learned about the range: splitting it cannot help, and the split is not undone once the
+/// underlying condition clears — the range stays fragmented, permanently inflating range-proof
+/// count and aggregation cost.
+fn no_bisect_reason(e: &anyhow::Error) -> Option<&'static str> {
+    if is_admission_shed_error(e) {
+        Some("self-hosted admission shed (prover pool full)")
+    } else if is_transient_transport_error(e) {
+        Some("transient transport failure (backend unreachable)")
+    } else if is_unsatisfiable_precondition_error(e) {
+        Some(
+            "unsatisfiable precondition on the prover backend (e.g. no program registered for \
+             this vk_hash) — ACTION: register the current range/aggregation ELF with the proving \
+             cluster",
+        )
+    } else {
+        None
+    }
+}
+
 /// Return the end of the completed range chain beginning at `expected_start`.
 fn highest_contiguous_end(
     expected_start: i64,
@@ -1125,6 +1196,25 @@ where
         Ok(())
     }
 
+    /// [MANTLE] Retry a cluster proof request as-is: drop the in-memory handle and put the row
+    /// back to `Unrequested` so the next pass re-requests the SAME range.
+    ///
+    /// The no-bisect counterpart to [`Self::fail_cluster_request`], for the failure classes in
+    /// [`no_bisect_reason`]. Deliberately does NOT touch the range/agg error gauges: nothing
+    /// failed about this range, the backend just refused to work on it.
+    async fn reset_cluster_request_for_retry(&self, request: &OPSuccinctRequest) -> Result<()> {
+        // Remove the in-memory handle first so it doesn't leak if the DB update below fails.
+        self.proof_requester.cluster_handles.lock().await.remove(&request.id);
+
+        self.driver_config
+            .driver_db_client
+            .update_request_status(request.id, RequestStatus::Unrequested)
+            .await?;
+
+        ValidityGauge::ProofRequestRetryCount.increment(1.0);
+        Ok(())
+    }
+
     /// Fail a cluster proof request: increment the appropriate error gauge, mark
     /// the request as failed (with potential split-retry), and remove the in-memory handle.
     async fn fail_cluster_request(&self, request: &OPSuccinctRequest) -> Result<()> {
@@ -1359,6 +1449,17 @@ where
                             .driver_db_client
                             .finish_invalidated_request(request.id)
                             .await?;
+                    } else if let Some(reason) = no_bisect_reason(&e) {
+                        // [MANTLE] Same policy as the task-failure path: these classes say
+                        // nothing about the range, so retry it whole rather than letting
+                        // `fail_cluster_request` route it into bisection.
+                        warn!(
+                            request_id = request.id,
+                            req_type = ?request.req_type,
+                            reason,
+                            "resetting to Unrequested for retry (no bisection)"
+                        );
+                        self.reset_cluster_request_for_retry(&request).await?;
                     } else {
                         self.fail_cluster_request(&request).await?;
                     }
@@ -2312,23 +2413,10 @@ where
                                 error = ?e,
                                 "Task failed with error"
                             );
-                            // Some failures must NOT bisect the range: a
-                            // self-hosted admission shed (prover pool momentarily
-                            // full) and a transient transport failure (the
-                            // backend was unreachable — e.g. the gateway is down,
-                            // gRPC `Unavailable` / "tcp connect error"). In both
-                            // cases the request never produced a proof, so the
-                            // range is fine; marking it Failed would feed range
-                            // bisection and needlessly fragment it. Reset it to
+                            // [MANTLE] Some failures must NOT bisect the range —
+                            // see `no_bisect_reason` for the policy. Reset to
                             // Unrequested and retry the SAME range next loop.
-                            let no_bisect_reason = if is_admission_shed_error(&e) {
-                                Some("self-hosted admission shed (prover pool full)")
-                            } else if is_transient_transport_error(&e) {
-                                Some("transient transport failure (backend unreachable)")
-                            } else {
-                                None
-                            };
-                            if let Some(reason) = no_bisect_reason {
+                            if let Some(reason) = no_bisect_reason(&e) {
                                 warn!(
                                     request_id = request.id,
                                     request_type = ?request.req_type,
@@ -2605,7 +2693,25 @@ where
         self.validate_contract_config().await?;
 
         // Log the proposer metrics.
-        self.log_proposer_metrics().await?;
+        //
+        // [MANTLE] Observability must never be able to stop the proposer. This step only reads and
+        // sets gauges, yet it used to propagate — and `highest_contiguous_end`, which it calls,
+        // returns `Err` for a completed range that overlaps the contiguous chain or has
+        // `end <= start`. A single such row is not self-healing, so propagating here failed the
+        // iteration at step 2 forever: every later step was skipped, including the scheduling gate
+        // and `update_chain_lock`, and `run` sat on its 10s error path. Nothing downstream depends
+        // on these gauges, so a failure is logged and the pass continues; the same bad row is still
+        // reported (loudly) by `create_aggregation_proofs`, which is where it actually matters.
+        if let Err(e) = self.log_proposer_metrics().await {
+            ValidityGauge::TotalErrorCount.increment(1.0);
+            warn!(
+                error = ?e,
+                "Could not log proposer metrics this pass; the iteration continues since gauges \
+                 are observability only. ACTION: if this persists, check for completed range \
+                 proofs that overlap or have end_block <= start_block — \
+                 `highest_contiguous_end` rejects both."
+            );
+        }
 
         // Handle the ongoing tasks.
         self.handle_ongoing_tasks().await?;
@@ -3222,7 +3328,122 @@ mod tests {
 
 #[cfg(test)]
 mod admission_shed_tests {
-    use super::{is_admission_shed_error, is_transient_transport_error};
+    use super::{
+        is_admission_shed_error, is_transient_transport_error, is_unsatisfiable_precondition_error,
+        no_bisect_reason,
+    };
+
+    /// `no_bisect_reason` is the single policy gate every failure path consults, so it has to
+    /// agree with the individual predicates. Drifting them apart would silently change which
+    /// failures fragment a range.
+    #[test]
+    fn the_policy_gate_agrees_with_its_predicates() {
+        let cases: [(anyhow::Error, bool); 5] = [
+            (
+                anyhow::anyhow!(
+                    "status: Unavailable, message: \"x-sp1-admission-shed: pool at capacity\""
+                ),
+                true,
+            ),
+            (tonic::Status::unavailable("backend down").into(), true),
+            (
+                tonic::Status::failed_precondition("program not registered for vk_hash abc").into(),
+                true,
+            ),
+            // Must still bisect: a range too big to execute is what bisection is for.
+            (anyhow::anyhow!("proof generation failed: execution unexecutable"), false),
+            // A backend fault that is neither transient nor a precondition.
+            (tonic::Status::internal("prover crashed").into(), false),
+        ];
+
+        for (e, expected_no_bisect) in cases {
+            let gate = no_bisect_reason(&e).is_some();
+            let predicates = is_admission_shed_error(&e) ||
+                is_transient_transport_error(&e) ||
+                is_unsatisfiable_precondition_error(&e);
+            assert_eq!(gate, predicates, "gate disagrees with predicates for {e:?}");
+            assert_eq!(gate, expected_no_bisect, "wrong bisection policy for {e:?}");
+        }
+    }
+
+    /// The reason string reaches operator-facing logs, and for this class the operator has to do
+    /// something specific (register the ELF). A reason that does not say so is a regression.
+    #[test]
+    fn the_precondition_reason_tells_the_operator_what_to_do() {
+        let e: anyhow::Error =
+            tonic::Status::failed_precondition("program not registered for vk_hash abc").into();
+        let reason = no_bisect_reason(&e).expect("must be classified no-bisect");
+        assert!(reason.contains("ACTION"), "reason must carry an operator action: {reason}");
+        assert!(reason.contains("register"), "reason must name the fix: {reason}");
+    }
+
+    /// The failure this predicate exists for: the cluster has no program registered for our
+    /// current range vkey, so every request is rejected on arrival.
+    ///
+    /// Bisecting is not just useless here, it is harmful — the range is fine, so each split
+    /// doubles the request volume against a cluster that rejects all of it, and leaves the
+    /// range permanently fragmented once the program is finally registered.
+    #[test]
+    fn program_not_registered_is_a_precondition_failure() {
+        let not_registered: anyhow::Error = tonic::Status::failed_precondition(
+            "program not registered for vk_hash \
+             1dc938274cd550224002662e765b50c838b6fcb3234308b847ece2ce0e4a5631",
+        )
+        .into();
+        assert!(
+            is_unsatisfiable_precondition_error(&not_registered),
+            "an unregistered program must not bisect the range"
+        );
+
+        // Survives anyhow context wrapping, as the sp1-sdk path wraps errors.
+        let wrapped = not_registered.context("make_proof_request failed");
+        assert!(is_unsatisfiable_precondition_error(&wrapped));
+
+        // String fallback, for when the error is not a downcastable Status of our tonic
+        // version (a future SDK tonic bump, or a pre-Status failure).
+        let rendered = anyhow::anyhow!(
+            "status: FailedPrecondition, message: \"program not registered for vk_hash 1dc93827\""
+        );
+        assert!(is_unsatisfiable_precondition_error(&rendered));
+    }
+
+    /// The predicate must not swallow failures that SHOULD still bisect. A range that is
+    /// genuinely too big to execute is the whole reason bisection exists.
+    #[test]
+    fn genuine_proof_failures_still_bisect() {
+        let unexecutable = anyhow::anyhow!("proof generation failed: execution unexecutable");
+        assert!(!is_unsatisfiable_precondition_error(&unexecutable));
+
+        // A non-FailedPrecondition Status is not a precondition failure, even when its text
+        // mentions one — the typed code is the signal.
+        let internal: anyhow::Error =
+            tonic::Status::internal("program not registered, allegedly").into();
+        assert!(
+            !is_unsatisfiable_precondition_error(&internal),
+            "the typed code must decide, not incidental text"
+        );
+    }
+
+    /// The three no-bisect predicates classify disjoint failures; a change that makes one
+    /// shadow another would silently reroute a whole failure class.
+    #[test]
+    fn the_no_bisect_predicates_do_not_overlap() {
+        let precondition: anyhow::Error =
+            tonic::Status::failed_precondition("program not registered for vk_hash abc").into();
+        assert!(is_unsatisfiable_precondition_error(&precondition));
+        assert!(!is_transient_transport_error(&precondition));
+        assert!(!is_admission_shed_error(&precondition));
+
+        let unavailable: anyhow::Error = tonic::Status::unavailable("backend down").into();
+        assert!(is_transient_transport_error(&unavailable));
+        assert!(!is_unsatisfiable_precondition_error(&unavailable));
+
+        let shed = anyhow::anyhow!(
+            "status: Unavailable, message: \"x-sp1-admission-shed: pool at capacity\""
+        );
+        assert!(is_admission_shed_error(&shed));
+        assert!(!is_unsatisfiable_precondition_error(&shed));
+    }
 
     #[test]
     fn detects_self_hosted_admission_shed_only() {
