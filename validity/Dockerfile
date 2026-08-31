@@ -8,10 +8,14 @@ FROM lukemathwalker/cargo-chef:latest-rust-1.85 AS chef
 WORKDIR /build
 
 # Planner stage: compute a dependency-only recipe from the workspace
-# Cargo.toml/Cargo.lock, independent of the rest of the source tree
+# Cargo.toml/Cargo.lock, independent of the rest of the source tree.
+# --bin scopes the recipe to only what validity/clear-stuck-txs actually need —
+# without it, cargo-chef pulls in every workspace member (including unrelated
+# scripts/test crates that depend on much newer alloy-* versions requiring
+# rustc up to 1.94), and `cook` fails trying to compile those against 1.85.
 FROM chef AS planner
 COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
+RUN cargo chef prepare --bin validity --bin clear-stuck-txs --recipe-path recipe.json
 
 # Build stage
 FROM chef AS builder
