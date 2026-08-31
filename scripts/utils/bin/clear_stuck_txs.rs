@@ -30,7 +30,7 @@
 //! race for the same nonces.
 use alloy_eips::BlockId;
 use alloy_network::TransactionBuilder;
-use alloy_primitives::{TxKind, U256};
+use alloy_primitives::U256;
 use alloy_provider::{Provider, ProviderBuilder};
 use alloy_rpc_types_eth::TransactionRequest;
 use anyhow::{Context, Result};
@@ -71,6 +71,15 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Must come before any TLS use. rustls 0.23 refuses to pick a provider when the crate graph
+    // carries both `ring` and `aws-lc-rs` (it does here), and panics at the first TLS handshake
+    // instead — reached via the GCP KMS client and the L1 RPC. `ring` matches what
+    // `validity/bin/validity.rs` installs, so this binary negotiates TLS exactly like the
+    // proposer it ships beside.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|e| anyhow::anyhow!("Failed to install default crypto provider: {e:?}"))?;
+
     let args = Args::parse();
     dotenv::from_filename(&args.env_file).ok();
 
@@ -137,7 +146,6 @@ async fn main() -> Result<()> {
             .with_gas_limit(21_000)
             .with_max_fee_per_gas(max_fee)
             .with_max_priority_fee_per_gas(priority_fee);
-        debug_assert!(matches!(request.to, Some(TxKind::Call(_))));
 
         print!("nonce {nonce}: replacing ... ");
         match signer.send_transaction_request_with_timeout(l1_rpc.clone(), request, 120).await {
