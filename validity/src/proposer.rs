@@ -79,6 +79,11 @@ enum PollFailureAction {
 ///
 /// The threshold is shared with the cluster path so both backends give up after the same number
 /// of consecutive failures.
+///
+/// The cost of being wrong is asymmetric, which is what sets the threshold. Abandoning too eagerly
+/// throws away an in-flight proof and pays to redo it; abandoning too late — or never — stops the
+/// proposer indefinitely. With the defaults (`LOOP_INTERVAL` 60s, `NETWORK_CALLS_TIMEOUT` 15s)
+/// this tolerates roughly three minutes of continuous polling failure before giving up.
 fn poll_failure_action(consecutive_failures: u32) -> PollFailureAction {
     if consecutive_failures >= MAX_CONSECUTIVE_POLL_FAILURES {
         PollFailureAction::Abandon
@@ -1003,6 +1008,16 @@ where
             )
             .await?;
 
+        // [MANTLE] Drop counters for requests that are no longer in `Prove`. Rows leave that
+        // status through paths this loop never observes (invalidation, or a commitment change
+        // after a vkey bump making them invisible to the query above), and without this their
+        // entries would sit in the map for the lifetime of the process.
+        if !self.proof_requester.cluster {
+            let live: std::collections::HashSet<i64> =
+                prove_requests.iter().map(|request| request.id).collect();
+            self.network_poll_failures.lock().await.retain(|id, _| live.contains(id));
+        }
+
         for request in prove_requests {
             if self.proof_requester.cluster {
                 // Cluster mode: catch errors per-request so a single failed poll doesn't
@@ -1043,10 +1058,17 @@ where
                             }
                             PollFailureAction::Abandon => {
                                 // The network cannot tell us about this proof any more (e.g. the
-                                // request is gone after a proof panicked). Fail the row so
-                                // `add_new_ranges` sees the gap and requests the range afresh.
-                                // Done directly rather than via `handle_failed_request`, which
-                                // would bisect a range that nothing is wrong with.
+                                // request is gone after a proof panicked). Put the row back to
+                                // `Unrequested` so it is proven again from scratch;
+                                // `update_request_to_prove` overwrites `proof_request_id` on the
+                                // next submission, so the dead id does not linger.
+                                //
+                                // NOT `Failed`, and not via `handle_failed_request`: the split
+                                // gate counts `Failed` rows for this exact block range, so
+                                // failing it here would push an otherwise healthy range towards
+                                // bisection — the very thing the no-bisect policy exists to
+                                // prevent. Nothing is wrong with this range; only the proof
+                                // request became unreachable.
                                 warn!(
                                     request_id,
                                     start_block,
@@ -1054,13 +1076,13 @@ where
                                     consecutive_failures,
                                     error = ?e,
                                     "Proof request status unavailable after repeated attempts; \
-                                     failing the request so the range is proven again. ACTION: \
-                                     none, this is self-healing; investigate the prover network \
-                                     if it recurs for many requests."
+                                     resetting to Unrequested so the range is proven again. \
+                                     ACTION: none, this is self-healing; investigate the prover \
+                                     network if it recurs across many requests."
                                 );
                                 self.driver_config
                                     .driver_db_client
-                                    .update_request_status(request_id, RequestStatus::Failed)
+                                    .update_request_status(request_id, RequestStatus::Unrequested)
                                     .await?;
                                 self.network_poll_failures.lock().await.remove(&request_id);
                                 ValidityGauge::ProofRequestRetryCount.increment(1.0);

@@ -588,13 +588,23 @@ by hand.
 
 **Fix.** The network branch now contains errors per request and tracks consecutive failures in
 `Proposer::network_poll_failures`, reusing the cluster path's `MAX_CONSECUTIVE_POLL_FAILURES`
-threshold. On reaching it, the row is set to `Failed` so `add_new_ranges` sees the gap and
-re-requests the range. `poll_failure_action()` isolates the escalation as a pure function, tested
-for both directions (transient failures must not throw away an in-flight proof; persistent ones
-must escalate, monotonically — a non-monotone rule would restore the infinite loop).
+threshold. On reaching it the row is reset to `Unrequested`, so the range is proven again from
+scratch — `update_request_to_prove` overwrites `proof_request_id` on resubmission, so the dead id
+does not linger. `poll_failure_action()` isolates the escalation as a pure function, tested for
+both directions (transient failures must not throw away an in-flight proof; persistent ones must
+escalate, monotonically — a non-monotone rule would restore the infinite loop).
 
-The row is failed **directly**, not through `handle_failed_request`, which would bisect a range
-that nothing is wrong with (§3.10a).
+**Why `Unrequested` and not `Failed`.** The split gate counts `Failed` rows *for the same block
+range* (`fetch_failed_request_count_by_block_range`), so failing the row here would push an
+otherwise healthy range towards bisection after a few network outages — exactly what the
+no-bisect policy in §3.10a exists to prevent. Nothing is wrong with the range; only the proof
+request became unreachable. For the same reason this does not go through
+`handle_failed_request`.
+
+**Threshold tradeoff.** The cost of being wrong is asymmetric: abandoning too eagerly discards an
+in-flight proof and pays to redo it, while abandoning too late stops the proposer indefinitely.
+With the defaults (`LOOP_INTERVAL` 60s, `NETWORK_CALLS_TIMEOUT` 15s) the proposer tolerates about
+three minutes of continuous polling failure before giving up on a request.
 
 **Not the same bug as #923.** #923 removed the *cause* of that particular panic (checkpoint
 anchored to `latest`) and is present in this branch, in `origin/main`, and in the
