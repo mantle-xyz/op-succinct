@@ -700,6 +700,23 @@ consecutive blocks of maximum base-fee climb.
 Verified against anvil with block production withheld: the first attempt times out and the signer
 re-sends at the same nonce, `maxFeePerGas 15 -> 18 gwei`, which then confirms.
 
+**Interaction with the chain lock — worth knowing before tuning.** The lock is a lease of
+`LOOP_INTERVAL`, refreshed at the end of each iteration and checked only at startup. Escalation
+makes an iteration much slower: each send waits up to
+`(1 + L1_TX_MAX_BUMPS) * TX_CONFIRMATION_TIMEOUT`, and an iteration can send twice (aggregation
+submission and a checkpoint). With the defaults the slowest iteration is ~540s against a 60s
+lease, so a restart during an escalation can read the lease as expired and start a second
+proposer, which would then contend for nonces.
+
+The imbalance predates escalation (two 60s sends already exceeded a 60s lease) but escalation
+widens it by the bump factor. `Proposer::new` now warns when the gap is wide, naming the numbers
+and the knobs; it does not refuse to start, since the right setting depends on how the deployment
+supervises restarts. Raising `LOOP_INTERVAL` is usually the correct answer.
+
+**Residual risk.** If all attempts time out, the final transaction stays in the mempool and the
+next iteration queues behind it — escalation makes that far less likely (the price ends ~1.95x
+higher) but does not make it impossible. `clear-stuck-txs` remains the backstop.
+
 **Not addressed:** `checkpointBlockHash` is inherently time-limited — it reads `blockhash()`,
 which covers only 256 blocks, so a checkpoint transaction stuck beyond ~51 minutes is guaranteed
 to revert. Escalation makes long stalls unlikely rather than impossible; recognising and

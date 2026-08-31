@@ -593,6 +593,39 @@ where
             "PRIVATE_STDIN only applies to SP1 network proof requests; disable mock mode and SP1_PROVER=cluster"
         );
 
+        // [MANTLE] The chain lock is a lease of `loop_interval`, refreshed by `update_chain_lock`
+        // at the end of each iteration and checked only here, at startup. For it to do its job the
+        // lease must outlast the slowest iteration: otherwise a restart during a slow one reads
+        // the lease as expired and starts a second proposer against the same account, and the two
+        // then fight over nonces and double-submit.
+        //
+        // An iteration can broadcast twice (aggregation submission and a checkpoint), each now
+        // waiting up to `(1 + L1_TX_MAX_BUMPS) * TX_CONFIRMATION_TIMEOUT` because of fee
+        // escalation. The imbalance predates escalation — two 60s sends already exceeded a 60s
+        // lease — but escalation widens it by the bump factor, so it is worth surfacing.
+        //
+        // Warned rather than enforced: the right setting depends on how the deployment supervises
+        // restarts, and refusing to start would be worse than the risk being warned about.
+        let worst_case_send =
+            (1 + u64::from(op_succinct_signer_utils::GasPolicy::from_env().max_bumps))
+                .saturating_mul(requester_config.tx_confirmation_timeout);
+        let worst_case_iteration = loop_interval.saturating_add(2 * worst_case_send);
+        // Only complain when the gap is wide enough to matter; a lease merely a little shorter
+        // than the theoretical worst case is normal and would make this pure noise.
+        if worst_case_iteration > loop_interval.saturating_mul(2) {
+            tracing::warn!(
+                loop_interval,
+                tx_confirmation_timeout = requester_config.tx_confirmation_timeout,
+                worst_case_send,
+                worst_case_iteration,
+                "Chain lock lease (LOOP_INTERVAL) is well short of the slowest possible \
+                 iteration. A restart while a transaction is escalating may read the lease as \
+                 expired and allow a second proposer to start, which would contend for nonces. \
+                 ACTION: raise LOOP_INTERVAL toward the worst-case iteration, or lower \
+                 L1_TX_MAX_BUMPS / TX_CONFIRMATION_TIMEOUT."
+            );
+        }
+
         // This check prevents users from running multiple proposers for the same chain at the same
         // time.
         let is_locked = db_client
