@@ -601,6 +601,14 @@ no-bisect policy in §3.10a exists to prevent. Nothing is wrong with the range; 
 request became unreachable. For the same reason this does not go through
 `handle_failed_request`.
 
+**Only network failures count.** `process_proof_request_status` also fails on our own database
+(`is_request_invalidated`, `update_prove_duration`, ...) and on local invariants ("Core proofs are
+not supported"). Those must not spend a request's abandon budget: discarding an in-flight proof
+would not fix a local problem, and a *permanent* local error would loop forever re-requesting a
+range that fails identically every time. `network_call_with_timeout` therefore tags its failures
+with `NetworkPollError`, and only those are counted; everything else is logged and retried next
+loop.
+
 **Threshold tradeoff.** The cost of being wrong is asymmetric: abandoning too eagerly discards an
 in-flight proof and pays to redo it, while abandoning too late stops the proposer indefinitely.
 With the defaults (`LOOP_INTERVAL` 60s, `NETWORK_CALLS_TIMEOUT` 15s) the proposer tolerates about

@@ -57,6 +57,31 @@ use crate::{
 /// Number of consecutive poll failures before a cluster proof is marked as permanently failed.
 const MAX_CONSECUTIVE_POLL_FAILURES: u32 = 3;
 
+/// [MANTLE] Marker for a failure that came from talking to the prover network, as opposed to one
+/// raised by our own database or by local logic.
+///
+/// Only these count towards abandoning a proof request. `process_proof_request_status` can fail
+/// for reasons that say nothing about the proof — `is_request_invalidated` or
+/// `update_prove_duration` hitting a blip in our own database, or a local invariant like "Core
+/// proofs are not supported". Counting those would discard an in-flight proof over a local
+/// problem, and in the case of a permanent local error would loop forever re-requesting a range
+/// that fails the same way each time.
+#[derive(Debug)]
+struct NetworkPollError(String);
+
+impl std::fmt::Display for NetworkPollError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NetworkPollError {}
+
+/// Whether this failure came from the prover network (see [`NetworkPollError`]).
+fn is_network_poll_failure(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| cause.is::<NetworkPollError>())
+}
+
 /// What to do with a `Prove` request whose status poll just failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PollFailureAction {
@@ -1036,6 +1061,20 @@ where
                 match self.process_proof_request_status(request).await {
                     Ok(()) => {
                         self.network_poll_failures.lock().await.remove(&request_id);
+                    }
+                    Err(e) if !is_network_poll_failure(&e) => {
+                        // Our own database or a local invariant failed, which says nothing about
+                        // the proof. Do not spend the request's abandon budget on it: discarding
+                        // an in-flight proof would not fix a local problem, and for a permanent
+                        // one it would loop forever re-requesting a range that fails identically.
+                        warn!(
+                            request_id,
+                            start_block,
+                            end_block,
+                            error = ?e,
+                            "Error processing proof request status (local failure, not counted \
+                             towards abandoning the proof)"
+                        );
                     }
                     Err(e) => {
                         let consecutive_failures = {
@@ -2951,7 +2990,7 @@ where
                     error = %network_error,
                     "Network error during operation"
                 );
-                Err(anyhow!(
+                Err(NetworkPollError(format!(
                     "Network error {} for request {} (start_block={}, end_block={}): {}",
                     operation_name,
                     request.id,
@@ -2959,6 +2998,7 @@ where
                     request.end_block,
                     network_error
                 ))
+                .into())
             }
             Err(_) => {
                 warn!(
@@ -2970,7 +3010,7 @@ where
                     "Network call timeout"
                 );
                 ValidityGauge::NetworkCallTimeoutCount.increment(1.0);
-                Err(anyhow!(
+                Err(NetworkPollError(format!(
                     "Timeout after {}s {} for request {} (start_block={}, end_block={})",
                     self.requester_config.network_calls_timeout,
                     operation_name,
@@ -2978,6 +3018,7 @@ where
                     request.start_block,
                     request.end_block
                 ))
+                .into())
             }
         }
     }
@@ -2986,7 +3027,39 @@ where
 /// [MANTLE] Escalation for a `Prove` request the prover network can no longer answer for.
 #[cfg(test)]
 mod poll_failure_tests {
-    use super::{poll_failure_action, PollFailureAction, MAX_CONSECUTIVE_POLL_FAILURES};
+    use super::{
+        is_network_poll_failure, poll_failure_action, NetworkPollError, PollFailureAction,
+        MAX_CONSECUTIVE_POLL_FAILURES,
+    };
+
+    /// Only failures from the prover network may spend a request's abandon budget.
+    ///
+    /// `process_proof_request_status` also fails on our own database (`is_request_invalidated`,
+    /// `update_prove_duration`, ...) and on local invariants ("Core proofs are not supported").
+    /// Counting those would throw away an in-flight proof over a local blip, and for a permanent
+    /// local error would loop forever re-requesting a range that fails identically every time.
+    #[test]
+    fn only_network_failures_count_towards_abandoning() {
+        let timeout: anyhow::Error = NetworkPollError(
+            "Timeout after 15s waiting for proof request details for request 19902".to_string(),
+        )
+        .into();
+        assert!(is_network_poll_failure(&timeout));
+
+        // Still recognised once wrapped in context, as the call sites do.
+        let wrapped = timeout.context("processing proof request status");
+        assert!(is_network_poll_failure(&wrapped));
+
+        for local in [
+            anyhow::anyhow!("error returned from database: connection reset"),
+            anyhow::anyhow!("Core proofs are not supported."),
+        ] {
+            assert!(
+                !is_network_poll_failure(&local),
+                "local failure must not spend the abandon budget: {local:?}"
+            );
+        }
+    }
 
     /// Transient poll failures must not cost a proof: a range mid-proof is expensive to redo, so
     /// anything below the threshold keeps waiting.
