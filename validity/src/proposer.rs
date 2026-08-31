@@ -1119,12 +1119,25 @@ where
                                      ACTION: none, this is self-healing; investigate the prover \
                                      network if it recurs across many requests."
                                 );
-                                self.driver_config
+                                // Guarded on the row still being in `Prove`: the poll that just
+                                // failed may have already stored a finished proof and moved it to
+                                // `Complete` before failing on a later step, and an unconditional
+                                // write would throw that proof away.
+                                let reset = self
+                                    .driver_config
                                     .driver_db_client
-                                    .update_request_status(request_id, RequestStatus::Unrequested)
+                                    .reset_prove_request_to_unrequested(request_id)
                                     .await?;
                                 self.network_poll_failures.lock().await.remove(&request_id);
-                                ValidityGauge::ProofRequestRetryCount.increment(1.0);
+                                if reset {
+                                    ValidityGauge::ProofRequestRetryCount.increment(1.0);
+                                } else {
+                                    info!(
+                                        request_id,
+                                        "Request left Prove while its poll was failing; \
+                                         leaving it as is"
+                                    );
+                                }
                             }
                         }
                     }
@@ -1253,25 +1266,48 @@ where
                 // Update the prove_duration based on the current time and the proof_request_time.
                 self.driver_config.driver_db_client.update_prove_duration(request.id).await?;
 
-                if let Some(proof_request) = self
+                // [MANTLE] Statistics are observability only, and by this point the proof is
+                // already stored and the row is `Complete`. Failing here used to propagate, which
+                // (a) reported a completed proof as a failed poll and (b) let that failure count
+                // towards abandoning the request — which could reset an already-Complete row and
+                // throw the finished proof away. Log and move on instead.
+                match self
                     .network_call_with_timeout(
                         network_prover.get_proof_request(proof_request_id),
                         "fetching execution statistics",
                         &request,
                     )
-                    .await?
+                    .await
                 {
-                    let execution_statistics = RequestExecutionStatistics::from(&proof_request);
+                    Ok(Some(proof_request)) => {
+                        let execution_statistics = RequestExecutionStatistics::from(&proof_request);
 
-                    // Write the execution data to the database.
-                    self.driver_config
-                        .driver_db_client
-                        .insert_execution_statistics(
-                            request.id,
-                            serde_json::to_value(execution_statistics)?,
-                            0,
-                        )
-                        .await?;
+                        // Write the execution data to the database.
+                        if let Err(e) = self
+                            .driver_config
+                            .driver_db_client
+                            .insert_execution_statistics(
+                                request.id,
+                                serde_json::to_value(execution_statistics)?,
+                                0,
+                            )
+                            .await
+                        {
+                            warn!(
+                                request_id = request.id,
+                                error = ?e,
+                                "Could not record execution statistics for a completed proof"
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        warn!(
+                            request_id = request.id,
+                            error = ?e,
+                            "Could not fetch execution statistics for a completed proof"
+                        );
+                    }
                 }
 
                 // Log completion of range and aggregation proofs.

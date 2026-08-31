@@ -609,6 +609,14 @@ range that fails identically every time. `network_call_with_timeout` therefore t
 with `NetworkPollError`, and only those are counted; everything else is logged and retried next
 loop.
 
+**The reset is guarded on the row still being in `Prove`.** A poll can store a finished proof and
+move the row to `Complete`, then fail on a *later* step of the same poll — fetching execution
+statistics used to be such a step. Abandoning on that failure with an unconditional write would
+discard a proof that exists and was paid for. `reset_prove_request_to_unrequested` therefore
+carries `AND status = Prove` and reports whether anything changed; two DB tests pin both
+directions. Fetching execution statistics is also no longer fatal — it is observability, gathered
+after the proof is already stored.
+
 **Threshold tradeoff.** The cost of being wrong is asymmetric: abandoning too eagerly discards an
 in-flight proof and pays to redo it, while abandoning too late stops the proposer indefinitely.
 With the defaults (`LOOP_INTERVAL` 60s, `NETWORK_CALLS_TIMEOUT` 15s) the proposer tolerates about

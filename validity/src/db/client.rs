@@ -685,6 +685,29 @@ impl DriverDBClient {
         .await
     }
 
+    /// [MANTLE] Put a request that is still in `Prove` back to `Unrequested`, returning whether
+    /// it was still in `Prove`.
+    ///
+    /// Guarded on the current status on purpose. The caller abandons a proof request the prover
+    /// network can no longer answer for, but that decision is made from the outcome of a poll
+    /// that may have *already* stored a finished proof and moved the row to `Complete` — a later
+    /// step in the same poll can fail after that point. An unconditional write would then discard
+    /// a proof that exists and was paid for. Uses the runtime query API, not `sqlx::query!`,
+    /// because `validity/.sqlx/` carries no cache entry for it and `SQLX_OFFLINE` builds would
+    /// fail.
+    pub async fn reset_prove_request_to_unrequested(&self, id: i64) -> Result<bool, Error> {
+        let result = sqlx::query(
+            "UPDATE requests SET status = $1, updated_at = NOW() WHERE id = $2 AND status = $3",
+        )
+        .bind(RequestStatus::Unrequested as i16)
+        .bind(id)
+        .bind(RequestStatus::Prove as i16)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Update the status of a request to Prove.
     ///
     /// Updates the proof_request_time to the current time.
@@ -1529,6 +1552,44 @@ mod tests {
                 .await
                 .unwrap();
             requests.into_iter().find(|r| r.start_block == req.start_block).unwrap().id
+        }
+
+        /// [MANTLE] Abandoning an unpollable proof must only touch a row still in `Prove`.
+        #[tokio::test]
+        async fn test_reset_prove_request_only_affects_prove_rows() {
+            let db = TestDb::new().await;
+            let c = db.client();
+
+            let req = RequestBuilder::new().range(100, 200).build();
+            let id = insert_and_get_id(c, &req).await;
+            c.update_request_status(id, RequestStatus::Prove).await.unwrap();
+
+            assert!(
+                c.reset_prove_request_to_unrequested(id).await.unwrap(),
+                "a row in Prove must be reset and report that it was"
+            );
+            assert_eq!(count(c, RequestStatus::Unrequested).await, 1);
+            assert_eq!(count(c, RequestStatus::Prove).await, 0);
+        }
+
+        /// The data-loss case this guard exists for: a poll can store a finished proof and move
+        /// the row to `Complete`, then fail on a later step. Abandoning on that failure must not
+        /// discard the proof that was just paid for.
+        #[tokio::test]
+        async fn test_reset_prove_request_will_not_clobber_a_completed_proof() {
+            let db = TestDb::new().await;
+            let c = db.client();
+
+            let req = RequestBuilder::new().range(100, 200).build();
+            let id = insert_and_get_id(c, &req).await;
+            c.update_request_status(id, RequestStatus::Complete).await.unwrap();
+
+            assert!(
+                !c.reset_prove_request_to_unrequested(id).await.unwrap(),
+                "a Complete row must be left alone and report that nothing was reset"
+            );
+            assert_eq!(count(c, RequestStatus::Complete).await, 1);
+            assert_eq!(count(c, RequestStatus::Unrequested).await, 0);
         }
 
         #[tokio::test]
