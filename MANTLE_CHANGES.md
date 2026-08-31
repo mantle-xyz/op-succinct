@@ -551,6 +551,57 @@ SELECT a.id, b.id FROM visible a JOIN visible b          -- overlap (over-report
 SELECT id, start_block, end_block FROM visible WHERE end_block <= start_block;  -- empty/reversed
 ```
 
+### 3.10b Unpollable proof requests must not stall the proposer (mainnet incident)
+
+**Symptom.** After an L1 reorg made a PLONK proof panic on mainnet, the proposer held a
+`proof_request_id` the network had no record of. Every loop it logged
+
+```
+ERROR proposer.run: Error in proposer loop: Timeout after 15s waiting for proof request
+details for request 19902 (start_block=99911546, end_block=99913346)
+```
+
+and made no other progress. The range was never re-requested; recovery meant deleting the row
+by hand.
+
+**Two independent faults.**
+
+1. *The failure aborted the whole iteration.* `handle_proving_requests` contained the
+   asymmetry below — the cluster branch contained errors per request, the network branch did
+   not:
+
+   ```rust
+   if self.proof_requester.cluster {
+       if let Err(e) = self.process_cluster_proof_status(request).await { warn!(...) }
+   } else {
+       self.process_proof_request_status(request).await?;   // <- aborts the iteration
+   }
+   ```
+
+   Because this is step 5 of the loop, everything after it was skipped: the canonicality gate,
+   `add_new_ranges`, proof submission, aggregation, and `update_chain_lock`. `run` then took its
+   10s error path and repeated. Same shape as the `log_proposer_metrics` fault in §3.10a — a
+   step that propagates a **non-self-healing** error stops the proposer permanently.
+
+2. *Nothing ever gave up on the request.* The network path had no equivalent of the cluster
+   path's `consecutive_poll_failures`, so an unanswerable request was polled forever.
+
+**Fix.** The network branch now contains errors per request and tracks consecutive failures in
+`Proposer::network_poll_failures`, reusing the cluster path's `MAX_CONSECUTIVE_POLL_FAILURES`
+threshold. On reaching it, the row is set to `Failed` so `add_new_ranges` sees the gap and
+re-requests the range. `poll_failure_action()` isolates the escalation as a pure function, tested
+for both directions (transient failures must not throw away an in-flight proof; persistent ones
+must escalate, monotonically — a non-monotone rule would restore the infinite loop).
+
+The row is failed **directly**, not through `handle_failed_request`, which would bisect a range
+that nothing is wrong with (§3.10a).
+
+**Not the same bug as #923.** #923 removed the *cause* of that particular panic (checkpoint
+anchored to `latest`) and is present in this branch, in `origin/main`, and in the
+`v3.8.1-mainnet-mantle-arsia.2` tag. The stall above is what the proposer does *after* any proof
+becomes unpollable, whatever the cause — so it is worth carrying independently of the #923
+backport status of whatever release line is deployed.
+
 ### 3.11 Upstream sync v3.8.1 → v3.12.0
 
 22 upstream commits. What we took, what we held, and the three things that are easy to get wrong.

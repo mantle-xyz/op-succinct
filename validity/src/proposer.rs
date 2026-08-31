@@ -57,6 +57,36 @@ use crate::{
 /// Number of consecutive poll failures before a cluster proof is marked as permanently failed.
 const MAX_CONSECUTIVE_POLL_FAILURES: u32 = 3;
 
+/// What to do with a `Prove` request whose status poll just failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PollFailureAction {
+    /// Leave the request in `Prove` and poll it again next loop.
+    Retry,
+    /// Give up on this proof request and let the range be requested again from scratch.
+    Abandon,
+}
+
+/// Decide whether a `Prove` request that keeps failing its status poll should be abandoned.
+///
+/// Split out as a pure function so the escalation is assertable without a network or a database
+/// — the same reason [`rejection_action`] and [`checkpoint_plan`] are shaped this way.
+///
+/// This exists because a request can become permanently unpollable. Observed on mainnet: an L1
+/// reorg made a PLONK proof panic, and afterwards the proposer held a `proof_request_id` that the
+/// network had no record of. Every loop asked for its details, timed out, and — because the
+/// non-cluster branch propagated with `?` — failed the whole iteration before anything else could
+/// run. The range was never re-requested, and recovery meant deleting the row by hand.
+///
+/// The threshold is shared with the cluster path so both backends give up after the same number
+/// of consecutive failures.
+fn poll_failure_action(consecutive_failures: u32) -> PollFailureAction {
+    if consecutive_failures >= MAX_CONSECUTIVE_POLL_FAILURES {
+        PollFailureAction::Abandon
+    } else {
+        PollFailureAction::Retry
+    }
+}
+
 /// Maximum number of legacy completed ranges hydrated in one proposer loop.
 const RANGE_METADATA_HYDRATION_LIMIT: i64 = 100;
 
@@ -507,6 +537,11 @@ where
     requester_config: RequesterConfig,
     proof_requester: Arc<OPSuccinctProofRequester<H>>,
     tasks: Arc<Mutex<TaskMap>>,
+    /// [MANTLE] Consecutive status-poll failures per `Prove` request on the SP1 network path,
+    /// keyed by request id. The cluster path keeps the same counter inside its
+    /// `ClusterProofHandle`; the network path had no equivalent, so a request the network could
+    /// no longer answer for was polled forever. Cleared on the first success and on abandon.
+    network_poll_failures: Arc<Mutex<HashMap<i64, u32>>>,
 }
 
 impl<P, H: OPSuccinctHost> Proposer<P, H>
@@ -649,6 +684,7 @@ where
             requester_config,
             proof_requester,
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            network_poll_failures: Arc::new(Mutex::new(HashMap::new())),
         };
         Ok(proposer)
     }
@@ -975,7 +1011,63 @@ where
                     warn!(error = ?e, "Error processing cluster proof status");
                 }
             } else {
-                self.process_proof_request_status(request).await?;
+                // [MANTLE] Same per-request containment as the cluster branch above, which this
+                // previously lacked: it propagated with `?`, so one unpollable request failed the
+                // whole iteration — before `add_new_ranges`, proof submission, or
+                // `update_chain_lock` could run — and did so again every loop, since the
+                // condition never cleared itself.
+                let (request_id, start_block, end_block) =
+                    (request.id, request.start_block, request.end_block);
+                match self.process_proof_request_status(request).await {
+                    Ok(()) => {
+                        self.network_poll_failures.lock().await.remove(&request_id);
+                    }
+                    Err(e) => {
+                        let consecutive_failures = {
+                            let mut failures = self.network_poll_failures.lock().await;
+                            let counter = failures.entry(request_id).or_insert(0);
+                            *counter += 1;
+                            *counter
+                        };
+
+                        match poll_failure_action(consecutive_failures) {
+                            PollFailureAction::Retry => {
+                                warn!(
+                                    request_id,
+                                    start_block,
+                                    end_block,
+                                    consecutive_failures,
+                                    error = ?e,
+                                    "Error processing proof request status; will retry"
+                                );
+                            }
+                            PollFailureAction::Abandon => {
+                                // The network cannot tell us about this proof any more (e.g. the
+                                // request is gone after a proof panicked). Fail the row so
+                                // `add_new_ranges` sees the gap and requests the range afresh.
+                                // Done directly rather than via `handle_failed_request`, which
+                                // would bisect a range that nothing is wrong with.
+                                warn!(
+                                    request_id,
+                                    start_block,
+                                    end_block,
+                                    consecutive_failures,
+                                    error = ?e,
+                                    "Proof request status unavailable after repeated attempts; \
+                                     failing the request so the range is proven again. ACTION: \
+                                     none, this is self-healing; investigate the prover network \
+                                     if it recurs for many requests."
+                                );
+                                self.driver_config
+                                    .driver_db_client
+                                    .update_request_status(request_id, RequestStatus::Failed)
+                                    .await?;
+                                self.network_poll_failures.lock().await.remove(&request_id);
+                                ValidityGauge::ProofRequestRetryCount.increment(1.0);
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -2866,6 +2958,38 @@ where
                 ))
             }
         }
+    }
+}
+
+/// [MANTLE] Escalation for a `Prove` request the prover network can no longer answer for.
+#[cfg(test)]
+mod poll_failure_tests {
+    use super::{poll_failure_action, PollFailureAction, MAX_CONSECUTIVE_POLL_FAILURES};
+
+    /// Transient poll failures must not cost a proof: a range mid-proof is expensive to redo, so
+    /// anything below the threshold keeps waiting.
+    #[test]
+    fn transient_failures_keep_retrying() {
+        for failures in 0..MAX_CONSECUTIVE_POLL_FAILURES {
+            assert_eq!(
+                poll_failure_action(failures),
+                PollFailureAction::Retry,
+                "{failures} consecutive failures must not abandon the proof"
+            );
+        }
+    }
+
+    /// The mainnet incident this fixes: the network had no record of the proof request, so the
+    /// poll could never succeed. Without an escalation the proposer polls it forever.
+    #[test]
+    fn persistent_failures_abandon_so_the_range_is_reproven() {
+        assert_eq!(poll_failure_action(MAX_CONSECUTIVE_POLL_FAILURES), PollFailureAction::Abandon);
+        // Escalation must be monotone — never fall back to Retry once past the threshold, which
+        // would restore the infinite loop.
+        for failures in MAX_CONSECUTIVE_POLL_FAILURES..MAX_CONSECUTIVE_POLL_FAILURES + 100 {
+            assert_eq!(poll_failure_action(failures), PollFailureAction::Abandon);
+        }
+        assert_eq!(poll_failure_action(u32::MAX), PollFailureAction::Abandon);
     }
 }
 
