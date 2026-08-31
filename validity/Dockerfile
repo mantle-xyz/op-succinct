@@ -32,8 +32,9 @@ COPY . .
 RUN --mount=type=ssh \
     --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/build/target \
-    cargo build --bin validity --release && \
-    cp target/release/validity /build/validity-proposer
+    cargo build --bin validity --bin clear-stuck-txs --release && \
+    cp target/release/validity /build/validity-proposer && \
+    cp target/release/clear-stuck-txs /build/clear-stuck-txs
 
 # Final stage
 FROM rust:1.85-slim
@@ -59,6 +60,10 @@ RUN curl -L https://sp1.succinct.xyz | bash && \
 
 # Copy only the built binaries from builder
 COPY --from=builder /build/validity-proposer /usr/local/bin/validity-proposer
+# [MANTLE] Operational tool, shipped in the same image on purpose: it signs with the same GCP
+# Cloud HSM the proposer uses, so it must run where those credentials already are. It never acts
+# without --execute. See scripts/utils/bin/clear_stuck_txs.rs.
+COPY --from=builder /build/clear-stuck-txs /usr/local/bin/clear-stuck-txs
 
 # Run the server from its permanent location
 CMD ["/usr/local/bin/validity-proposer"]

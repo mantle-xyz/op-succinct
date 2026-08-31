@@ -16,6 +16,10 @@ name = "fetch-and-save-proof"
 path = "bin/fetch_and_save_proof.rs"
 
 [[bin]]
+name = "clear-stuck-txs"
+path = "bin/clear_stuck_txs.rs"
+
+[[bin]]
 name = "config"
 path = "bin/config.rs"
 
@@ -49,6 +53,8 @@ alloy-primitives.workspace = true
 alloy-sol-types.workspace = true
 alloy-signer-local.workspace = true
 alloy-eips.workspace = true
+reqwest.workspace = true
+alloy-rpc-types-eth.workspace = true
 bincode.workspace = true
 tokio.workspace = true
 clap.workspace = true
@@ -65,6 +71,7 @@ tracing.workspace = true
 
 # local
 op-succinct-host-utils.workspace = true
+op-succinct-signer-utils.workspace = true
 op-succinct-client-utils.workspace = true
 op-succinct-proof-utils.workspace = true
 op-succinct-elfs.workspace = true
