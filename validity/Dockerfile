@@ -1,6 +1,10 @@
-# Chef stage: shared base with cargo-chef installed
-FROM rust:1.85 AS chef
-RUN cargo install cargo-chef --locked
+# Chef stage: cargo-chef prebuilt against a matching rustc, rather than
+# `cargo install cargo-chef` on top of plain rust:1.85 — the latest cargo-chef
+# release pulls transitive deps (cargo-platform, cargo_metadata, guppy,
+# target-spec) whose MSRV has since moved past 1.85, so compiling it fresh
+# fails with "rustc 1.85.1 is not supported by the following packages".
+# This tag pins a cargo-chef build against rustc 1.85 specifically.
+FROM lukemathwalker/cargo-chef:latest-rust-1.85 AS chef
 WORKDIR /build
 
 # Planner stage: compute a dependency-only recipe from the workspace
