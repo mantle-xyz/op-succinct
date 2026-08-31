@@ -172,6 +172,20 @@ async fn main() -> Result<()> {
         provider.get_transaction_count(address).block_id(BlockId::pending()).await?;
     println!("\nnonce (latest) : {latest_after}");
     println!("nonce (pending): {pending_after}");
+
+    // Detect a proposer that was never stopped. Having replaced through `end`, the pending nonce
+    // should not exceed end + 1; anything beyond that was queued by someone else while we worked,
+    // and the two of us are now competing for nonces. Checked rather than merely documented,
+    // because "stop the proposer first" is exactly the step that gets skipped under pressure.
+    if pending_after > end + 1 {
+        println!();
+        println!(
+            "WARNING: {} transaction(s) appeared from another sender while this ran — the \
+             proposer is probably still running.",
+            pending_after - (end + 1)
+        );
+        println!("Stop it, then re-run this tool; otherwise you will keep racing it for nonces.");
+    }
     if pending_after == latest_after {
         println!("Queue is clear. Restart the proposer.");
     } else {

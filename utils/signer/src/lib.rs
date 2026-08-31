@@ -382,12 +382,35 @@ impl Signer {
                     }
 
                     if attempt >= policy.max_bumps {
-                        return Err(e.context(format!(
-                            "transaction did not confirm after {} attempts (final maxFeePerGas \
-                             {} gwei); it may still be pending",
-                            attempt + 1,
-                            max_fee / WEI_PER_GWEI
-                        )));
+                        // Distinguish "still sitting in the mempool" from "the nonce was consumed
+                        // by a transaction we cannot identify" — the operator's next move differs.
+                        // Decided from the on-chain nonce rather than by matching error text,
+                        // which varies between clients.
+                        let nonce_consumed = match (
+                            request.nonce,
+                            provider.get_transaction_count(self.address()).await,
+                        ) {
+                            (Some(nonce), Ok(latest)) => latest > nonce,
+                            _ => false,
+                        };
+
+                        return Err(e.context(if nonce_consumed {
+                            format!(
+                                "nonce {:?} was consumed by a transaction other than the {} we \
+                                 broadcast (most likely the original, mined before a replacement \
+                                 reached the node). Its outcome is not knowable from here — check \
+                                 the account's recent transactions.",
+                                request.nonce,
+                                sent_hashes.len()
+                            )
+                        } else {
+                            format!(
+                                "transaction did not confirm after {} attempts (final \
+                                 maxFeePerGas {} gwei); it is still pending",
+                                attempt + 1,
+                                max_fee / WEI_PER_GWEI
+                            )
+                        }));
                     }
 
                     let (next_max, next_priority) = bump_fees(max_fee, priority_fee);

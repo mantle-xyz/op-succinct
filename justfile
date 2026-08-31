@@ -447,31 +447,65 @@ verify-git-pins:
     set -uo pipefail
     tmp=$(mktemp)
     grep -oE 'git\+https://[^"?]+\?tag=[^#"]+#[0-9a-f]{40}' Cargo.lock | sort -u > "$tmp"
-    echo "Verifying $(wc -l < "$tmp" | tr -d ' ') tag-pinned git dependencies against their remotes..."
+    count=$(wc -l < "$tmp" | tr -d ' ')
+
+    # A gate that checks nothing is worse than no gate: it reports success. If the pattern stops
+    # matching (a Cargo.lock format change, say), fail loudly instead of silently passing.
+    if [ "$count" -eq 0 ]; then
+      rm -f "$tmp"
+      echo "ERROR: found no tag-pinned git dependencies in Cargo.lock." >&2
+      echo "Either there genuinely are none, or the pattern in this recipe no longer matches" >&2
+      echo "the lockfile format. Check before assuming the former." >&2
+      exit 1
+    fi
+
+    echo "Verifying $count tag-pinned git dependencies against their remotes..."
     fail=0
+    unreachable=0
     while IFS= read -r pin; do
       url="${pin#git+}"; url="${url%%\?tag=*}"
       rest="${pin#*\?tag=}"; tag="${rest%%#*}"; sha="${rest##*#}"
-      # Annotated tags need the ^{} peel to reach the commit; fall back for lightweight tags.
-      remote=$(git ls-remote "$url" "refs/tags/$tag^{}" 2>/dev/null | awk 'NR==1{print $1}')
-      if [ -z "$remote" ]; then
-        remote=$(git ls-remote "$url" "refs/tags/$tag" 2>/dev/null | awk 'NR==1{print $1}')
+
+      # Ask for both the peeled and unpeeled ref in one round trip, and keep the exit status:
+      # a network or auth failure must not look like "tag moved", or the operator may go and
+      # "fix" a lockfile that was correct all along.
+      if ! out=$(git ls-remote "$url" "refs/tags/$tag^{}" "refs/tags/$tag" 2>/dev/null); then
+        printf '  UNREACHABLE %-32s %s (could not query remote)\n' "$tag" "${url##*/}"
+        unreachable=1
+        continue
       fi
-      if [ "$remote" = "$sha" ]; then
+
+      # Prefer the peeled ref (annotated tags); fall back to the plain one (lightweight tags).
+      remote=$(printf '%s\n' "$out" | awk '$2 ~ /\^\{\}$/ {print $1; exit}')
+      if [ -z "$remote" ]; then
+        remote=$(printf '%s\n' "$out" | awk 'NR==1{print $1}')
+      fi
+
+      if [ -z "$remote" ]; then
+        printf '  MISSING   %-34s %s (tag not found on remote)\n' "$tag" "${url##*/}"
+        fail=1
+      elif [ "$remote" = "$sha" ]; then
         printf '  OK        %-34s %s\n' "$tag" "${url##*/}"
       else
         printf '  MISMATCH  %-34s %s\n            lock:   %s\n            remote: %s\n' \
-          "$tag" "${url##*/}" "$sha" "${remote:-<tag not found>}"
+          "$tag" "${url##*/}" "$sha" "$remote"
         fail=1
       fi
     done < "$tmp"
     rm -f "$tmp"
+
     if [ "$fail" -ne 0 ]; then
       echo
-      echo "ERROR: a pinned tag no longer points at the commit Cargo.lock records."
-      echo "Building now would reuse the OLD commit from the cargo git cache without"
-      echo "touching the network, producing ELFs whose vkey does not match the tag."
-      echo "Re-resolve deliberately (cargo update -p <crate>) and re-commit Cargo.lock."
+      echo "ERROR: a pinned tag no longer points at the commit Cargo.lock records." >&2
+      echo "Building now would reuse the OLD commit from the cargo git cache without" >&2
+      echo "touching the network, producing ELFs whose vkey does not match the tag." >&2
+      echo "Re-resolve deliberately (cargo update -p <crate>) and re-commit Cargo.lock." >&2
+      exit 1
+    fi
+    if [ "$unreachable" -ne 0 ]; then
+      echo
+      echo "ERROR: could not reach every remote, so the pins are unverified." >&2
+      echo "This is a connectivity problem, NOT a reason to touch Cargo.lock." >&2
       exit 1
     fi
     echo "All pins agree with their remotes."
