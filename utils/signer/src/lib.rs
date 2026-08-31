@@ -104,9 +104,12 @@ impl GasPolicy {
     }
 }
 
-/// `maxFeePerGas` for a new transaction: base fee with headroom, never below the floor.
-fn compute_max_fee(base_fee_wei: u128, priority_fee_wei: u128, policy: &GasPolicy) -> u128 {
-    base_fee_wei
+/// `maxFeePerGas` for a new transaction: the current price with headroom, never below the floor.
+///
+/// `reference_price_wei` is whatever the node reports as the going rate (`eth_gasPrice`), which on
+/// an EIP-1559 chain already includes a tip estimate — so the result errs high, deliberately.
+fn compute_max_fee(reference_price_wei: u128, priority_fee_wei: u128, policy: &GasPolicy) -> u128 {
+    reference_price_wei
         .saturating_mul(policy.base_fee_multiplier)
         .saturating_add(priority_fee_wei)
         .max(policy.fee_floor_wei)
@@ -290,13 +293,18 @@ impl Signer {
                 request.max_priority_fee_per_gas.unwrap_or_default(),
             )
         } else {
-            let base_fee = provider.get_gas_price().await.context("Failed to read gas price")?;
+            // `eth_gasPrice`, not the block's `baseFeePerGas`: on an EIP-1559 chain nodes
+            // return roughly base fee plus a tip estimate, so feeding it to the multiplier
+            // slightly *over*-estimates. That is the safe direction, and it avoids a second
+            // round trip to read the latest block header. Renamed accordingly so nobody reads
+            // this as a true base fee.
+            let gas_price = provider.get_gas_price().await.context("Failed to read gas price")?;
             let priority = provider
                 .get_max_priority_fee_per_gas()
                 .await
                 .unwrap_or(PRIORITY_FEE_FLOOR_WEI)
                 .max(PRIORITY_FEE_FLOOR_WEI);
-            (compute_max_fee(base_fee, priority, &policy), priority)
+            (compute_max_fee(gas_price, priority, &policy), priority)
         };
 
         let mut sent_hashes = Vec::new();
@@ -313,9 +321,19 @@ impl Signer {
             {
                 Ok(receipt) => return Ok(receipt),
                 Err(e) => {
-                    // An escalation can lose the race: the transaction it is replacing may have
-                    // just been mined, in which case the node rejects the replacement. That is
-                    // success, not failure — find the receipt of whatever we already sent.
+                    // Record this attempt BEFORE deciding anything. The invariant that keeps a
+                    // successful transaction from being reported as failed is: every `Err` return
+                    // below is preceded by a receipt lookup over *all* hashes we have broadcast,
+                    // including the one from this attempt. Pushing after the checks left the last
+                    // attempt's hash unexamined, so a transaction confirming just after its
+                    // confirmation timeout was reported as a failure — and the caller would then
+                    // send a duplicate checkpoint.
+                    if let Some(hash) = this_hash {
+                        sent_hashes.push(hash);
+                    }
+
+                    // An escalation can lose the race: the transaction it replaces may have just
+                    // been mined, in which case the node rejects the replacement. That is success.
                     for hash in &sent_hashes {
                         if let Ok(Some(receipt)) = provider.get_transaction_receipt(*hash).await {
                             return Ok(receipt);
@@ -331,18 +349,16 @@ impl Signer {
                         )));
                     }
 
-                    if let Some(hash) = this_hash {
-                        sent_hashes.push(hash);
-                    }
-
                     let (next_max, next_priority) = bump_fees(max_fee, priority_fee);
-                    eprintln!(
-                        "L1 tx nonce {:?} did not confirm (attempt {}); replacing at \
-                         maxFeePerGas {} -> {} gwei",
-                        request.nonce,
-                        attempt + 1,
-                        max_fee / WEI_PER_GWEI,
-                        next_max / WEI_PER_GWEI
+                    tracing::warn!(
+                        nonce = ?request.nonce,
+                        attempt = attempt + 1,
+                        max_bumps = policy.max_bumps,
+                        from_max_fee_gwei = max_fee / WEI_PER_GWEI,
+                        to_max_fee_gwei = next_max / WEI_PER_GWEI,
+                        error = ?e,
+                        "L1 transaction did not confirm; replacing it at the same nonce with \
+                         higher fees"
                     );
                     (max_fee, priority_fee) = (next_max, next_priority);
                     attempt += 1;

@@ -35,6 +35,7 @@ use alloy_provider::{Provider, ProviderBuilder};
 use alloy_rpc_types_eth::TransactionRequest;
 use anyhow::{Context, Result};
 use clap::Parser;
+use op_succinct_host_utils::logger::setup_logger;
 use op_succinct_signer_utils::Signer;
 use std::time::Duration;
 
@@ -86,6 +87,9 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     dotenv::from_filename(&args.env_file).ok();
+    // Without a subscriber the signer's escalation warnings are silently dropped, and an operator
+    // watching this run would not see that a transaction had to be re-sent at a higher price.
+    setup_logger();
 
     let l1_rpc: reqwest::Url = std::env::var("L1_RPC")
         .context("L1_RPC must be set")?

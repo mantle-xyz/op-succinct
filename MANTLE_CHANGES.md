@@ -685,10 +685,13 @@ consecutive blocks of maximum base-fee climb.
    queue a new one behind it. `SignerLock` already serialises sends, so nothing else claims the
    nonce meanwhile.
 2. **Escalation can lose the race.** The transaction being replaced may be mined just as the
-   replacement goes out, and the node then rejects the replacement. That is success, not failure:
-   the loop records each broadcast hash *before* waiting for confirmation and, on any send error,
-   looks those up before reporting a failure. Getting this wrong would report a landed checkpoint
-   as failed and cause a duplicate.
+   replacement goes out, and the node then rejects the replacement. That is success, not failure.
+   The invariant is: **every `Err` return is preceded by a receipt lookup over *all* hashes
+   broadcast so far, including the current attempt's.** Each hash is recorded before waiting for
+   confirmation, and the record happens before the checks — an earlier version pushed it after,
+   which left the final attempt's hash unexamined, so a transaction confirming just past its
+   timeout was reported as failed and the caller would send a duplicate checkpoint. When adding a
+   return path here, keep it behind that lookup.
 3. **Caller-supplied fees are respected.** `has_caller_fees` requires *both* fee fields to be set
    before treating the pricing as the caller's — half-specified would pair a caller value with a
    computed one. `clear-stuck-txs` depends on this, since it picks fees deliberately to replace
