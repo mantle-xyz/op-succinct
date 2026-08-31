@@ -617,6 +617,27 @@ carries `AND status = Prove` and reports whether anything changed; two DB tests 
 directions. Fetching execution statistics is also no longer fatal — it is observability, gathered
 after the proof is already stored.
 
+**Why this is bounded rather than merely "all cases handled".** `process_proof_request_status`
+has 16 error exits spanning three origins (prover network, our database, local invariants) and
+they fire at different points in the row's lifecycle — some after the row has already moved to
+`Complete`. Enumerating them and getting each judgement right is not a property anyone can keep
+true as the function changes. So abandoning is gated on three conditions, of which the last is
+structural:
+
+1. the error carries `NetworkPollError` (only `network_call_with_timeout` produces it),
+2. it has recurred `MAX_CONSECUTIVE_POLL_FAILURES` times, and
+3. **the row is still in `Prove` at the moment of the write** (`AND status = Prove`).
+
+Condition 3 means a misjudgement in 1 or 2 cannot corrupt anything: the worst case becomes
+"a healthy in-flight proof is thrown away and re-proven", never "a finished proof is discarded"
+or "the proposer stops". If you add an error exit to that function — especially one after the
+proof is stored — condition 3 is what keeps it safe, so do not replace the guarded update with
+an unconditional one.
+
+Under a total network outage the loop still behaves: every request retries on its own cadence,
+the proposer keeps running, other requests keep being processed, and the chain lock keeps being
+renewed. Before this fix, a single unpollable request stopped all of it.
+
 **Threshold tradeoff.** The cost of being wrong is asymmetric: abandoning too eagerly discards an
 in-flight proof and pays to redo it, while abandoning too late stops the proposer indefinitely.
 With the defaults (`LOOP_INTERVAL` 60s, `NETWORK_CALLS_TIMEOUT` 15s) the proposer tolerates about
