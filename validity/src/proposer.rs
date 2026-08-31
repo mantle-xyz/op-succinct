@@ -606,9 +606,8 @@ where
         //
         // Warned rather than enforced: the right setting depends on how the deployment supervises
         // restarts, and refusing to start would be worse than the risk being warned about.
-        let worst_case_send =
-            (1 + u64::from(op_succinct_signer_utils::GasPolicy::from_env().max_bumps))
-                .saturating_mul(requester_config.tx_confirmation_timeout);
+        let worst_case_send = op_succinct_signer_utils::GasPolicy::from_env()
+            .worst_case_send_secs(requester_config.tx_confirmation_timeout);
         let worst_case_iteration = loop_interval.saturating_add(2 * worst_case_send);
         // Only complain when the gap is wide enough to matter; a lease merely a little shorter
         // than the theoretical worst case is normal and would make this pure noise.

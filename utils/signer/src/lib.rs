@@ -52,6 +52,28 @@ pub const DEFAULT_MAX_BUMPS: u32 = 3;
 /// transaction, and makes the +10% replacement threshold awkward to clear.
 const PRIORITY_FEE_FLOOR_WEI: u128 = 10_000_000; // 0.01 gwei
 
+/// Reads and parses an env var, warning loudly if it is set but unparseable.
+///
+/// A silent fallback to the default is the wrong behaviour for an operational knob: a typo in a
+/// value someone set during an incident would take effect as "no change", with nothing in the
+/// logs to explain why.
+fn parse_env<T: std::str::FromStr>(name: &str) -> Option<T> {
+    match std::env::var(name) {
+        Err(_) => None,
+        Ok(raw) => match raw.trim().parse::<T>() {
+            Ok(value) => Some(value),
+            Err(_) => {
+                tracing::warn!(
+                    env_var = name,
+                    value = %raw,
+                    "Ignoring unparseable value; falling back to the default"
+                );
+                None
+            }
+        },
+    }
+}
+
 /// [MANTLE] Fee strategy for L1 transactions.
 ///
 /// Exists because this signer previously delegated entirely to alloy's automatic estimation and
@@ -86,21 +108,40 @@ impl GasPolicy {
     pub fn from_env() -> Self {
         let default = Self::default();
         Self {
-            fee_floor_wei: std::env::var("L1_GAS_FEE_FLOOR_GWEI")
-                .ok()
-                .and_then(|v| v.parse::<u128>().ok())
-                .map(|gwei| gwei * WEI_PER_GWEI)
+            fee_floor_wei: parse_env("L1_GAS_FEE_FLOOR_GWEI")
+                .map(|gwei: u128| gwei.saturating_mul(WEI_PER_GWEI))
                 .unwrap_or(default.fee_floor_wei),
-            base_fee_multiplier: std::env::var("L1_GAS_BASE_FEE_MULTIPLIER")
-                .ok()
-                .and_then(|v| v.parse::<u128>().ok())
-                .filter(|m| *m > 0)
+            base_fee_multiplier: parse_env("L1_GAS_BASE_FEE_MULTIPLIER")
+                .filter(|m: &u128| {
+                    // A zero multiplier would price every transaction at the floor alone,
+                    // silently disabling the headroom this exists to provide.
+                    if *m == 0 {
+                        tracing::warn!(
+                            "L1_GAS_BASE_FEE_MULTIPLIER=0 ignored; using {}",
+                            DEFAULT_BASE_FEE_MULTIPLIER
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                })
                 .unwrap_or(default.base_fee_multiplier),
-            max_bumps: std::env::var("L1_TX_MAX_BUMPS")
-                .ok()
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or(default.max_bumps),
+            max_bumps: parse_env("L1_TX_MAX_BUMPS").unwrap_or(default.max_bumps),
         }
+    }
+}
+
+impl GasPolicy {
+    /// Worst-case wall time one send can occupy, given a per-attempt confirmation timeout.
+    ///
+    /// Exposed so callers can reason about how long a send may block without knowing that
+    /// escalation exists or how many attempts it makes. `Proposer` uses it to check its chain
+    /// lock lease against the slowest possible iteration; previously it reached in for
+    /// `max_bumps` and did that arithmetic itself, which meant the lease check silently depended
+    /// on this module's retry shape.
+    pub fn worst_case_send_secs(&self, per_attempt_timeout_secs: u64) -> u64 {
+        // Widen before adding: `1 + max_bumps` in u32 overflows at u32::MAX, which a test caught.
+        u64::from(self.max_bumps).saturating_add(1).saturating_mul(per_attempt_timeout_secs)
     }
 }
 
@@ -678,6 +719,24 @@ mod gas_policy_tests {
         // Half-specified is not "specified": filling only one field would leave an inconsistent
         // pair, so treat it as ours to compute.
         assert!(!has_caller_fees(&TransactionRequest::default().with_max_fee_per_gas(42 * GWEI)));
+    }
+
+    /// The proposer checks its chain lock lease against this, so the arithmetic is part of the
+    /// module's contract rather than an internal detail.
+    #[test]
+    fn worst_case_send_covers_every_attempt() {
+        let p = policy(); // max_bumps = 3
+        assert_eq!(p.worst_case_send_secs(60), 4 * 60, "1 initial attempt + 3 escalations");
+
+        // No escalation still costs one full timeout.
+        let no_bumps = GasPolicy { max_bumps: 0, ..policy() };
+        assert_eq!(no_bumps.worst_case_send_secs(60), 60);
+
+        // Must not overflow into a nonsensical small number on absurd input.
+        assert_eq!(
+            GasPolicy { max_bumps: u32::MAX, ..policy() }.worst_case_send_secs(u64::MAX),
+            u64::MAX
+        );
     }
 
     #[test]
