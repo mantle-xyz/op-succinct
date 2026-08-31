@@ -7,15 +7,18 @@
 FROM lukemathwalker/cargo-chef:latest-rust-1.85 AS chef
 WORKDIR /build
 
-# Planner stage: compute a dependency-only recipe from the workspace
+# Planner stage: compute dependency-only recipes from the workspace
 # Cargo.toml/Cargo.lock, independent of the rest of the source tree.
-# --bin scopes the recipe to only what validity/clear-stuck-txs actually need —
-# without it, cargo-chef pulls in every workspace member (including unrelated
+# `prepare --bin` only accepts a single binary, and validity / clear-stuck-txs
+# live in two different workspace packages (validity/ vs scripts/utils/), so
+# this needs two separate recipes rather than one shared one. Without --bin,
+# cargo-chef pulls in every workspace member (including unrelated
 # scripts/test crates that depend on much newer alloy-* versions requiring
 # rustc up to 1.94), and `cook` fails trying to compile those against 1.85.
 FROM chef AS planner
 COPY . .
-RUN cargo chef prepare --bin validity --bin clear-stuck-txs --recipe-path recipe.json
+RUN cargo chef prepare --bin validity --recipe-path recipe-validity.json && \
+    cargo chef prepare --bin clear-stuck-txs --recipe-path recipe-clear-stuck-txs.json
 
 # Build stage
 FROM chef AS builder
@@ -41,13 +44,15 @@ RUN curl -L https://sp1.succinct.xyz | bash && \
     ~/.sp1/bin/sp1up -v 6.4.0 && \
     ~/.sp1/bin/cargo-prove prove --version
 
-# Build only the dependency graph first, keyed on the recipe (Cargo.toml/Cargo.lock)
+# Build only the dependency graph first, keyed on the recipes (Cargo.toml/Cargo.lock)
 # rather than the full source tree. As long as dependency versions don't change,
-# this layer is reused from the registry build cache and the sp1-*/gnark crates
+# these layers are reused from the registry build cache and the sp1-*/gnark crates
 # don't get recompiled on every source change.
-COPY --from=planner /build/recipe.json recipe.json
+COPY --from=planner /build/recipe-validity.json recipe-validity.json
+COPY --from=planner /build/recipe-clear-stuck-txs.json recipe-clear-stuck-txs.json
 RUN --mount=type=ssh \
-    cargo chef cook --release --bin validity --bin clear-stuck-txs --recipe-path recipe.json
+    cargo chef cook --release --bin validity --recipe-path recipe-validity.json && \
+    cargo chef cook --release --bin clear-stuck-txs --recipe-path recipe-clear-stuck-txs.json
 
 # Copy only what's needed for the build
 COPY . .
