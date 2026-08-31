@@ -3,7 +3,7 @@ use std::{str::FromStr, sync::Arc};
 use alloy_consensus::TxEnvelope;
 use alloy_eips::Decodable2718;
 use alloy_network::{Ethereum, EthereumWallet, TransactionBuilder};
-use alloy_primitives::{Address, Bytes, TxKind};
+use alloy_primitives::{Address, Bytes, TxHash, TxKind};
 use alloy_provider::{Provider, ProviderBuilder, Web3Signer};
 use alloy_rpc_types_eth::{TransactionReceipt, TransactionRequest};
 use alloy_signer::Signer as AlloySigner;
@@ -27,6 +27,108 @@ use tokio::{sync::Mutex, time::Duration};
 
 pub const NUM_CONFIRMATIONS: u64 = 3;
 pub const TIMEOUT_SECONDS: u64 = 60;
+
+const WEI_PER_GWEI: u128 = 1_000_000_000;
+
+/// [MANTLE] Lower bound on `maxFeePerGas`, in gwei.
+///
+/// Sized against a real incident: with base fee at ~0.15 gwei, alloy's default estimate produced
+/// 0.32 gwei, and every transaction became permanently unmineable once base fee reached 1.25 gwei.
+/// The transactions this signer sends are small (a checkpoint is ~46k gas), so the absolute cost
+/// of a floor this high is negligible — far cheaper than a stalled proposer.
+pub const DEFAULT_FEE_FLOOR_GWEI: u128 = 3;
+
+/// [MANTLE] Multiplier applied to base fee, replacing alloy's default of 2.
+///
+/// base fee rises at most 12.5% per block, so 2x only covers ~6 blocks of sustained increase.
+/// 4x covers ~12. The thin default is precisely what let a rising base fee overtake in-flight
+/// transactions.
+pub const DEFAULT_BASE_FEE_MULTIPLIER: u128 = 4;
+
+/// [MANTLE] How many times a transaction is re-sent at a higher price before giving up.
+pub const DEFAULT_MAX_BUMPS: u32 = 3;
+
+/// Floor on `maxPriorityFeePerGas`. A zero tip gives block builders no reason to include the
+/// transaction, and makes the +10% replacement threshold awkward to clear.
+const PRIORITY_FEE_FLOOR_WEI: u128 = 10_000_000; // 0.01 gwei
+
+/// [MANTLE] Fee strategy for L1 transactions.
+///
+/// Exists because this signer previously delegated entirely to alloy's automatic estimation and
+/// never revisited a transaction once sent: a transaction priced below a later base fee sat in the
+/// mempool forever, and nonce ordering meant it blocked every subsequent transaction from the same
+/// account. Recovery required manual intervention.
+#[derive(Clone, Copy, Debug)]
+pub struct GasPolicy {
+    /// Lower bound on `maxFeePerGas`, in wei.
+    pub fee_floor_wei: u128,
+    /// Multiplier applied to the current base fee.
+    pub base_fee_multiplier: u128,
+    /// Maximum number of price escalations before returning an error.
+    pub max_bumps: u32,
+}
+
+impl Default for GasPolicy {
+    fn default() -> Self {
+        Self {
+            fee_floor_wei: DEFAULT_FEE_FLOOR_GWEI * WEI_PER_GWEI,
+            base_fee_multiplier: DEFAULT_BASE_FEE_MULTIPLIER,
+            max_bumps: DEFAULT_MAX_BUMPS,
+        }
+    }
+}
+
+impl GasPolicy {
+    /// Reads the policy from the environment, falling back to the defaults above.
+    ///
+    /// Overridable so a live incident can be handled by changing configuration rather than
+    /// shipping a build.
+    pub fn from_env() -> Self {
+        let default = Self::default();
+        Self {
+            fee_floor_wei: std::env::var("L1_GAS_FEE_FLOOR_GWEI")
+                .ok()
+                .and_then(|v| v.parse::<u128>().ok())
+                .map(|gwei| gwei * WEI_PER_GWEI)
+                .unwrap_or(default.fee_floor_wei),
+            base_fee_multiplier: std::env::var("L1_GAS_BASE_FEE_MULTIPLIER")
+                .ok()
+                .and_then(|v| v.parse::<u128>().ok())
+                .filter(|m| *m > 0)
+                .unwrap_or(default.base_fee_multiplier),
+            max_bumps: std::env::var("L1_TX_MAX_BUMPS")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(default.max_bumps),
+        }
+    }
+}
+
+/// `maxFeePerGas` for a new transaction: base fee with headroom, never below the floor.
+fn compute_max_fee(base_fee_wei: u128, priority_fee_wei: u128, policy: &GasPolicy) -> u128 {
+    base_fee_wei
+        .saturating_mul(policy.base_fee_multiplier)
+        .saturating_add(priority_fee_wei)
+        .max(policy.fee_floor_wei)
+}
+
+/// Fees for replacing a transaction that did not confirm in time.
+///
+/// EIP-1559 replacement requires **both** fields to rise by at least 10%; +25% clears that with
+/// margin. The `+1` keeps the increase strict even at values where integer arithmetic would
+/// otherwise round to a no-op — a bump that does not increase is rejected as underpriced, which
+/// would leave the original transaction stuck.
+fn bump_fees(max_fee_wei: u128, priority_fee_wei: u128) -> (u128, u128) {
+    let bump = |v: u128| (v.saturating_mul(5) / 4).max(v.saturating_add(1));
+    (bump(max_fee_wei), bump(priority_fee_wei))
+}
+
+/// Whether the caller already priced this transaction, in which case it is left untouched.
+///
+/// Both fields must be set: filling in just one would pair a caller's value with a computed one.
+fn has_caller_fees(request: &TransactionRequest) -> bool {
+    request.max_fee_per_gas.is_some() && request.max_priority_fee_per_gas.is_some()
+}
 
 #[derive(Clone, Debug)]
 /// The type of signer to use for signing transactions.
@@ -151,11 +253,114 @@ impl Signer {
 
     /// Sends a transaction request, signed by the configured `signer`, with a caller-supplied
     /// confirmation timeout (in seconds).
+    ///
+    /// [MANTLE] Prices the transaction under [`GasPolicy`] and, if it does not confirm within the
+    /// timeout, re-sends it at the **same nonce** with escalated fees. Previously this sent once
+    /// with alloy's automatic estimate and gave up on timeout, leaving the transaction in the
+    /// mempool where nonce ordering blocked every later transaction from the same account until
+    /// someone intervened by hand.
+    ///
+    /// A caller that priced the transaction itself keeps its fees; only the nonce is pinned.
     pub async fn send_transaction_request_with_timeout(
+        &self,
+        l1_rpc: Url,
+        transaction_request: TransactionRequest,
+        timeout_secs: u64,
+    ) -> Result<TransactionReceipt> {
+        let policy = GasPolicy::from_env();
+        let provider = ProviderBuilder::new().network::<Ethereum>().connect_http(l1_rpc.clone());
+
+        // Pin the nonce so every escalation replaces the same transaction rather than queueing a
+        // new one behind it. `SignerLock` serialises sends, so nothing else claims it meanwhile.
+        let mut request = transaction_request;
+        if request.nonce.is_none() {
+            let nonce = provider
+                .get_transaction_count(self.address())
+                .pending()
+                .await
+                .context("Failed to read pending nonce")?;
+            request.set_nonce(nonce);
+        }
+
+        let (mut max_fee, mut priority_fee) = if has_caller_fees(&request) {
+            // Respect explicit pricing (clear-stuck-txs relies on this) but still escalate it if
+            // the transaction stalls.
+            (
+                request.max_fee_per_gas.unwrap_or_default(),
+                request.max_priority_fee_per_gas.unwrap_or_default(),
+            )
+        } else {
+            let base_fee = provider.get_gas_price().await.context("Failed to read gas price")?;
+            let priority = provider
+                .get_max_priority_fee_per_gas()
+                .await
+                .unwrap_or(PRIORITY_FEE_FLOOR_WEI)
+                .max(PRIORITY_FEE_FLOOR_WEI);
+            (compute_max_fee(base_fee, priority, &policy), priority)
+        };
+
+        let mut sent_hashes = Vec::new();
+        let mut attempt = 0;
+        loop {
+            let mut candidate = request.clone();
+            candidate.set_max_fee_per_gas(max_fee);
+            candidate.set_max_priority_fee_per_gas(priority_fee);
+
+            let mut this_hash = None;
+            match self
+                .dispatch_transaction(l1_rpc.clone(), candidate, timeout_secs, &mut this_hash)
+                .await
+            {
+                Ok(receipt) => return Ok(receipt),
+                Err(e) => {
+                    // An escalation can lose the race: the transaction it is replacing may have
+                    // just been mined, in which case the node rejects the replacement. That is
+                    // success, not failure — find the receipt of whatever we already sent.
+                    for hash in &sent_hashes {
+                        if let Ok(Some(receipt)) = provider.get_transaction_receipt(*hash).await {
+                            return Ok(receipt);
+                        }
+                    }
+
+                    if attempt >= policy.max_bumps {
+                        return Err(e.context(format!(
+                            "transaction did not confirm after {} attempts (final maxFeePerGas \
+                             {} gwei); it may still be pending",
+                            attempt + 1,
+                            max_fee / WEI_PER_GWEI
+                        )));
+                    }
+
+                    if let Some(hash) = this_hash {
+                        sent_hashes.push(hash);
+                    }
+
+                    let (next_max, next_priority) = bump_fees(max_fee, priority_fee);
+                    eprintln!(
+                        "L1 tx nonce {:?} did not confirm (attempt {}); replacing at \
+                         maxFeePerGas {} -> {} gwei",
+                        request.nonce,
+                        attempt + 1,
+                        max_fee / WEI_PER_GWEI,
+                        next_max / WEI_PER_GWEI
+                    );
+                    (max_fee, priority_fee) = (next_max, next_priority);
+                    attempt += 1;
+                }
+            }
+        }
+    }
+
+    /// Signs and broadcasts one attempt, waiting up to `timeout_secs` for confirmation.
+    ///
+    /// [MANTLE] Extracted from `send_transaction_request_with_timeout` so the escalation loop
+    /// above is shared by all three signer kinds; the per-signer bodies are unchanged.
+    async fn dispatch_transaction(
         &self,
         l1_rpc: Url,
         mut transaction_request: TransactionRequest,
         timeout_secs: u64,
+        sent_hash: &mut Option<TxHash>,
     ) -> Result<TransactionReceipt> {
         match self {
             Signer::Web3Signer(signer_url, signer_address) => {
@@ -179,10 +384,14 @@ impl Signer {
 
                 let tx_envelope = TxEnvelope::decode_2718(&mut raw.as_ref()).unwrap();
 
-                let receipt = provider
+                let pending = provider
                     .send_tx_envelope(tx_envelope)
                     .await
-                    .context("Failed to send transaction")?
+                    .context("Failed to send transaction")?;
+                // Record before waiting: on timeout the loop needs this to tell "still pending"
+                // from "confirmed while we were escalating".
+                *sent_hash = Some(*pending.tx_hash());
+                let receipt = pending
                     .with_required_confirmations(NUM_CONFIRMATIONS)
                     .with_timeout(Some(Duration::from_secs(timeout_secs)))
                     .get_receipt()
@@ -204,10 +413,12 @@ impl Signer {
                     transaction_request.to = Some(TxKind::Create);
                 }
 
-                let receipt = provider
+                let pending = provider
                     .send_transaction(transaction_request)
                     .await
-                    .context("Failed to send transaction")?
+                    .context("Failed to send transaction")?;
+                *sent_hash = Some(*pending.tx_hash());
+                let receipt = pending
                     .with_required_confirmations(NUM_CONFIRMATIONS)
                     .with_timeout(Some(Duration::from_secs(timeout_secs)))
                     .get_receipt()
@@ -230,10 +441,12 @@ impl Signer {
                     .wallet(wallet)
                     .connect_http(l1_rpc);
 
-                let receipt = provider
+                let pending = provider
                     .send_transaction(transaction_request)
                     .await
-                    .context("Failed to send KMS-signed transaction")?
+                    .context("Failed to send KMS-signed transaction")?;
+                *sent_hash = Some(*pending.tx_hash());
+                let receipt = pending
                     .with_required_confirmations(NUM_CONFIRMATIONS)
                     .with_timeout(Some(Duration::from_secs(timeout_secs)))
                     .get_receipt()
@@ -342,6 +555,121 @@ impl SignerLock {
         signer
             .send_transaction_request_with_timeout(l1_rpc, transaction_request, timeout_secs)
             .await
+    }
+}
+
+/// [MANTLE] Gas policy and replacement escalation.
+#[cfg(test)]
+mod gas_policy_tests {
+    use super::*;
+
+    const GWEI: u128 = 1_000_000_000;
+
+    fn policy() -> GasPolicy {
+        GasPolicy { fee_floor_wei: 3 * GWEI, base_fee_multiplier: 4, max_bumps: 3 }
+    }
+
+    /// The incident this fixes: base fee was ~0.15 gwei, alloy's `base_fee * 2` produced
+    /// 0.32 gwei, and the transaction became unmineable once base fee reached 1.25 gwei.
+    /// The floor is what makes that impossible.
+    #[test]
+    fn floor_applies_when_the_network_is_cheap() {
+        let base_fee = 150_000_000; // 0.15 gwei, as during the incident
+        let priority = 10_000_000; // 0.01 gwei
+        let max_fee = compute_max_fee(base_fee, priority, &policy());
+
+        assert_eq!(max_fee, 3 * GWEI, "the floor must win when the multiplier result is tiny");
+        assert!(
+            max_fee > 1_250_000_000,
+            "must survive the base fee that broke us (1.25 gwei), got {max_fee}"
+        );
+    }
+
+    /// Above the floor the multiplier decides, and it must be thicker than alloy's default 2x.
+    #[test]
+    fn multiplier_applies_when_the_network_is_busy() {
+        let base_fee = 30 * GWEI;
+        let priority = 2 * GWEI;
+        let max_fee = compute_max_fee(base_fee, priority, &policy());
+
+        assert_eq!(max_fee, 30 * GWEI * 4 + 2 * GWEI);
+        assert!(max_fee > base_fee * 2 + priority, "must exceed alloy's 2x default");
+    }
+
+    /// base_fee rises at most 12.5% per block, so a 4x buffer has to cover a meaningful number
+    /// of consecutive full blocks. Twelve blocks is ~2.4 minutes.
+    #[test]
+    fn buffer_survives_a_sustained_base_fee_climb() {
+        let base_fee = 10 * GWEI;
+        let max_fee = compute_max_fee(base_fee, GWEI, &policy());
+
+        let mut climbed = base_fee;
+        let mut blocks = 0;
+        while climbed <= max_fee {
+            climbed = climbed * 1125 / 1000; // +12.5%, the per-block maximum
+            blocks += 1;
+        }
+        assert!(blocks >= 12, "4x buffer should cover >=12 blocks of max climb, got {blocks}");
+    }
+
+    /// EIP-1559 replacement requires BOTH fee fields to rise by at least 10%. A bump that fails
+    /// this is rejected as underpriced, which would leave the original transaction stuck — the
+    /// whole failure mode we are removing.
+    #[test]
+    fn bump_satisfies_the_replacement_threshold() {
+        for (max_fee, priority) in
+            [(3 * GWEI, GWEI / 100), (GWEI, 0), (1, 0), (100 * GWEI, 5 * GWEI)]
+        {
+            let (new_max, new_priority) = bump_fees(max_fee, priority);
+
+            assert!(
+                new_max * 100 >= max_fee * 110,
+                "maxFeePerGas {max_fee} -> {new_max} is under the +10% threshold"
+            );
+            assert!(
+                new_priority * 100 >= priority * 110,
+                "priority {priority} -> {new_priority} is under the +10% threshold"
+            );
+            assert!(new_max > max_fee, "must strictly increase, even from {max_fee}");
+        }
+    }
+
+    /// Escalation must be monotone across attempts; a plateau would retry at a price the network
+    /// has already rejected.
+    #[test]
+    fn repeated_bumps_strictly_increase() {
+        let (mut max_fee, mut priority) = (3 * GWEI, GWEI / 100);
+        for _ in 0..policy().max_bumps {
+            let (next_max, next_priority) = bump_fees(max_fee, priority);
+            assert!(next_max > max_fee);
+            assert!(next_priority >= priority);
+            (max_fee, priority) = (next_max, next_priority);
+        }
+        // 3 bumps at +25% must stay within sane bounds — not a gas-price explosion.
+        assert!(max_fee < 3 * GWEI * 3, "escalation overshot: {max_fee}");
+    }
+
+    /// A caller that set its own fees is respected: clear-stuck-txs deliberately picks fees to
+    /// replace specific stuck transactions and must not have them recomputed.
+    #[test]
+    fn caller_supplied_fees_are_not_overridden() {
+        let explicit = TransactionRequest::default()
+            .with_max_fee_per_gas(42 * GWEI)
+            .with_max_priority_fee_per_gas(7 * GWEI);
+        assert!(has_caller_fees(&explicit));
+
+        assert!(!has_caller_fees(&TransactionRequest::default()));
+        // Half-specified is not "specified": filling only one field would leave an inconsistent
+        // pair, so treat it as ours to compute.
+        assert!(!has_caller_fees(&TransactionRequest::default().with_max_fee_per_gas(42 * GWEI)));
+    }
+
+    #[test]
+    fn policy_defaults_match_the_documented_values() {
+        let p = GasPolicy::from_env();
+        assert_eq!(p.fee_floor_wei, DEFAULT_FEE_FLOOR_GWEI * GWEI);
+        assert_eq!(p.base_fee_multiplier, DEFAULT_BASE_FEE_MULTIPLIER);
+        assert_eq!(p.max_bumps, DEFAULT_MAX_BUMPS);
     }
 }
 

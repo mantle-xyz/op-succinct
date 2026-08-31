@@ -649,6 +649,59 @@ anchored to `latest`) and is present in this branch, in `origin/main`, and in th
 becomes unpollable, whatever the cause — so it is worth carrying independently of the #923
 backport status of whatever release line is deployed.
 
+### 3.10c L1 gas policy and stuck-transaction escalation
+
+**Incident.** 20 `checkpointBlockHash` transactions sat in the mempool and the contract head
+stopped advancing. The head of the queue carried `maxFeePerGas` 0.3228 gwei against a base fee
+that had risen to 1.25 gwei, so it could never be mined, and nonce ordering held the other 19
+behind it — 17 of which were priced perfectly adequately. Full analysis lives outside the repo;
+the essentials:
+
+- `utils/signer/src/lib.rs` had **no gas configuration**, delegating entirely to alloy's
+  automatic estimate of roughly `base_fee * 2 + priority`.
+- base fee rises up to 12.5% per block, so a 2x buffer covers only ~6 blocks. **The thinner the
+  absolute gas price, the faster that buffer is overtaken** — this failed at *low* gas
+  (0.15 → 1.25 gwei), which is the opposite of the intuition that congestion causes stuck
+  transactions.
+- Once sent, nothing revisited a transaction: on timeout the signer returned `Err` and left it in
+  the mempool forever, blocking every later nonce.
+
+**Fix (all inside `send_transaction_request_with_timeout`, so all three signer kinds and every
+call site benefit; the proposer needed no change):**
+
+| Element | Behaviour | Default | Env override |
+|---|---|---|---|
+| Fee floor | `maxFeePerGas` never below this | 3 gwei | `L1_GAS_FEE_FLOOR_GWEI` |
+| Base-fee buffer | `base_fee * N + priority` | 4 (was alloy's 2) | `L1_GAS_BASE_FEE_MULTIPLIER` |
+| Escalation | re-send at the **same nonce**, +25% on both fee fields | up to 3 times | `L1_TX_MAX_BUMPS` |
+
+The floor is what makes the incident impossible: a checkpoint is ~46k gas, so 3 gwei costs about
+0.00014 ETH — negligible against a stalled proposer. The buffer test asserts 4x survives ≥12
+consecutive blocks of maximum base-fee climb.
+
+**Three details that are load-bearing:**
+
+1. **The nonce is pinned before the first send.** Escalation must *replace* the transaction, not
+   queue a new one behind it. `SignerLock` already serialises sends, so nothing else claims the
+   nonce meanwhile.
+2. **Escalation can lose the race.** The transaction being replaced may be mined just as the
+   replacement goes out, and the node then rejects the replacement. That is success, not failure:
+   the loop records each broadcast hash *before* waiting for confirmation and, on any send error,
+   looks those up before reporting a failure. Getting this wrong would report a landed checkpoint
+   as failed and cause a duplicate.
+3. **Caller-supplied fees are respected.** `has_caller_fees` requires *both* fee fields to be set
+   before treating the pricing as the caller's — half-specified would pair a caller value with a
+   computed one. `clear-stuck-txs` depends on this, since it picks fees deliberately to replace
+   specific stuck transactions.
+
+Verified against anvil with block production withheld: the first attempt times out and the signer
+re-sends at the same nonce, `maxFeePerGas 15 -> 18 gwei`, which then confirms.
+
+**Not addressed:** `checkpointBlockHash` is inherently time-limited — it reads `blockhash()`,
+which covers only 256 blocks, so a checkpoint transaction stuck beyond ~51 minutes is guaranteed
+to revert. Escalation makes long stalls unlikely rather than impossible; recognising and
+re-issuing an expired checkpoint is still unimplemented.
+
 ### 3.11 Upstream sync v3.8.1 → v3.12.0
 
 22 upstream commits. What we took, what we held, and the three things that are easy to get wrong.

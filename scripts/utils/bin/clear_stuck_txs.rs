@@ -64,6 +64,10 @@ struct Args {
     #[arg(long, default_value_t = 2)]
     priority_fee_gwei: u64,
 
+    /// Seconds to wait for each replacement to confirm before the signer escalates its fees.
+    #[arg(long, default_value_t = 120)]
+    timeout_secs: u64,
+
     /// Broadcast. Without this the tool only prints what it would do.
     #[arg(long, default_value_t = false)]
     execute: bool,
@@ -148,7 +152,10 @@ async fn main() -> Result<()> {
             .with_max_priority_fee_per_gas(priority_fee);
 
         print!("nonce {nonce}: replacing ... ");
-        match signer.send_transaction_request_with_timeout(l1_rpc.clone(), request, 120).await {
+        match signer
+            .send_transaction_request_with_timeout(l1_rpc.clone(), request, args.timeout_secs)
+            .await
+        {
             Ok(receipt) => println!("mined in block {:?}", receipt.block_number),
             // Keep going: a single nonce failing (already mined, or the replacement rejected as
             // underpriced) must not leave the rest of the queue stuck.
