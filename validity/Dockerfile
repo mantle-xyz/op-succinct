@@ -1,5 +1,16 @@
+# Chef stage: shared base with cargo-chef installed
+FROM rust:1.85 AS chef
+RUN cargo install cargo-chef --locked
+WORKDIR /build
+
+# Planner stage: compute a dependency-only recipe from the workspace
+# Cargo.toml/Cargo.lock, independent of the rest of the source tree
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
 # Build stage
-FROM rust:1.85 AS builder
+FROM chef AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -17,21 +28,25 @@ RUN curl -LO https://go.dev/dl/go1.24.0.linux-amd64.tar.gz && \
     rm go1.24.0.linux-amd64.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-
-WORKDIR /build
-
 # Install SP1
 RUN curl -L https://sp1.succinct.xyz | bash && \
     ~/.sp1/bin/sp1up -v 6.4.0 && \
     ~/.sp1/bin/cargo-prove prove --version
 
+# Build only the dependency graph first, keyed on the recipe (Cargo.toml/Cargo.lock)
+# rather than the full source tree. As long as dependency versions don't change,
+# this layer is reused from the registry build cache and the sp1-*/gnark crates
+# don't get recompiled on every source change.
+COPY --from=planner /build/recipe.json recipe.json
+RUN --mount=type=ssh \
+    cargo chef cook --release --bin validity --bin clear-stuck-txs --recipe-path recipe.json
+
 # Copy only what's needed for the build
 COPY . .
 
-# Build the server
+# Build the server. Dependencies are already compiled by the cook step above,
+# so this only (re)compiles the workspace's own crates that actually changed.
 RUN --mount=type=ssh \
-    --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/build/target \
     cargo build --bin validity --bin clear-stuck-txs --release && \
     cp target/release/validity /build/validity-proposer && \
     cp target/release/clear-stuck-txs /build/clear-stuck-txs
