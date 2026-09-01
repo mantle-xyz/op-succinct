@@ -46,6 +46,19 @@ RUN curl -L https://sp1.succinct.xyz | bash && \
 # dependency with a higher MSRV — unrelated to which --bin is requested.
 COPY --from=planner /build/rust-toolchain.toml rust-toolchain.toml
 COPY --from=planner /build/recipe.json recipe.json
+
+# Materialize the skeleton (real Cargo.toml/Cargo.lock, dummy source) without
+# building, so downloading and compiling become two separately cacheable
+# layers instead of one. If only build flags change later, the fetch layer
+# above can still hit even when the compile layer doesn't.
+RUN cargo chef cook --recipe-path recipe.json --no-build
+
+# Download dependency sources as their own layer, keyed only on Cargo.lock.
+RUN --mount=type=ssh \
+    cargo fetch --locked
+
+# Actually compile. Re-running cook regenerates the same deterministic
+# skeleton from recipe.json; cargo finds everything already fetched above.
 RUN --mount=type=ssh \
     cargo chef cook --release --bin clear-stuck-txs --recipe-path recipe.json
 
