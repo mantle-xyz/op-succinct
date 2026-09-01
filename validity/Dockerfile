@@ -37,6 +37,14 @@ RUN curl -L https://sp1.succinct.xyz | bash && \
 
 # Pre-cook only clear-stuck-txs's dependency graph, keyed on the recipe
 # (Cargo.toml/Cargo.lock) rather than the full source tree.
+#
+# rust-toolchain.toml pins a nightly channel (see that file for why — several
+# deps require rustc >= 1.94, hence FROM rust:1.85 alone isn't actually what
+# compiles anything real: rustup auto-switches based on this file). cook's
+# reconstructed skeleton dir doesn't otherwise contain it, so without this
+# COPY, cargo falls back to the image's baked-in 1.85 and errors out on any
+# dependency with a higher MSRV — unrelated to which --bin is requested.
+COPY --from=planner /build/rust-toolchain.toml rust-toolchain.toml
 COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=ssh \
     cargo chef cook --release --bin clear-stuck-txs --recipe-path recipe.json
