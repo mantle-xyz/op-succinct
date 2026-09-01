@@ -54,9 +54,13 @@ COPY . .
 
 # Build the server. Unchanged from baseline other than clear-stuck-txs's
 # deps already being compiled by the cook step above.
+#
+# Deliberately NOT using --mount=type=cache here (unlike the original
+# baseline): a cache mount at /build/target would shadow the real,
+# already-compiled target/ directory that cook just wrote directly into
+# the image filesystem, throwing away everything cook just cached and
+# defeating the whole point of this change.
 RUN --mount=type=ssh \
-    --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/build/target \
     cargo build --bin validity --bin clear-stuck-txs --release && \
     cp target/release/validity /build/validity-proposer && \
     cp target/release/clear-stuck-txs /build/clear-stuck-txs
