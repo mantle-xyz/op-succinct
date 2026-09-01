@@ -1,5 +1,18 @@
+# Step 1 of incremental caching work: only clear-stuck-txs (the smaller
+# scripts/utils package) is pre-cooked via cargo-chef here. validity's own
+# build is untouched from the known-good baseline. This isolates whether
+# cargo-chef works at all for *some* package in this workspace before
+# extending it to validity, which has previously broken cargo-chef's
+# dependency resolution (unrelated to this step, left alone for now).
+FROM lukemathwalker/cargo-chef:latest-rust-1.85 AS chef
+WORKDIR /build
+
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --bin clear-stuck-txs --recipe-path recipe.json
+
 # Build stage
-FROM rust:1.85 AS builder
+FROM chef AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -17,18 +30,22 @@ RUN curl -LO https://go.dev/dl/go1.24.0.linux-amd64.tar.gz && \
     rm go1.24.0.linux-amd64.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-
-WORKDIR /build
-
 # Install SP1
 RUN curl -L https://sp1.succinct.xyz | bash && \
     ~/.sp1/bin/sp1up -v 6.4.0 && \
     ~/.sp1/bin/cargo-prove prove --version
 
+# Pre-cook only clear-stuck-txs's dependency graph, keyed on the recipe
+# (Cargo.toml/Cargo.lock) rather than the full source tree.
+COPY --from=planner /build/recipe.json recipe.json
+RUN --mount=type=ssh \
+    cargo chef cook --release --bin clear-stuck-txs --recipe-path recipe.json
+
 # Copy only what's needed for the build
 COPY . .
 
-# Build the server
+# Build the server. Unchanged from baseline other than clear-stuck-txs's
+# deps already being compiled by the cook step above.
 RUN --mount=type=ssh \
     --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/build/target \
