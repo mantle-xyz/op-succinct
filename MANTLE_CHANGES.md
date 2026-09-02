@@ -21,6 +21,39 @@ synchronizing future upstream changes.
 | SP1 | `=6.4.0` + sp1-cluster tag `v2.7.2` |
 | Contracts baseline | `mantle-xyz/op-succinct` tag `v1.1.7-2` (a.k.a. "v117"); ported into `contracts/` |
 
+### 1.0 Release versioning
+
+Releases are numbered on **Mantle's own version line**, starting at `mantle-v1.6.0`. This replaces
+the older `v<upstream>-<network>-mantle-<hardfork>.<n>` scheme (e.g.
+`v3.8.1-mainnet-mantle-arsia.2`), which led with the upstream version.
+
+| Stage | Tag | Notes |
+|---|---|---|
+| TESTNET deploy | `mantle-vX.Y.Z-rc.N` | Annotated tag only, no GitHub Release. Iterate `rc.N` if testnet turns up changes. |
+| MAINNET deploy | `mantle-vX.Y.Z` | Annotated tag **plus** a GitHub Release carrying the release notes. |
+
+`-rc.N` is a semver pre-release, so it sorts *below* the final version and tooling reads it as
+such. Note the same build serves both networks — the L1 registry dispatches on `chain_id` at
+runtime — so a release candidate that passes on testnet is promoted by tagging the *same commit*
+as the final version, not by rebuilding.
+
+**Where the upstream version lives.** Because the tag no longer carries it, three places do, with
+deliberately different jobs:
+
+| Place | Holds | Why there |
+|---|---|---|
+| `Cargo.toml` `[workspace.package] version` | The **upstream** version (`3.12.0`) | It arrives with the upstream merge and updates itself. **Do not** change it to the Mantle version: that would add a conflict to every sync and remove the one field that tracks upstream for free. |
+| The table below | Mantle version ↔ upstream baseline | The authoritative mapping; survives tag renames and is greppable. |
+| Tag annotation | Full context of one release | Makes a single tag self-explanatory without cross-referencing. |
+
+#### Version map
+
+| Mantle version | Upstream baseline | mantle-v2 (kona) | revm | SP1 | Notes |
+|---|---|---|---|---|---|
+| `mantle-v1.6.0-rc.1` | `v3.12.0` @ `94ce6393` | `v1.6.1-rc0` | `v107-mantle-arsia.1` | `6.4.0` | First release on the Mantle version line. Sync v3.8.1 → v3.12.0, proposer resilience fixes, L1 gas policy. Both vkeys changed — see §3.11.1. |
+| `v3.8.1-{testnet,mainnet}-mantle-arsia.2` | `v3.8.1` @ `1e8e32e0` | `v1.6.0` | `revm-ghsa…` @ `99707e9f` | `6.1.0` | Old naming scheme. Proposer hardening (PR #46). |
+| `v3.8.1-{testnet,mainnet}-mantle-arsia.1` | `v3.8.1` @ `1e8e32e0` | `v1.6.0` | `revm-ghsa…` @ `99707e9f` | `6.1.0` | Old naming scheme. v3.8.1 baseline (PR #43). Does **not** contain the #923 checkpoint fix. |
+
 ### Migration status
 
 | Phase | Scope | Status |
