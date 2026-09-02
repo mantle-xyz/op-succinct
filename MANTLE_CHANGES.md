@@ -27,25 +27,13 @@ Releases are numbered on **Mantle's own version line**, starting at `mantle-v1.6
 the older `v<upstream>-<network>-mantle-<hardfork>.<n>` scheme (e.g.
 `v3.8.1-mainnet-mantle-arsia.2`), which led with the upstream version.
 
-**One version, one tag, one release — deployed to testnet first, then mainnet.** There is no
-separate testnet tag and no release candidate stage:
+**Releases are cut from `main`, and both networks run the same release.** Testnet and mainnet are
+not separate builds: the L1 registry is chain-aware and dispatches on `chain_id` at runtime, so
+the two differ in configuration, not in the artifact. A release is deployed to testnet first and
+then to mainnet without re-tagging or rebuilding.
 
-| Step | Action |
-|---|---|
-| 1 | Tag `mantle-vX.Y.Z` (annotated) on the release commit and publish a GitHub Release with the notes |
-| 2 | Deploy that release to **testnet**; soak it |
-| 3 | Deploy the **same** release to **mainnet** — no re-tag, no rebuild |
-
-This works because a single build serves both networks: the L1 registry is chain-aware and
-dispatches on `chain_id` at runtime, so testnet and mainnet differ in configuration, not in the
-artifact. Under the previous `v<upstream>-<network>-mantle-<hardfork>.<n>` scheme the two networks
-got sibling tags whose annotations had to state they were the same code
-(`v3.8.1-{testnet,mainnet}-mantle-arsia.2`); a single tag removes that duplication and the chance
-of the two drifting apart.
-
-**If testnet turns something up, fix it and release the next patch version** (`mantle-vX.Y.Z+1`).
-Do not retag or amend a published release: the version that ran on testnet must stay
-identifiable, including when it turned out to be broken.
+Tags outside that flow (release candidates and the like) are fine; what must hold is that the
+release both networks run is one tag, cut from `main`.
 
 **Where the upstream version lives.** Because the tag no longer carries it, three places do, with
 deliberately different jobs:
@@ -60,7 +48,7 @@ deliberately different jobs:
 
 | Mantle version | Upstream baseline | mantle-v2 (kona) | revm | SP1 | Notes |
 |---|---|---|---|---|---|
-| `mantle-v1.6.0` | `v3.12.0` @ `94ce6393` | `v1.6.1-rc0` | `v107-mantle-arsia.1` | `6.4.0` | First release on the Mantle version line. Sync v3.8.1 → v3.12.0, proposer resilience fixes, L1 gas policy. Both vkeys changed — see §3.11.1. Deployed to testnet then mainnet from this single tag. |
+| `mantle-v1.6.0` | `v3.12.0` @ `94ce6393` | `v1.6.1-rc0` | `v107-mantle-arsia.1` | `6.4.0` | First release on the Mantle version line. Sync v3.8.1 → v3.12.0, proposer resilience fixes, L1 gas policy. Both vkeys changed — see §3.11.1. |
 | `v3.8.1-{testnet,mainnet}-mantle-arsia.2` | `v3.8.1` @ `1e8e32e0` | `v1.6.0` | `revm-ghsa…` @ `99707e9f` | `6.1.0` | Old naming scheme. Proposer hardening (PR #46). |
 | `v3.8.1-{testnet,mainnet}-mantle-arsia.1` | `v3.8.1` @ `1e8e32e0` | `v1.6.0` | `revm-ghsa…` @ `99707e9f` | `6.1.0` | Old naming scheme. v3.8.1 baseline (PR #43). Does **not** contain the #923 checkpoint fix. |
 
