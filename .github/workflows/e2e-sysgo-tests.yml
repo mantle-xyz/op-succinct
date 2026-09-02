@@ -86,3 +86,6 @@ jobs:
         run: |
           echo "Running long-running tests with mock proving..."
           just test-e2e-sysgo "${{ matrix.target }}"
+
+  # [MANTLE] The upstream AltDA e2e job is dropped: this fork is Validity-Oracle-only
+  # (MANTLE_CHANGES.md §3.1), so there is no `altda` feature to build.

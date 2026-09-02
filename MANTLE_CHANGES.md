@@ -10,14 +10,47 @@ synchronizing future upstream changes.
 
 | Item | Value |
 |---|---|
-| Upstream tracking point | succinctlabs/op-succinct tag `v3.8.1` @ `1e8e32e0` |
-| Mantle branch | `mantle/proposer-hardening` (this repo, `origin` = `mantle-xyz/op-succinct`). Branched from `main` after the v3.8.1 baseline merge (PR #43); the former `mantle/op-succinct-v3.8.1` branch was deleted once merged. |
-| Older Mantle fork (deprecated) | `origin/main` HEAD `664a1bd4` (≈ v3.4.1 era + 68 ad-hoc commits; superseded by this branch) |
-| Rust toolchain | 1.94 (see `rust-toolchain.toml`) |
-| Dependency source: kona / op-alloy / alloy-op-evm | `mantlenetworkio/mantle-v2` rust subtree @ `13b367fc` (on `mantle-elysium`, one commit past the former tip `d2e4ebea`). `13b367fc` adds the Osaka/BPO1/BPO2 L1 blob params to kona's `default_blob_schedule()` — the actual fix for the Sepolia derivation divergence. The intermediate `d2e4ebea` bump (from `29e41dad`) is kept for its `05b2cca3e`/`05079251c` fixes but did NOT resolve the divergence on its own. See §3.1a. |
-| Dependency source: revm family | `mantle-xyz/revm @ mantle-elysium` via `[patch.crates-io]` |
+| Upstream tracking point | succinctlabs/op-succinct tag `v3.12.0` @ `94ce6393` |
+| Mantle branch | `main` (this repo, `origin` = `mantle-xyz/op-succinct`). Sync branches are cut from `main` and merged back by PR; both the `mantle/op-succinct-v3.8.1` and `mantle/proposer-hardening` branches were deleted once merged (PR #43 / #46). |
+| Rust toolchain | nightly-2026-05-15 (rustc 1.97-nightly; see `rust-toolchain.toml`) |
+| Dependency source: kona / op-alloy / alloy-op-evm | `mantle-xyz/mantle-v2` rust subtree @ tag `v1.6.2` (commit `37df2960`). Pinned by **tag**, not rev — 25 entries in `Cargo.toml` use `tag = "v1.6.2"`; bump them together. |
+| Dependency source: revm family | `mantle-xyz/revm` @ tag `v107-mantle-arsia.1` (commit `1ed03aac`) via `[patch.crates-io]`, 16 entries. Resolves to revm 38.0.0 / revm-handler 18.1.0 / **op-revm 19.0.0** (upstream op-succinct is on op-revm 20.0.0). Moves in **lockstep** with the kona tag above. |
 | Dependency source: alloy-evm | **upstream `alloy-rs/evm` v0.34.0 from crates.io — NOT patched.** The former `mantle-xyz/evm @ mantle-v0.34.0` fork only added a dead-code `token_ratio` trait method; mantle-v2/rust dropped it at `d2e4ebea` (commit `75d90fc71`), so the `[patch.crates-io]` redirect was removed here to stay in lockstep. |
+| Dependency source: alloy core/network | crates.io `2.0.4` — deliberately **behind** upstream v3.12.0's `2.0.5`. See §3.11. |
+| Dependency source: alloy-primitives | crates.io `1.5.x` (resolves 1.5.7) — deliberately behind upstream's 1.6.0, which belongs to the kona version lockstep. This is what fixes the `sha3` patch tag; see §3.11. |
+| SP1 | `=6.4.0` + sp1-cluster tag `v2.7.2` |
 | Contracts baseline | `mantle-xyz/op-succinct` tag `v1.1.7-2` (a.k.a. "v117"); ported into `contracts/` |
+
+### 1.0 Release versioning
+
+Releases are numbered on **Mantle's own version line**, starting at `mantle-v1.6.0`. This replaces
+the older `v<upstream>-<network>-mantle-<hardfork>.<n>` scheme (e.g.
+`v3.8.1-mainnet-mantle-arsia.2`), which led with the upstream version.
+
+**Releases are cut from `main`, and both networks run the same release.** Testnet and mainnet are
+not separate builds: the L1 registry is chain-aware and dispatches on `chain_id` at runtime, so
+the two differ in configuration, not in the artifact. A release is deployed to testnet first and
+then to mainnet without re-tagging or rebuilding.
+
+Tags outside that flow (release candidates and the like) are fine; what must hold is that the
+release both networks run is one tag, cut from `main`.
+
+**Where the upstream version lives.** Because the tag no longer carries it, three places do, with
+deliberately different jobs:
+
+| Place | Holds | Why there |
+|---|---|---|
+| `Cargo.toml` `[workspace.package] version` | The **upstream** version (`3.12.0`) | It arrives with the upstream merge and updates itself. **Do not** change it to the Mantle version: that would add a conflict to every sync and remove the one field that tracks upstream for free. |
+| The table below | Mantle version ↔ upstream baseline | The authoritative mapping; survives tag renames and is greppable. |
+| Tag annotation | Full context of one release | Makes a single tag self-explanatory without cross-referencing. |
+
+#### Version map
+
+| Mantle version | Upstream baseline | mantle-v2 (kona) | revm | SP1 | Notes |
+|---|---|---|---|---|---|
+| `mantle-v1.6.0` | `v3.12.0` @ `94ce6393` | `v1.6.2` | `v107-mantle-arsia.1` | `6.4.0` | First release on the Mantle version line. Sync v3.8.1 → v3.12.0, proposer resilience fixes, L1 gas policy. Both vkeys changed — see §3.11.1. |
+| `v3.8.1-{testnet,mainnet}-mantle-arsia.2` | `v3.8.1` @ `1e8e32e0` | `v1.6.0` | `revm-ghsa…` @ `99707e9f` | `6.1.0` | Old naming scheme. Proposer hardening (PR #46). |
+| `v3.8.1-{testnet,mainnet}-mantle-arsia.1` | `v3.8.1` @ `1e8e32e0` | `v1.6.0` | `revm-ghsa…` @ `99707e9f` | `6.1.0` | Old naming scheme. v3.8.1 baseline (PR #43). Does **not** contain the #923 checkpoint fix. |
 
 ### Migration status
 
@@ -30,7 +63,8 @@ synchronizing future upstream changes.
 | Phase 5 ports | SP1 error propagation (1 line) + GCP HSM Mantle env-var compat (60 lines) | ✅ |
 | Phase 5 follow-up | Rust ABI realignment to v117 contracts (`utils/host/src/contract.rs` + proposer) — caught when re-auditing for the PR-to-main merge | ✅ |
 | Phase 5 follow-up | op-node pre-Interop compat — relax `rpc_types::SyncStatus` post-Interop fields to `Option<>` so the host can deserialize prod op-node responses (equivalent of `5efd6ead`) | ✅ |
-| Upstream sync to v4.x | upstream is at v4.3.1; v3.8.1 → v4.x is its own phase | ⏸️ |
+| Upstream sync v3.8.1 → v3.12.0 | 22 upstream commits: takes #923 (checkpoint anchored to `safe`, upstreamed — see §3.10), #951/#952 (`invalidated_at` + range canonicality reconciliation), #924 (KZG `Ok(false)` fix), SP1 6.1.0 → 6.4.0. Drops the new `altda` DA backend. See §3.11. | ✅ |
+| Upstream sync to v4.x | upstream is at v4.3.1; v3.12.0 → v4.x is its own phase | ⏸️ |
 
 ### 1.1 Supported L2 block range — Arsia and later only
 
@@ -54,9 +88,8 @@ Pick `--start` / `--end` ≥ 94355444 (mainnet) for any cost-estimator or proof 
 ### 2.1 mantle-v2/rust supplies the Mantle protocol layer
 
 Every kona-genesis / kona-protocol / kona-derive / kona-executor / kona-host / op-alloy /
-alloy-op-evm dependency in `Cargo.toml` is sourced from `mantlenetworkio/mantle-v2` at a
-pinned `rev = "58c0204c5"`. That commit is `mantle-v2/rust/upgrade-develop-20260511`
-post the kona-client/v1.5.1 sync and the Phase-4 alloy-evm fork wiring. The mantle-v2/rust
+alloy-op-evm dependency in `Cargo.toml` is sourced from `mantle-xyz/mantle-v2` at the
+pinned `tag = "v1.6.2"` (25 entries; commit `37df2960`). The mantle-v2/rust
 side owns:
 
 - Mantle hardforks (ARSIA / JOVIAN / SKADI / LIMB) and their bundles
@@ -82,7 +115,8 @@ revm-precompile, revm-primitives, revm-state, op-revm
 `alloy-rs/evm` v0.34.0. The old `mantle-xyz/evm @ mantle-v0.34.0` fork existed only to add a
 dead-code `token_ratio` method; mantle-v2/rust dropped the fork at `d2e4ebea`, so we dropped
 the patch here too. `alloy-op-evm` and the `op-alloy*` crates are still patched to the
-`mantlenetworkio/mantle-v2 @ d2e4ebea` git source (they live inside that subtree, not crates.io).
+`mantle-xyz/mantle-v2` git source at the tag above (they live inside that subtree, not
+crates.io).
 
 Workspace-level `[patch.crates-io]` only applies when this repo is the workspace root.
 mantle-v2/rust has its own `[patch.crates-io]` with the same entries — those don't
@@ -105,7 +139,8 @@ ABI references, `OPSuccinctDisputeGame*` test files) without any production use 
 ### 2.4 Mantle-xyz/optimism layout in `contracts/lib/optimism`
 
 `.gitmodules` was overwritten in Phase 3 to make `contracts/lib/optimism` point at
-`mantlenetworkio/mantle-v2` (commit `aad7b8a8`) rather than `ethereum-optimism/optimism`.
+the Mantle optimism fork (see `.gitmodules` for the current URL and gitlink) rather than
+`ethereum-optimism/optimism`.
 v117 mixes `@optimism/src/<X>` and `@optimism/contracts/<X>` imports; mantle-v2 fork
 only has a `contracts/` dir. `contracts/foundry.toml` therefore maps both prefixes to
 `contracts/`. **Don't replace the gitlink with upstream optimism without re-checking
@@ -146,8 +181,8 @@ grep -rn "\[MANTLE\]" . --include="*.rs" --include="*.toml" --include="*.sol" \
 
 | File | Change |
 |---|---|
-| `Cargo.toml` | All `kona-*`, `op-alloy*`, `alloy-op-evm*` deps switched from crates.io / official kona repo to `mantlenetworkio/mantle-v2` git at the pinned `rev = "58c0204c5"`. |
-| `Cargo.toml` `[patch.crates-io]` | All 13 revm-family crates redirected to `mantle-xyz/revm @ mantle-elysium`. |
+| `Cargo.toml` | All `kona-*`, `op-alloy*`, `alloy-op-evm*` deps switched from crates.io / the official kona repo to `mantle-xyz/mantle-v2` git at the pinned tag (currently `v1.6.2`; see §1). |
+| `Cargo.toml` `[patch.crates-io]` | All 13 revm-family crates redirected to `mantle-xyz/revm` at the pinned tag (currently `v107-mantle-arsia.1`; see §1). |
 | `Cargo.toml` `[patch.crates-io]` | ~~`alloy-evm` redirected to `mantle-xyz/evm @ mantle-v0.34.0`.~~ **Dropped at the `d2e4ebea` bump** — `alloy-evm` now resolves from crates.io (upstream `alloy-rs/evm` v0.34.0). See §3.1a. |
 | `Cargo.toml` | EigenDA and Celestia DA-backend crates dropped (`utils/eigenda/*`, `programs/range/*/celestia`, `programs/range/*/eigenda`, etc.). Validity-Oracle-only path. |
 
@@ -310,7 +345,56 @@ aggregation SP1 programs. Two Mantle-specific tweaks:
 | File | Change |
 |---|---|
 | `justfile` (`build-range-elfs`) | Drop the `programs/range/celestia` and `programs/range/eigenda` invocations — Phase 2 deleted those crates (Validity-Oracle-only runtime). Only the `ethereum` block remains. |
-| `justfile` (`build-range-elfs` + `build-agg-elf`) | Pass `--ignore-rust-version` to `cargo-prove`. SP1 v6.1.0's docker image ships rustc 1.93.0-dev inside, but our mantle-v2 deps declare `rust-version = "1.94"`. The 1.93 build compiles those crates fine — the 1.94 floor is the dep authors' MSRV declaration, not a hard requirement — so we tell cargo to skip the check. **Remove the flag once SP1 ships a docker image with rustc ≥ 1.94.** |
+| `justfile` (`verify-git-pins`, gating `build-elfs`) | Checks every tag-pinned git dependency in `Cargo.lock` still resolves to the commit recorded there. `Cargo.lock` pins a 40-char SHA and the `tag=` is only a lookup hint, so cargo reuses a cached commit **with no network access** — a force-pushed mutable tag (anything `-rc`, or a re-cut release) therefore builds the OLD code silently while the manifests claim the tag. Unrecoverable for ELFs, since the guest embeds the cargo-git checkout path (URL hash + short commit) and the resulting vkey maps to code nobody can identify later. |
+| `justfile` (`build-range-elfs` + `build-agg-elf`) | Pass `--ignore-rust-version` to `cargo-prove`. SP1's docker image has historically shipped an older rustc than our mantle-v2 deps declare via `rust-version = "1.94"`. That build compiles those crates fine — the floor is the dep authors' MSRV declaration, not a hard requirement — so we tell cargo to skip the check. **Not yet re-tested against the SP1 v6.4.0 image; if its bundled rustc is ≥ 1.94, drop the flag from both recipes.** |
+
+#### 3.7a ELF builds: host architecture and the cargo cache
+
+**Apple Silicon works.** `ghcr.io/succinctlabs/sp1` publishes an amd64-only image (checked for
+both v6.1.0 and v6.4.0 — identical platform lists), so on arm64 hosts the build runs through
+Docker's emulation layer. That costs time, not correctness: the guest target is
+`riscv64im-succinct-zkvm-elf` (cross-compiled — the committed ELFs are 64-bit RISC-V; note
+`cargo-prove` still carries a legacy `CFLAGS_riscv32im_...` env var, which is not the build
+target), and the in-container environment is identical regardless of host — which is precisely
+what `--docker` is for ("reproducible builds"). ELFs have in fact been produced this
+way on an arm64 machine. `.github/workflows/elf.yml` rebuilds on x64 and requires
+`git status --porcelain elf/` to be empty, so CI remains the final arbiter if some host ever
+does diverge.
+
+**Docker caching is on by default** — the named volumes `sp1-cargo-git` /
+`sp1-cargo-registry`. `cargo-prove --no-docker-cache` disables them (cache then lives in the
+container's ephemeral layer and is discarded on exit). This only changes download time, never
+the artifacts: cargo resolves each git dependency by the commit SHA in `Cargo.lock` whether it
+comes from the volume or the network. If the named volumes do not exist, Docker creates them
+empty and the build simply downloads everything — an empty cache has never been an error, and
+the volumes accumulate incrementally across runs (they are writable and persistent, so they also
+grow without bound; deleting them occasionally is healthy).
+
+**The private-repo workaround is no longer needed.** `cargo-prove prove build --docker` mounts
+its cargo caches as the named volumes `sp1-cargo-git` / `sp1-cargo-registry`, forwards no
+credentials (no ssh-agent, no .gitconfig, no token) and the image has no `git` CLI. While the
+revm patch pointed at the private `mantle-xyz/revm-ghsa-5vfr-x84h-hmvf` fork, the container hit
+`failed to authenticate`, and the workaround was to pre-seed the volume from a locally
+authenticated clone:
+
+```bash
+docker run --rm -v sp1-cargo-git:/v -v "$HOME/.cargo/git":/host:ro alpine sh -c 'cp -a /host/db /v/'
+```
+
+All git sources are now anonymously reachable (`mantle-xyz/mantle-v2`, `mantle-xyz/revm`, the
+`sp1-patches/*` forks, `succinctlabs/sp1-cluster`), and the private fork is absent from both
+`Cargo.toml` and `Cargo.lock` — the lockfile matters as much, since that is what the container
+resolves. So `just build-elfs` works with no volume seeding.
+
+Seeding the **registry** volume remains a legitimate speed-up for a cold build; seeding the
+**git** volume is now purely optional. Prefer starting clean when the ELFs are going on chain:
+
+```bash
+docker volume rm sp1-cargo-git sp1-cargo-registry   # or: --no-docker-cache
+```
+
+A warm git cache is exactly what makes a moved tag invisible (cargo never reaches the network for
+a commit it already has), which is why `verify-git-pins` gates `build-elfs`.
 
 ### 3.8 Toolchain pins — `rust-toolchain.toml` + `mise.toml`
 
@@ -396,34 +480,36 @@ here — inverting that `if` stops the proposer permanently and silently, and co
 pure function, not a mock. Anything expressible as a function of its inputs belongs above this
 paragraph. **If this path is reworked, re-check the call sites listed here by hand.**
 
-### 3.10 Upstream backport — succinctlabs/op-succinct#923 (agg checkpoint anchored to `safe`)
+### 3.10 succinctlabs/op-succinct#923 (agg checkpoint anchored to `safe`) — **now upstreamed**
 
-**Marked `[UPSTREAM #923]` in code, not `[MANTLE]`.** These sites are a backport of upstream work,
-so a future sync should *drop our copy* rather than merge it — the opposite of what `[MANTLE]`
-markers mean. Grep `[UPSTREAM #923]` when syncing to v3.10.0 or later and delete each hit, keeping
-upstream's version.
+**Status: resolved by the v3.12.0 sync. No `[UPSTREAM #923]` markers remain in the tree** (that
+grep returning zero hits is the invariant; the v3.12.0 merge took upstream's copy and downgraded
+what we kept to `[MANTLE]`). This section is retained because two pieces of the backport
+*survived the sync as Mantle-owned code*, and because the hazards below recur on any sync that
+lands a PR we had already backported by hand.
 
-Three caveats when doing that.
+What happened to each piece:
 
-**Not every marked test is ours to keep.** `checkpoint_selection_tests` is semantically equivalent to three tests
-upstream #923 already ships (`checkpoint_falls_back_to_safe_when_no_batch_max` and friends; the
-names and literals differ, so grepping for ours upstream finds nothing) — drop ours and take
-upstream's. `test_get_max_l1_head_block_number_for_range*` has no upstream equivalent:
-keep it and point it at upstream's version, since it is the only thing covering a runtime query with
-no compile-time SQL check, and its three distinct `bytea` fixtures are what catch a swapped binding.
+| Piece | Outcome in the v3.12.0 sync |
+|---|---|
+| `select_checkpoint_block_number` | **Dropped ours, took upstream's** — body and signature were verbatim identical, only our doc comment differed. |
+| `checkpoint_plan` / `CheckpointPlan` / `RecheckpointReason::BelowBatchMaxL1Head` | **Kept ours**, marker downgraded to `[MANTLE]`. Behaviour is upstream's, shape is ours. |
+| `mod checkpoint_plan_tests` (6 tests) | **Kept ours**, downgraded to `[MANTLE]`. |
+| `mod checkpoint_selection_tests` (3 tests) | **Dropped ours**, took upstream's three equivalents in `mod tests`. |
+| `get_max_l1_head_block_number_for_range` | **Took upstream's**, including the `invalidated_at IS NULL` clause that #951 added — that column now exists (see §3.11). |
+| `test_get_max_l1_head_block_number_for_range*` | **Kept ours** (no upstream equivalent), repointed at upstream's function, downgraded to `[MANTLE]`. |
 
-**`checkpoint_plan_tests` must be kept, and is easy to delete by mistake.** It carries the
-`[UPSTREAM #923]` marker but has no upstream counterpart: upstream implements the reuse gate as an
-inline `if/else`, which nothing can test, so upstream's coverage of it is zero. Deleting our module
-on a grep-and-drop pass would silently take that coverage to zero too.
-
-**If `get_max_l1_head_block_number_for_range` has been changed by then** (e.g. to distrust a
-partially-NULL batch), it is no longer a byte-for-byte copy and the marker should be downgraded to
-`[MANTLE]` first.
+**The hazard worth remembering: `checkpoint_plan_tests` is easy to delete by mistake.** It carried
+the `[UPSTREAM #923]` marker but has no upstream counterpart — upstream implements the reuse gate
+as an inline `if/else`, which nothing can test, so upstream's coverage of it is zero. A
+grep-and-drop pass over the marker would have silently taken our coverage to zero too. Returning
+the `anchor` from a pure function rather than reading it inline is what makes the behaviour
+testable at all: a mutation pass found that changing it back to `BlockId::latest()` — the entire
+bug #923 fixes — left the whole suite green.
 
 Upstream PR: `succinctlabs/op-succinct#923` by Farhad-Shabani, merged 2026-06-05, released in
 upstream **v3.10.0**. Its own description records the failure as having **"Hit 3× on Mantle"** — it
-was written for our chain and we simply never took it.
+was written for our chain, we backported it by hand, and the v3.12.0 sync then absorbed it.
 
 The proposer checkpointed `BlockId::latest()`. The checkpoint head is pinned **by hash** while the
 aggregation guest's header range is fetched **by number**, so a tip reorg between the two orphans
@@ -432,14 +518,376 @@ one aggregation proof is wasted.
 
 | File | Change |
 |---|---|
-| `validity/src/proposer.rs` | Added `select_checkpoint_block_number(safe, batch_max_l1_head)` (body and signature verbatim from upstream; its doc comment is reworded) and switched the fresh-checkpoint path from `BlockId::latest()` to `BlockId::safe()`, floored at the batch's max `l1Head`. `safe` is reorg-stable and inside the EVM `blockhash` window; the floor guarantees coverage under `L1_BLOCK_TAG=latest`, where a range `l1Head` can exceed `safe`. |
-| `validity/src/proposer.rs` (`checkpoint_plan`) | **Behaviour is upstream's; the shape is ours.** #923 also gates checkpoint *reuse* on the batch's max `l1Head` — a cached checkpoint below it is discarded, because a matching on-chain hash only proves the block was not reorged out between writing the row and the checkpoint transaction executing, not that the guest can reach every range proof's `l1Head` from it. Upstream writes that as an inline `if/else`; we extracted it as a pure function returning `CheckpointPlan::{Reuse, Fresh{anchor, reason}}`. Returning the `anchor` rather than reading it inline is what makes the backport testable at all: a mutation pass found that changing it back to `BlockId::latest()` — the entire bug #923 fixes — left the whole suite green. |
-| `validity/src/db/client.rs` | Added `get_max_l1_head_block_number_for_range` under upstream's name and signature. **The body matches upstream `main`, NOT #923 as merged** — #923 shipped a compile-time `sqlx::query!` macro with an `AS max_l1_head` alias, and upstream later rewrote it as a runtime `sqlx::query_scalar` with `.bind()`; ours follows the rewrite. Two consequences when syncing. (1) Taking #923's version verbatim breaks the build: `query!` needs a `.sqlx` cache entry and `validity/.sqlx/` has none for this query, so `SQLX_OFFLINE` fails immediately — take upstream `main`'s runtime version, or regenerate the cache. (2) `invalidated_at IS NULL` is in upstream `main`'s WHERE but was **not** in #923; it arrived with #951, whose column this baseline lacks — drop that deviation only if #951 is backported. The WHERE clause must also stay in sync with `get_consecutive_complete_range_proofs` so the MAX covers exactly the range proofs the aggregation consumes. |
+| `validity/src/proposer.rs` (`checkpoint_plan`) | **Behaviour is upstream's; the shape is ours — kept through the sync.** #923 gates checkpoint *reuse* on the batch's max `l1Head` — a cached checkpoint below it is discarded, because a matching on-chain hash only proves the block was not reorged out between writing the row and the checkpoint transaction executing, not that the guest can reach every range proof's `l1Head` from it. Upstream writes that as an inline `if/else`; we keep it as a pure function returning `CheckpointPlan::{Reuse, Fresh{anchor, reason}}`. |
+| `validity/src/db/client.rs` | `get_max_l1_head_block_number_for_range` is now upstream's, verbatim. Note it is a **runtime `sqlx::query_scalar`, not the compile-time `sqlx::query!` macro** that #923 originally shipped: the macro form needs a `.sqlx` cache entry, and `validity/.sqlx/` has none for this query, so `SQLX_OFFLINE` would fail immediately. Do not "restore" the macro form on a later sync. Its WHERE clause must stay in sync with `get_consecutive_complete_range_proofs` so the MAX covers exactly the range proofs the aggregation consumes. |
 
-Not backported (tracked, larger): **#951/#952** (`invalidated_at` / `Invalidated` status /
-`reconcile_completed_range_canonicality` cascade) and the CAS state transitions from v3.11.x. Note
-#951's migration is numbered `05_add_request_invalidation.sql` upstream, which **collides with our
-`05_add_requests_indexes.sql`** — renumber it to `06_` when taking it.
+### 3.10a No-bisect failure policy and the observability firewall
+
+Two rules the proposer must keep, both found by reviewing the v3.12.0 sync.
+
+**1. Failures that say nothing about the range must not bisect it.**
+`no_bisect_reason()` in `validity/src/proposer.rs` is the single policy gate; every failure path
+consults it instead of classifying inline. Three classes qualify, and they share one property —
+**no proof was ever produced**, so nothing was learned about the range:
+
+| Class | Predicate | Typical cause |
+|---|---|---|
+| Admission shed | `is_admission_shed_error` | self-hosted prover pool momentarily full |
+| Transient transport | `is_transient_transport_error` (gRPC `UNAVAILABLE`) | gateway down, connection reset |
+| Unsatisfiable precondition | `is_unsatisfiable_precondition_error` (gRPC `FAILED_PRECONDITION`) | **no program registered for our vk_hash** — i.e. the deployed ELF was never registered with the cluster, the predictable failure right after a vkey change |
+
+These reset the row to `Unrequested` and retry the SAME range. Bisecting them is not merely
+useless, it is harmful: each split doubles the request volume aimed at a backend that rejects all
+of it, and the fragmentation is **not undone** once the condition clears, so the range is proved
+as many small pieces forever after.
+
+Note the alternative is not "give up". A `Failed` range is not in the active set
+`add_new_ranges` reads, so it is re-created as a gap next pass regardless — bisecting only
+changes the *shape* of the retry, for the worse.
+
+Both paths that can reach `handle_failed_request` from a classifiable error consult the gate:
+the task-failure path in `handle_ongoing_tasks`, and the cluster-poll path via
+`reset_cluster_request_for_retry`. The remaining two call sites are not classifiable — a task
+panic carries no `tonic::Status`, and `handle_terminal_proof_failure_before_request_details`
+dispatches on SP1 *fulfillment* status rather than a transport error. (For `Unfulfillable`
+specifically, the fix belongs on the cluster side: a backlogged prover must not report a request
+unprovable.)
+
+**2. Observability must never be able to stop the proposer.**
+`log_proposer_metrics` only reads and sets gauges, but it used to propagate with `?` as step 2 of
+the loop. It calls `highest_contiguous_end`, which returns `Err` for a completed range that
+overlaps the contiguous chain or has `end <= start`. Such a row is not self-healing, so a single
+one failed the iteration at step 2 forever — skipping the scheduling gate, delivery, **and**
+`update_chain_lock`, with `run` pinned to its 10s error path. It is now logged and skipped. The
+same bad row is still surfaced by `create_aggregation_proofs`, which is where it actually blocks
+progress.
+
+The upstream helper this replaced (`highest_proven_contiguous_block`) returned `Option` and never
+errored, silently truncating at the overlap — so this strictness is new in v3.12.0. No code path
+creates such rows (`find_gaps` keeps new ranges disjoint, and bisection cannot produce an empty
+range since it requires `end - start > 1`), so a hit means historical bad data or manual
+intervention. Pre-upgrade check:
+
+```sql
+WITH visible AS (
+  SELECT id, start_block, end_block FROM requests
+  WHERE status = 4 AND req_type = 0 AND invalidated_at IS NULL
+    AND range_vkey_commitment = ? AND rollup_config_hash = ?
+    AND l1_chain_id = ? AND l2_chain_id = ?
+    AND start_block >= ?          -- contract latestBlockNumber
+)
+SELECT a.id, b.id FROM visible a JOIN visible b          -- overlap (over-reports:
+  ON a.id < b.id                                          -- the code only errors on the
+ AND a.start_block < b.end_block AND b.start_block < a.end_block;   -- contiguous chain)
+SELECT id, start_block, end_block FROM visible WHERE end_block <= start_block;  -- empty/reversed
+```
+
+### 3.10b Unpollable proof requests must not stall the proposer (mainnet incident)
+
+**Symptom.** After an L1 reorg made a PLONK proof panic on mainnet, the proposer held a
+`proof_request_id` the network had no record of. Every loop it logged
+
+```
+ERROR proposer.run: Error in proposer loop: Timeout after 15s waiting for proof request
+details for request 19902 (start_block=99911546, end_block=99913346)
+```
+
+and made no other progress. The range was never re-requested; recovery meant deleting the row
+by hand.
+
+**Two independent faults.**
+
+1. *The failure aborted the whole iteration.* `handle_proving_requests` contained the
+   asymmetry below — the cluster branch contained errors per request, the network branch did
+   not:
+
+   ```rust
+   if self.proof_requester.cluster {
+       if let Err(e) = self.process_cluster_proof_status(request).await { warn!(...) }
+   } else {
+       self.process_proof_request_status(request).await?;   // <- aborts the iteration
+   }
+   ```
+
+   Because this is step 5 of the loop, everything after it was skipped: the canonicality gate,
+   `add_new_ranges`, proof submission, aggregation, and `update_chain_lock`. `run` then took its
+   10s error path and repeated. Same shape as the `log_proposer_metrics` fault in §3.10a — a
+   step that propagates a **non-self-healing** error stops the proposer permanently.
+
+2. *Nothing ever gave up on the request.* The network path had no equivalent of the cluster
+   path's `consecutive_poll_failures`, so an unanswerable request was polled forever.
+
+**Fix.** The network branch now contains errors per request and tracks consecutive failures in
+`Proposer::network_poll_failures`, reusing the cluster path's `MAX_CONSECUTIVE_POLL_FAILURES`
+threshold. On reaching it the row is reset to `Unrequested`, so the range is proven again from
+scratch — `update_request_to_prove` overwrites `proof_request_id` on resubmission, so the dead id
+does not linger. `poll_failure_action()` isolates the escalation as a pure function, tested for
+both directions (transient failures must not throw away an in-flight proof; persistent ones must
+escalate, monotonically — a non-monotone rule would restore the infinite loop).
+
+**Why `Unrequested` and not `Failed`.** The split gate counts `Failed` rows *for the same block
+range* (`fetch_failed_request_count_by_block_range`), so failing the row here would push an
+otherwise healthy range towards bisection after a few network outages — exactly what the
+no-bisect policy in §3.10a exists to prevent. Nothing is wrong with the range; only the proof
+request became unreachable. For the same reason this does not go through
+`handle_failed_request`.
+
+**Only network failures count.** `process_proof_request_status` also fails on our own database
+(`is_request_invalidated`, `update_prove_duration`, ...) and on local invariants ("Core proofs are
+not supported"). Those must not spend a request's abandon budget: discarding an in-flight proof
+would not fix a local problem, and a *permanent* local error would loop forever re-requesting a
+range that fails identically every time. `network_call_with_timeout` therefore tags its failures
+with `NetworkPollError`, and only those are counted; everything else is logged and retried next
+loop.
+
+**The reset is guarded on the row still being in `Prove`.** A poll can store a finished proof and
+move the row to `Complete`, then fail on a *later* step of the same poll — fetching execution
+statistics used to be such a step. Abandoning on that failure with an unconditional write would
+discard a proof that exists and was paid for. `reset_prove_request_to_unrequested` therefore
+carries `AND status = Prove` and reports whether anything changed; two DB tests pin both
+directions. Fetching execution statistics is also no longer fatal — it is observability, gathered
+after the proof is already stored.
+
+**Why this is bounded rather than merely "all cases handled".** `process_proof_request_status`
+has 16 error exits spanning three origins (prover network, our database, local invariants) and
+they fire at different points in the row's lifecycle — some after the row has already moved to
+`Complete`. Enumerating them and getting each judgement right is not a property anyone can keep
+true as the function changes. So abandoning is gated on three conditions, of which the last is
+structural:
+
+1. the error carries `NetworkPollError` (only `network_call_with_timeout` produces it),
+2. it has recurred `MAX_CONSECUTIVE_POLL_FAILURES` times, and
+3. **the row is still in `Prove` at the moment of the write** (`AND status = Prove`).
+
+Condition 3 means a misjudgement in 1 or 2 cannot corrupt anything: the worst case becomes
+"a healthy in-flight proof is thrown away and re-proven", never "a finished proof is discarded"
+or "the proposer stops". If you add an error exit to that function — especially one after the
+proof is stored — condition 3 is what keeps it safe, so do not replace the guarded update with
+an unconditional one.
+
+Under a total network outage the loop still behaves: every request retries on its own cadence,
+the proposer keeps running, other requests keep being processed, and the chain lock keeps being
+renewed. Before this fix, a single unpollable request stopped all of it.
+
+**Threshold tradeoff.** The cost of being wrong is asymmetric: abandoning too eagerly discards an
+in-flight proof and pays to redo it, while abandoning too late stops the proposer indefinitely.
+With the defaults (`LOOP_INTERVAL` 60s, `NETWORK_CALLS_TIMEOUT` 15s) the proposer tolerates about
+three minutes of continuous polling failure before giving up on a request.
+
+**Not the same bug as #923.** #923 removed the *cause* of that particular panic (checkpoint
+anchored to `latest`) and is present in this branch, in `origin/main`, and in the
+`v3.8.1-mainnet-mantle-arsia.2` tag. The stall above is what the proposer does *after* any proof
+becomes unpollable, whatever the cause — so it is worth carrying independently of the #923
+backport status of whatever release line is deployed.
+
+### 3.10c L1 gas policy and stuck-transaction escalation
+
+**Incident.** 20 `checkpointBlockHash` transactions sat in the mempool and the contract head
+stopped advancing. The head of the queue carried `maxFeePerGas` 0.3228 gwei against a base fee
+that had risen to 1.25 gwei, so it could never be mined, and nonce ordering held the other 19
+behind it — 17 of which were priced perfectly adequately. Full analysis lives outside the repo;
+the essentials:
+
+- `utils/signer/src/lib.rs` had **no gas configuration**, delegating entirely to alloy's
+  automatic estimate of roughly `base_fee * 2 + priority`.
+- base fee rises up to 12.5% per block, so a 2x buffer covers only ~6 blocks. **The thinner the
+  absolute gas price, the faster that buffer is overtaken** — this failed at *low* gas
+  (0.15 → 1.25 gwei), which is the opposite of the intuition that congestion causes stuck
+  transactions.
+- Once sent, nothing revisited a transaction: on timeout the signer returned `Err` and left it in
+  the mempool forever, blocking every later nonce.
+
+**Fix (all inside `send_transaction_request_with_timeout`, so all three signer kinds and every
+call site benefit; the proposer needed no change):**
+
+| Element | Behaviour | Default | Env override |
+|---|---|---|---|
+| Fee floor | `maxFeePerGas` never below this | 3 gwei | `L1_GAS_FEE_FLOOR_GWEI` |
+| Base-fee buffer | `base_fee * N + priority` | 4 (was alloy's 2) | `L1_GAS_BASE_FEE_MULTIPLIER` |
+| Escalation | re-send at the **same nonce**, +25% on both fee fields | up to 3 times | `L1_TX_MAX_BUMPS` |
+
+The floor is what makes the incident impossible: a checkpoint is ~46k gas, so 3 gwei costs about
+0.00014 ETH — negligible against a stalled proposer. The buffer test asserts 4x survives ≥12
+consecutive blocks of maximum base-fee climb.
+
+**Three details that are load-bearing:**
+
+1. **The nonce is pinned before the first send.** Escalation must *replace* the transaction, not
+   queue a new one behind it. `SignerLock` already serialises sends, so nothing else claims the
+   nonce meanwhile.
+2. **Escalation can lose the race.** The transaction being replaced may be mined just as the
+   replacement goes out, and the node then rejects the replacement. That is success, not failure.
+   The invariant is: **every `Err` return is preceded by a receipt lookup over *all* hashes
+   broadcast so far, including the current attempt's.** Each hash is recorded before waiting for
+   confirmation, and the record happens before the checks — an earlier version pushed it after,
+   which left the final attempt's hash unexamined, so a transaction confirming just past its
+   timeout was reported as failed and the caller would send a duplicate checkpoint. When adding a
+   return path here, keep it behind that lookup.
+3. **Caller-supplied fees are respected.** `has_caller_fees` requires *both* fee fields to be set
+   before treating the pricing as the caller's — half-specified would pair a caller value with a
+   computed one. `clear-stuck-txs` depends on this, since it picks fees deliberately to replace
+   specific stuck transactions.
+
+Verified against anvil with block production withheld: the first attempt times out and the signer
+re-sends at the same nonce, `maxFeePerGas 15 -> 18 gwei`, which then confirms.
+
+**Interaction with the chain lock — worth knowing before tuning.** The lock is a lease of
+`LOOP_INTERVAL`, refreshed at the end of each iteration and checked only at startup. Escalation
+makes an iteration much slower: each send waits up to
+`(1 + L1_TX_MAX_BUMPS) * TX_CONFIRMATION_TIMEOUT`, and an iteration can send twice (aggregation
+submission and a checkpoint). With the defaults the slowest iteration is ~540s against a 60s
+lease, so a restart during an escalation can read the lease as expired and start a second
+proposer, which would then contend for nonces.
+
+The imbalance predates escalation (two 60s sends already exceeded a 60s lease) but escalation
+widens it by the bump factor. `Proposer::new` now warns when the gap is wide, naming the numbers
+and the knobs; it does not refuse to start, since the right setting depends on how the deployment
+supervises restarts. Raising `LOOP_INTERVAL` is usually the correct answer.
+
+**Residual risk.** If all attempts time out, the final transaction stays in the mempool and the
+next iteration queues behind it — escalation makes that far less likely (the price ends ~1.95x
+higher) but does not make it impossible. `clear-stuck-txs` remains the backstop.
+
+**Not addressed:** `checkpointBlockHash` is inherently time-limited — it reads `blockhash()`,
+which covers only 256 blocks, so a checkpoint transaction stuck beyond ~51 minutes is guaranteed
+to revert. Escalation makes long stalls unlikely rather than impossible; recognising and
+re-issuing an expired checkpoint is still unimplemented.
+
+### 3.11 Upstream sync v3.8.1 → v3.12.0
+
+22 upstream commits. What we took, what we held, and the three things that are easy to get wrong.
+
+**Held deliberately (the `[MANTLE]` decisions in this sync):**
+
+| Item | Upstream v3.12.0 | Ours | Why |
+|---|---|---|---|
+| alloy core/network family | `2.0.5` | **`2.0.4`** | These are caret requirements, so `2.0.5` lets cargo resolve the family to the newest `2.x` — `2.4.1` at the time of this sync. `alloy-genesis >= 2.4.1` adds a `bogota_time` field to `ChainConfig` that mantle-v2's vendored `kona-registry` v1.6.0 never initializes, and the workspace stops compiling. Upstream escapes this only because its own lockfile pins the family lower. **The alloy family moves when mantle-v2's kona moves, not before.** |
+| `gcloud-sdk` | `0.29` + explicit `tls-webpki-roots` | **`0.27`** | Upstream moved it only to match `alloy-signer-gcp 2.0.5`. Tied to the row above — bump both together or neither. |
+| `kona-*` / `op-alloy-*` / `alloy-op-evm` | `ethereum-optimism/optimism` tag `kona-client/v1.6.0` | `mantle-xyz/mantle-v2` tag `v1.6.0` | Same kona version, different source. This is the largest conflict block of any sync and the resolution is always mechanical "keep ours". |
+| revm family | crates.io `38.0.0` / `34.0.0` | `mantle-xyz/revm` @ tag `v107-mantle-arsia.1` | Carries the Mantle protocol changes. Everything under `utils/client/src/precompiles/` is adapted to *this* revm — including `OpSpecId::ARSIA`/`OSAKA` where upstream has `KARST` — so those files are "keep ours" wholesale. |
+| `alloy-primitives` | resolves `1.6.0` | resolves **`1.5.7`** | 1.6.0 raises its `sha3` requirement from `0.10.8` to `0.11`, and it sits in the same version lockstep as the kona family. Holding it is what keeps the `sha3` patch tag valid — see the trap below. |
+| `metrics-exporter-prometheus` | `0.16.2` | **`0.18`** | Two versions in one binary race over the single global `metrics` recorder and freeze `/metrics`. One-line conflict, silent failure mode — see the note in `Cargo.toml`. |
+| `alloy-chains` / `c-kzg` | `0.2.30` / `2.0.0` | `0.2.33` / `2.1.5` | We are ahead; no reason to regress. |
+| `AggregationOutputs` | 7 fields (adds `proverAddress`) | **6 fields** | A 7th field makes the program commitment 224B while the v117 contract decodes 192B → on-chain `InvalidProof (0x09bde339)`. Upstream did not touch `utils/client/src/types.rs` in this range so it merges clean, but **`scripts/prove/bin/agg.rs` is touched by both sides** — check it every sync. |
+| `altda` DA backend | added (crates, ELF, Dockerfile, CI job, e2e) | **dropped** | Same shape as the EigenDA/Celestia removal in Phase 2: this fork is Validity-Oracle-only (§3.1). Dropped `utils/altda/**`, `programs/range/altda`, `elf/altda-range-elf-embedded`, `validity/Dockerfile.altda`, the `altda` features, the CI job, and the `test-e2e-sysgo-altda` recipe. |
+| run loop order | `create` → `submit` | **`submit` → `create`** | Load-bearing, see §3.9 and the `[MANTLE]` comment in `run_loop_iteration`. Reverting costs a full `LOOP_INTERVAL` per relay rejection. |
+
+**Bumped alongside this sync (our own changes, not upstream's):**
+
+- **kona family `v1.6.0` → `v1.6.2`** (`mantle-xyz/mantle-v2`, 25 entries).
+- **revm family moved off the private GHSA fork.** Was
+  `mantle-xyz/revm-ghsa-5vfr-x84h-hmvf` @ rev `99707e9f` — a stopgap fork opened to carry the
+  GHSA-5vfr-x84h-hmvf fix. Now `mantle-xyz/revm` @ tag `v107-mantle-arsia.1` (16 entries).
+  Besides being the proper home for the fix, the old fork was **private**, which broke
+  `just build-elfs`: the SP1 docker build has no credentials for it.
+
+These two move **in lockstep** — `alloy-op-evm` comes from mantle-v2 while the revm crates come
+from mantle-xyz/revm, and a split leaves two `alloy_evm`/`op-revm` versions in the graph, which
+surfaces as `OpSpecId` / `OpHaltReason` / `OpEvm` type mismatches against the kona executor.
+Verify after any bump:
+
+```bash
+grep -c '^name = "alloy-evm"' Cargo.lock      # want 1
+grep -c '^name = "alloy-op-evm"' Cargo.lock   # want 1
+grep -c '^\[\[patch.unused\]\]' Cargo.lock    # want 0
+```
+
+Note this alone changes both vkeys even with identical source bytes: the guest ELF embeds the
+cargo-git checkout path, which is derived from the dependency URL and commit.
+
+**Taken from upstream:**
+
+- **#951/#952** — `invalidated_at` column, `RequestStatus::Invalidated = 8`, and
+  `reconcile_completed_range_canonicality()`, which recovers from range proofs whose recorded L1
+  head was orphaned. Its gate now wraps our whole scheduling/delivery block: while the legacy
+  `l1_head_block_hash` backfill is running it returns `false`, and acting on unverified range
+  proofs is exactly what it exists to prevent, so `submit_agg_proofs` is gated with the rest.
+  **See the deployment note in §3.11.1.**
+- **#924** — a real security fix. `kzg-rs` returns `Ok(false)` for a well-formed but *invalid*
+  KZG proof; our `verify_kzg_proof` used `.map_err()`, which only handles `Err`, so an invalid
+  proof was silently accepted. Now only `Ok(true)` passes. (GHSA-pq4w-5vv8-gxhr.)
+- **SP1 6.1.0 → 6.4.0** and sp1-cluster `v2.1.5` → `v2.7.2`. **Changes both vkeys.**
+  Note the `sha3` patch tag is *not* part of this bump — see trap 4 below.
+- `highest_contiguous_end()`, which replaces our `highest_proven_contiguous_block()`. Upstream's
+  version is stricter (it errors on overlapping and empty/reversed ranges instead of silently
+  taking the max) and both call sites moved to it, leaving ours dead — so ours and its
+  `contiguous_block_tests` module were removed rather than kept as dead code.
+- `get_max_provable_l2_block_number()` (renamed from `get_finalized_l2_block_number`) and the new
+  `utils/host/src/l1_selection.rs` (`L1_BLOCK_TAG` / `L1_CONFIRMATIONS`).
+- The `forge build` step added to `bindings/build.rs` (#947/#948), which is orthogonal to our
+  `--skip test/**`.
+- `rust-toolchain.toml` → `nightly-2026-05-15`; it is a superset of our 1.94 floor.
+
+**Three traps, all of which bit or nearly bit during this sync:**
+
+1. **The migration numbers collide and git does not say so.** Upstream's
+   `05_add_request_invalidation.sql` and our `05_add_requests_indexes.sql` are different
+   filenames, so git merges both without a conflict, but sqlx indexes by version number and the
+   two cannot coexist. **Upstream's was renamed to `06_`; ours stays at `05`** — deployed
+   databases already recorded `05` = our index migration's checksum, and changing it makes every
+   running instance fail its migration check at startup. `RequestStatus::Invalidated = 8` is
+   appended at the end of the enum, so no existing `status` value shifts.
+2. **`Cargo.lock` must not be resolved from scratch.** Base it on ours and let cargo update
+   incrementally; a free resolution walks the alloy family up to `2.4.1` and breaks the build
+   (see the alloy row above).
+3. **`checkpoint_plan_tests` has no upstream counterpart** — see §3.10.
+4. **The `sha3` patch tag is coupled to `alloy-primitives`, not to SP1.** Its tag name ends in
+   `-sp1-6.0.0`, which makes it look like it should move with the SP1 bump. It should not.
+   `sha3-keccak` routes alloy's `keccak256()` through the sha3 crate, and the patched fork is
+   what makes that an SP1 precompile syscall instead of software keccak — so the tag has to
+   match whatever sha3 version `alloy-primitives` requires:
+
+   | alloy-primitives | requires | correct patch tag |
+   |---|---|---|
+   | 1.5.x (**ours**) | `sha3 "0.10.8"` | `patch-sha3-0.10.8-sp1-6.0.0` |
+   | 1.6.0 (upstream v3.12.0) | `sha3 "0.11"` | `patch-sha3-0.11.0-sp1-6.0.0` |
+
+   sha3 is a 0.x crate, so 0.11 is **not** a semver-compatible substitute for a 0.10.x
+   requirement. Taking upstream's 0.11.0 tag while holding alloy-primitives at 1.5.x makes
+   cargo skip the patch entirely (`warning: patch ... was not used in the crate graph`) and
+   silently fall back to unaccelerated keccak — it still compiles and is still correct, just
+   more expensive to prove. **Upstream is not wrong here; the two settings simply have to
+   agree.** Guard: `grep -c '^\[\[patch.unused\]\]' Cargo.lock` must be `0`. And cargo will
+   not re-resolve sha3 on its own if the locked version still satisfies the requirement —
+   force it with `cargo update -p sha3 --precise <version>`.
+
+#### 3.11.1 Deployment notes for this sync
+
+1. **On-chain vkeys must be updated.** Both vkeys change in this sync (SP1 6.1.0 → 6.4.0, plus
+   the kona/revm retag — the guest embeds the cargo-git checkout path, so a retag alone moves
+   them). Values produced by `just vkeys` from the ELFs committed here:
+
+   | Program | On-chain field | Value |
+   |---|---|---|
+   | Range | `rangeVkeyCommitment` | `0x2a928ed475bd7d8b7a54fac7666c68eb62d36fa15fafa8006b885b3237a7bd21` |
+   | Aggregation | `aggregationVkey` | `0x005ec5d81cbc4a9a70334f16cb0078d55ae20da550819bd0dc9c5ed12913b407` |
+
+   For reference, the range vkey chain is `0x1dc93827…` (what the cluster was rejecting
+   requests for) → `0x327b7c74…` (v1.6.1-rc0 build, never deployed) → the values above. Update the v117 oracle accordingly — the setter is
+   `updateAggregationVkey`, note the casing. The concrete on-chain update procedure is a known
+   gap in this document.
+
+   Re-derive at any time with `just vkeys`; it runs SP1 setup() over the `elf/*` files in the
+   working tree, so rebuild and stage the ELFs first or it reports the old artifacts' vkeys.
+2. **The self-hosted proving cluster must be upgraded in lockstep** to a version compatible with
+   sp1-cluster client `v2.7.2`. This is the only cross-system dependency in this sync.
+3. **Expect a proposer stall on first start.** Every existing `Complete` range proof predates
+   `l1_head_block_hash`, so `reconcile_completed_range_canonicality` backfills them at
+   `RANGE_METADATA_HYDRATION_LIMIT` (100) rows per loop and returns `false` until it finishes —
+   which means the entire scheduling and delivery block is skipped for that whole period.
+   Estimate the backfill time from the row count before deploying, and pick a low-traffic window.
+4. **Rollback hazard:** once any row is written with `status = 8` (`Invalidated`), reverting to
+   pre-v3.12.0 code will panic in `RequestStatus::From<i16>`, which has no arm for 8. Before
+   rolling back, move those rows to another status.
+5. **Register the new ELFs with the proving cluster before starting the proposer.** Both vkeys
+   change in this sync, and an unregistered program makes the cluster reject every request with
+   `FAILED_PRECONDITION: program not registered for vk_hash <...>`. That is now classified
+   no-bisect (§3.10a), so the proposer retries whole ranges and recovers by itself once the
+   programs are registered — but it produces nothing until then.
+6. `validity/Cargo.toml`'s `tonic` pin exists so `is_transient_transport_error` can downcast to
+   the same `tonic::Status` type the pinned sp1-sdk uses. If SP1 6.4.0 pulls a different tonic,
+   re-verify that downcast — a silent mismatch sends transient transport faults back into range
+   bisection (§3.9).
 
 ## 4. Sync workflow
 
@@ -449,7 +897,7 @@ When a new upstream Succinct Labs release lands (e.g. v3.9.0, v4.0.0):
 
 ```bash
 git remote update upstream
-git checkout -b sync-dryrun-v<X.Y.Z> mantle/op-succinct-v3.8.1
+git checkout -b sync-dryrun-v<X.Y.Z> origin/main
 git merge --no-commit --no-ff v<X.Y.Z>
 git diff --name-only --diff-filter=U   # list conflicting files
 grep -l "\[MANTLE\]" $(git diff --name-only --diff-filter=U)  # files with our markers
@@ -459,12 +907,22 @@ git merge --abort
 ### 4.2 Sync run
 
 ```bash
-git checkout -b mantle/op-succinct-v<X.Y.Z> mantle/op-succinct-v3.8.1
+git checkout -b mantle/op-succinct-v<X.Y.Z> origin/main
 git merge v<X.Y.Z>
 # resolve conflicts — `[MANTLE]` comments mark every site we touched
 # `[UPSTREAM #nnn]` marks a BACKPORT: if the sync target already contains that PR,
-# DELETE our copy and keep upstream's rather than merging the two.
+# DELETE our copy and keep upstream's rather than merging the two. Check §3 for the
+# per-site verdict first — not every marked test is ours to drop (see §3.10).
 ```
+
+Two things git will NOT flag for you:
+
+- **`validity/migrations/`** — a new upstream migration can reuse a version number we already
+  took. Different filenames, so the merge is clean, but sqlx indexes by number and deployed
+  databases have already recorded a checksum for ours. Renumber *upstream's* file; never ours.
+- **`Cargo.lock`** — take ours (`git checkout --ours Cargo.lock`) and let cargo update it
+  incrementally. Resolving it from scratch lets caret requirements walk whole dependency
+  families to their newest majors; §3.11 has the case where that broke the build.
 
 Resolve order:
 
@@ -498,8 +956,9 @@ grep -rn "\[MANTLE\]" . --include="*.rs" --include="*.toml" --include="*.sol" \
 
 ```bash
 git push -u origin mantle/op-succinct-v<X.Y.Z>
-# Open a PR against origin/mantle/op-succinct-v3.8.1 (or whatever the prior
-# Mantle branch is), get review, then update §1 baseline in this file and merge.
+# Open a PR against origin/main, get review, then update §1 baseline in this
+# file and merge. (Do not name a release branch the same as its tag — that
+# creates ambiguous refs.)
 ```
 
 ## 5. Cold-build checklist (fresh machine)
@@ -555,7 +1014,7 @@ Subsequent incrementals are seconds.
 | `git submodule update --init` prompts for `Username for 'https://github.com'` | One of the submodule URLs points at a private repo and the machine has no GitHub credentials. Phase 5 removed `mantle-xyz/mantle-cdk` (the only private one) — if you see this on a fresh clone of `mantle/op-succinct-v3.8.1` post-Phase-5, you're on an older commit. `git pull` first. | `git pull` to land Phase 5 cleanup, or set up a GitHub PAT in `~/.netrc` / git credential helper if you intentionally re-added a private submodule |
 | `Error (6275): Source "@safe-contracts/contracts/common/Enum.sol" not found` from `forge bind` | v117 left dangling imports in `contracts/test/helpers/Utils.sol`. Phase 5 dropped the two unused imports; this only resurfaces if someone edits that file and re-adds them. | Drop `Safe` / `Enum` imports from `Utils.sol` (they're never used); see §3.2 row. |
 | `bindings/src/codegen/*.rs` won't compile — errors like `cannot find trait 'Transport' in module 'alloy_contract::private'`, `RawCallBuilder` takes 2 generics not 3, `abi_decode_returns` has 1 parameter not 2 | `forge bind` from forge 1.2.x generates alloy-0.x-flavoured Rust; workspace uses alloy 2.0.4. PATH has a forge older than 1.4. | `mise install forge@1.4.3` (mise.toml already pins 1.4.3 — typically caused by a system Foundry from `~/.foundry/bin` shadowing mise's pin: `which forge` to confirm); then `cargo clean -p op-succinct-bindings && cargo build --workspace` |
-| `just build-elfs` fails inside docker with `error: rustc 1.93.0-dev is not supported by the following packages: alloy-op-evm@0.32.0 requires rustc 1.94 …` | SP1 v6.1.0's docker image bundles rustc 1.93.0-dev, but mantle-v2 deps declare `rust-version = "1.94"` as a policy floor | `justfile` already passes `--ignore-rust-version` to `cargo-prove prove build` (§3.7). If you see this anyway, you're calling `cargo-prove` directly — add the flag, or `git pull` to land the §3.7 justfile fix |
+| `just build-elfs` fails inside docker with `error: rustc 1.93.0-dev is not supported by the following packages: alloy-op-evm@0.32.0 requires rustc 1.94 …` | The SP1 docker image bundles an older rustc than mantle-v2 deps declare as a policy floor | `justfile` already passes `--ignore-rust-version` to `cargo-prove prove build` (§3.7). If you see this anyway, you're calling `cargo-prove` directly — add the flag, or `git pull` to land the §3.7 justfile fix |
 | `just build-elfs` exits with `cd: ../celestia: No such file or directory` | Stale justfile recipe referencing `programs/range/celestia` / `eigenda` paths that Phase 2 deleted | `git pull` to land the §3.7 justfile fix (cleanup committed in the same commit as the `--ignore-rust-version` flag) |
 | `mise: command not found` after running the installer | mise binary lives at `~/.local/bin/mise` but PATH doesn't include it yet | `eval "$(~/.local/bin/mise activate bash)"` for the current shell; the `echo … >> ~/.bashrc` line above seeds future shells |
 | `mise install` finishes instantly with "all tools are installed" but `forge --version` returns the wrong version | Shell didn't pick up mise's PATH shim, so an older `forge` from `~/.foundry/bin/` or system pkg manager is winning | re-source rc files; check `which forge` vs `mise which forge`; `mise exec -- forge --version` to bypass PATH and confirm mise's copy works |
@@ -568,11 +1027,11 @@ the on-chain ELFs (`programs/range/*`, `programs/aggregation/*`).
 
 ```bash
 curl -L https://sp1.succinct.xyz | bash
-sp1up --version v6.1.0      # matches the SP1 version v3.8.1 was tagged against
+sp1up --version v6.4.0      # matches the SP1 version pinned in Cargo.toml
 cargo prove --version
 ```
 
-ELF rebuilds run inside Docker (`cargo prove build --docker --tag v6.1.0`), so the
+ELF rebuilds run inside Docker (`cargo prove build --docker --tag v6.4.0`), so the
 host's nightly doesn't need to match the toolchain inside the Docker image —
 the host just needs `cargo` and the SP1 CLI on PATH.
 
@@ -583,7 +1042,7 @@ the host just needs `cargo` and the SP1 CLI on PATH.
 | Location | Why it churns | Post-sync checks |
 |---|---|---|
 | `Cargo.toml` `[patch.crates-io]` | Every upstream dep bump might add/remove a revm-family crate. | Diff against `mantle-v2/rust/Cargo.toml` `[patch.crates-io]` — keep them in lock-step. |
-| `Cargo.toml` mantle-v2 rev pins | 25 places pin to the same SHA; bump them together. | `grep -c 'rev = "..."' Cargo.toml` should equal 25 (or whatever the current count). |
+| `Cargo.toml` mantle-v2 pins | 25 entries pin the same tag; bump them together. | `grep -c 'tag = "v1.6.2"' Cargo.toml` should equal 25, and `grep -c 'tag = "v107-mantle-arsia.1"'` should equal 16 for the revm family. Both move in lockstep. |
 | `utils/signer/src/lib.rs::from_env` | New auth backends or env-var conventions arrive in alloy-signer-gcp. | Verify the `HSM_API_NAME` branch still compiles + the precedence ordering still puts Mantle compat first. |
 | `bindings/build.rs` `required_contracts` | New contract ABIs land upstream. | Diff vs upstream's list; if a new FP-related ABI appears, drop it (FP is gone). |
 | `validity/src/proposer.rs` | The proposer flow is the most-edited file in this repo. | Look for any spot where upstream replaced our checkpoint-validation logic — `historicBlockHashes` cross-check must stay. |
@@ -593,7 +1052,7 @@ the host just needs `cargo` and the SP1 CLI on PATH.
 
 | Risk | Trigger | Mitigation |
 |---|---|---|
-| **alloy-evm major bump** | Upstream raises alloy-evm to v0.35+ | Coordinate with `mantle-xyz/evm` to catch up before bumping `mantle-v2`; then resync this repo's `[patch.crates-io]`. |
+| **alloy-evm major bump** | Upstream raises alloy-evm to v0.35+ | `alloy-evm` is unpatched (crates.io), but `alloy-op-evm` comes from mantle-v2 and the two must agree — a mismatch surfaces as duplicate `alloy_evm` types. Wait for mantle-v2 to move, then bump its tag here (kona + revm tags in lockstep). |
 | **op-revm v19 → v20+ drift** | mantle-elysium does not track upstream op-revm. New OpSpecId variants surface. | `cargo build` will flag non-exhaustive matches. The KARST treatment in mantle-v2/rust kona genesis sync is the reference pattern (comment out the unsupported arm with `[MANTLE]` rationale). |
 | **mantle-xyz/op-succinct origin/main divergence** | Someone lands new Mantle features directly on `origin/main` instead of this v3.8.1 branch. | Treat this branch as the source of truth going forward; pull-and-port new origin/main commits the way Phase 5 did. Add an entry to §3 for each port. |
 | **Contracts protocol change** | Mantle network upgrade lands new on-chain contracts. | New v117-style port from the canonical Mantle contracts release into `contracts/`. The contracts side is decoupled from the Rust workspace; bump independently. |
@@ -620,6 +1079,6 @@ When you add, modify, or remove a Mantle change:
 |---|---|
 | `mantle-v2/rust/MANTLE_CHANGES.md` | Sister registry for the mantle-v2 Rust subtree (kona / op-alloy / alloy-op-evm). Read it together with §3.1 of this file when bumping deps. |
 | `~/Projects/mantle-rollup-configs/` | Out-of-tree rollup-config JSON store (see §3.6). |
-| `mantle-xyz/evm @ mantle-v0.34.0` | alloy-evm fork pinned via `[patch.crates-io]` (see §2.2). |
+| ~~`mantle-xyz/evm @ mantle-v0.34.0`~~ | **No longer used.** The alloy-evm fork was dropped; alloy-evm resolves from crates.io (see §1 / §2.2). |
 | `mantle-xyz/revm @ mantle-elysium` | revm fork pinned via `[patch.crates-io]` (see §2.2). |
 | `mantle-xyz/op-succinct @ v1.1.7-2` | v117 contract source (see §2.3 / §3.2). |

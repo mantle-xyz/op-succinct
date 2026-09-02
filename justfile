@@ -398,55 +398,150 @@ remove-config config_name env_file=".env":
         --private-key $PRIVATE_KEY \
         --broadcast
 
-# Generate verification key hashes for all DA variants.
+# Generate verification key hashes.
+#
+# [MANTLE] Ethereum DA only — the celestia/eigenda/altda blocks are gone with those crates
+# (Validity-Oracle-only fork, see MANTLE_CHANGES.md §3.1). They also could not have worked here:
+# `--features celestia` no longer exists, and the original recipe swallowed that error via
+# `2>&1` + grep, printing an empty cell instead of failing.
+#
+# These hashes are what go on chain (`rangeVkeyCommitment` / `aggregationVkey`). `config` runs
+# SP1 setup() over the COMMITTED `elf/*` files, so run it after `just build-elfs` and commit the
+# ELFs — otherwise it reports the vkeys of the old artifacts.
 vkeys:
     #!/usr/bin/env bash
-    set -e
+    set -euo pipefail
 
-    echo "Generating verification key hashes..."
+    echo "Generating verification key hashes from the committed ELFs..."
     echo ""
 
-    # Ethereum DA
-    ETH_OUTPUT=$(RUST_LOG=error cargo run --release --bin config 2>&1)
-    ETH_RANGE=$(echo "$ETH_OUTPUT" | grep "Range Verification Key Hash" | awk '{print $NF}')
-    AGG_KEY=$(echo "$ETH_OUTPUT" | grep "Aggregation Verification Key Hash" | awk '{print $NF}')
+    OUTPUT=$(RUST_LOG=error cargo run --release --bin config)
+    RANGE=$(echo "$OUTPUT" | grep "Range Verification Key Hash" | awk '{print $NF}')
+    AGG=$(echo "$OUTPUT" | grep "Aggregation Verification Key Hash" | awk '{print $NF}')
 
-    # Celestia DA
-    CEL_OUTPUT=$(RUST_LOG=error cargo run --release --bin config --features celestia 2>&1)
-    CEL_RANGE=$(echo "$CEL_OUTPUT" | grep "Range Verification Key Hash" | awk '{print $NF}')
-
-    # EigenDA
-    EIGEN_OUTPUT=$(RUST_LOG=error cargo run --release --bin config --features eigenda 2>&1)
-    EIGEN_RANGE=$(echo "$EIGEN_OUTPUT" | grep "Range Verification Key Hash" | awk '{print $NF}')
+    if [ -z "$RANGE" ] || [ -z "$AGG" ]; then
+      echo "ERROR: could not parse vkeys from \`config\` output:" >&2
+      echo "$OUTPUT" >&2
+      exit 1
+    fi
 
     echo "## Verification Key Hashes"
     echo ""
     echo "| Program | Verification Key Hash |"
     echo "|--------|------------------------|"
-    echo "| Ethereum DA Range Verification Key | **$ETH_RANGE** |"
-    echo "| Celestia DA Range Verification Key | **$CEL_RANGE** |"
-    echo "| EigenDA Range Verification Key | **$EIGEN_RANGE** |"
-    echo "| Aggregation Verification Key | **$AGG_KEY** |"
+    echo "| Range Verification Key (rangeVkeyCommitment) | **$RANGE** |"
+    echo "| Aggregation Verification Key (aggregationVkey) | **$AGG** |"
+
+# [MANTLE] Verify every tag-pinned git dependency still resolves to the commit in Cargo.lock.
+#
+# Cargo.lock pins a 40-char commit SHA; the `tag=` is only a hint for finding it. cargo will
+# reuse a commit already present in its git cache WITHOUT any network access, so if a mutable
+# tag (anything `-rc`, or a re-cut release) is force-pushed to a new commit, a build keeps
+# silently using the OLD code — while Cargo.toml and MANTLE_CHANGES.md claim the tag. That is
+# unrecoverable for ELFs: the guest embeds the cargo-git checkout path (URL hash + short
+# commit), so the vkey would correspond to code nobody can identify later.
+#
+# Run this before `build-elfs`, and on any machine where the cargo git cache is warm.
+verify-git-pins:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    tmp=$(mktemp)
+    grep -oE 'git\+https://[^"?]+\?tag=[^#"]+#[0-9a-f]{40}' Cargo.lock | sort -u > "$tmp"
+    count=$(wc -l < "$tmp" | tr -d ' ')
+
+    # A gate that checks nothing is worse than no gate: it reports success. If the pattern stops
+    # matching (a Cargo.lock format change, say), fail loudly instead of silently passing.
+    if [ "$count" -eq 0 ]; then
+      rm -f "$tmp"
+      echo "ERROR: found no tag-pinned git dependencies in Cargo.lock." >&2
+      echo "Either there genuinely are none, or the pattern in this recipe no longer matches" >&2
+      echo "the lockfile format. Check before assuming the former." >&2
+      exit 1
+    fi
+
+    echo "Verifying $count tag-pinned git dependencies against their remotes..."
+    fail=0
+    unreachable=0
+    while IFS= read -r pin; do
+      url="${pin#git+}"; url="${url%%\?tag=*}"
+      rest="${pin#*\?tag=}"; tag="${rest%%#*}"; sha="${rest##*#}"
+
+      # Ask for both the peeled and unpeeled ref in one round trip, and keep the exit status:
+      # a network or auth failure must not look like "tag moved", or the operator may go and
+      # "fix" a lockfile that was correct all along.
+      if ! out=$(git ls-remote "$url" "refs/tags/$tag^{}" "refs/tags/$tag" 2>/dev/null); then
+        printf '  UNREACHABLE %-32s %s (could not query remote)\n' "$tag" "${url##*/}"
+        unreachable=1
+        continue
+      fi
+
+      # Prefer the peeled ref (annotated tags); fall back to the plain one (lightweight tags).
+      remote=$(printf '%s\n' "$out" | awk '$2 ~ /\^\{\}$/ {print $1; exit}')
+      if [ -z "$remote" ]; then
+        remote=$(printf '%s\n' "$out" | awk 'NR==1{print $1}')
+      fi
+
+      if [ -z "$remote" ]; then
+        printf '  MISSING   %-34s %s (tag not found on remote)\n' "$tag" "${url##*/}"
+        fail=1
+      elif [ "$remote" = "$sha" ]; then
+        printf '  OK        %-34s %s\n' "$tag" "${url##*/}"
+      else
+        printf '  MISMATCH  %-34s %s\n            lock:   %s\n            remote: %s\n' \
+          "$tag" "${url##*/}" "$sha" "$remote"
+        fail=1
+      fi
+    done < "$tmp"
+    rm -f "$tmp"
+
+    if [ "$fail" -ne 0 ]; then
+      echo
+      echo "ERROR: a pinned tag no longer points at the commit Cargo.lock records." >&2
+      echo "Building now would reuse the OLD commit from the cargo git cache without" >&2
+      echo "touching the network, producing ELFs whose vkey does not match the tag." >&2
+      echo "Re-resolve deliberately (cargo update -p <crate>) and re-commit Cargo.lock." >&2
+      exit 1
+    fi
+    if [ "$unreachable" -ne 0 ]; then
+      echo
+      echo "ERROR: could not reach every remote, so the pins are unverified." >&2
+      echo "This is a connectivity problem, NOT a reason to touch Cargo.lock." >&2
+      exit 1
+    fi
+    echo "All pins agree with their remotes."
 
 # Build all ELF files.
-build-elfs: build-range-elfs build-agg-elf
+#
+# [MANTLE] Gated on `verify-git-pins` — see the rationale there.
+#
+# Docker caching is ON by default (the named volumes `sp1-cargo-git` /
+# `sp1-cargo-registry`); `cargo-prove --no-docker-cache` turns it off. Caching only affects
+# download time, not the artifacts: cargo resolves by the commit SHA in Cargo.lock either way.
+#
+# `ghcr.io/succinctlabs/sp1` ships an amd64-only image, so on Apple Silicon this runs through
+# Docker's emulation layer — slower, but the output is the same: the guest target is
+# riscv64im-succinct-zkvm-elf (cross-compiled; the committed ELFs are 64-bit RISC-V) and the
+# in-container environment is identical, which is what `--docker` exists for. `.github/workflows/elf.yml` rebuilds on x64 and requires `git status --porcelain
+# elf/` to be empty, so CI is the final arbiter if a host ever does diverge.
+build-elfs: verify-git-pins build-range-elfs build-agg-elf
 
 # Build ELF files for range programs.
 #
-# [MANTLE] Two adjustments vs. upstream Succinct Labs v3.8.1's justfile:
-#   1. Drop the `celestia` and `eigenda` blocks — Phase 2 deleted those crates
-#      (Validity-Oracle-only runtime). Only `ethereum` remains.
-#   2. Pass `--ignore-rust-version` to `cargo-prove`. SP1 v6.1.0 ships rustc
-#      1.93.0-dev inside its docker image; our mantle-v2 deps (kona-genesis,
-#      alloy-op-evm, etc.) declare `rust-version = "1.94"`. The 1.93 build
-#      compiles those crates fine — the 1.94 floor is a policy declaration,
-#      not a hard requirement — so we tell cargo to skip the MSRV check.
-#      Remove the flag once SP1 ships a docker image with rustc >= 1.94.
+# [MANTLE] Two adjustments vs. upstream Succinct Labs' justfile:
+#   1. Drop the `celestia`, `eigenda` and `altda` blocks — Phase 2 deleted those
+#      crates (Validity-Oracle-only runtime). Only `ethereum` remains.
+#   2. Pass `--ignore-rust-version` to `cargo-prove`. SP1's docker image has
+#      historically shipped an older rustc than our mantle-v2 deps (kona-genesis,
+#      alloy-op-evm, etc.) declare via `rust-version = "1.94"`. That build
+#      compiles those crates fine — the floor is a policy declaration, not a hard
+#      requirement — so we tell cargo to skip the MSRV check.
+#      TODO(v3.12.0 sync): re-test whether the SP1 v6.4.0 image still needs this.
+#      If its bundled rustc is >= 1.94, drop the flag from both recipes below.
 build-range-elfs:
     #!/usr/bin/env bash
 
     cd programs/range/ethereum
-    ~/.sp1/bin/cargo-prove prove build --elf-name range-elf-embedded --docker --tag v6.1.0 --output-directory ../../../elf --ignore-rust-version
+    ~/.sp1/bin/cargo-prove prove build --elf-name range-elf-embedded --docker --tag v6.4.0 --output-directory ../../../elf --ignore-rust-version
 
 # Build ELF file for aggregation program.
 #
@@ -456,7 +551,7 @@ build-agg-elf:
     #!/usr/bin/env bash
 
     cd programs/aggregation
-    ~/.sp1/bin/cargo-prove prove build --elf-name aggregation-elf --docker --tag v6.1.0 --output-directory ../../elf --ignore-rust-version
+    ~/.sp1/bin/cargo-prove prove build --elf-name aggregation-elf --docker --tag v6.4.0 --output-directory ../../elf --ignore-rust-version
 
 # Run all unit tests except for the specified ones.
 tests:

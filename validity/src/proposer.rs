@@ -1,4 +1,6 @@
-use std::{collections::HashMap, ops::Range, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, future::Future, ops::Range, str::FromStr, sync::Arc, time::Duration,
+};
 
 use alloy_eips::BlockId;
 use alloy_primitives::{hex, Address, Bytes, B256, U256};
@@ -8,7 +10,10 @@ use alloy_transport::{RpcError, TransportErrorKind};
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use op_succinct_client_utils::{boot::hash_rollup_config, types::u32_to_u8};
+use op_succinct_client_utils::{
+    boot::{hash_rollup_config, BootInfoStruct},
+    types::u32_to_u8,
+};
 use op_succinct_elfs::AGGREGATION_ELF;
 use op_succinct_host_utils::{
     fetcher::OPSuccinctDataFetcher,
@@ -25,7 +30,10 @@ use op_succinct_proof_utils::{
 use op_succinct_signer_utils::SignerLock;
 use sp1_sdk::{
     network::{
-        proto::types::{ExecutionStatus, FulfillmentStatus},
+        proto::{
+            types::{ExecutionStatus, FulfillmentStatus},
+            GetProofRequestStatusResponse,
+        },
         NetworkMode,
     },
     Elf, HashableKey, NetworkProver, Prover, ProverClient, ProvingKey, SP1Proof,
@@ -49,29 +57,84 @@ use crate::{
 /// Number of consecutive poll failures before a cluster proof is marked as permanently failed.
 const MAX_CONSECUTIVE_POLL_FAILURES: u32 = 3;
 
-/// Choose the L1 block to checkpoint for an aggregation.
+/// [MANTLE] Marker for a failure that came from talking to the prover network, as opposed to one
+/// raised by our own database or by local logic.
+///
+/// Only these count towards abandoning a proof request. `process_proof_request_status` can fail
+/// for reasons that say nothing about the proof — `is_request_invalidated` or
+/// `update_prove_duration` hitting a blip in our own database, or a local invariant like "Core
+/// proofs are not supported". Counting those would discard an in-flight proof over a local
+/// problem, and in the case of a permanent local error would loop forever re-requesting a range
+/// that fails the same way each time.
+#[derive(Debug)]
+struct NetworkPollError(String);
+
+impl std::fmt::Display for NetworkPollError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NetworkPollError {}
+
+/// Whether this failure came from the prover network (see [`NetworkPollError`]).
+fn is_network_poll_failure(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| cause.is::<NetworkPollError>())
+}
+
+/// What to do with a `Prove` request whose status poll just failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PollFailureAction {
+    /// Leave the request in `Prove` and poll it again next loop.
+    Retry,
+    /// Give up on this proof request and let the range be requested again from scratch.
+    Abandon,
+}
+
+/// Decide whether a `Prove` request that keeps failing its status poll should be abandoned.
+///
+/// Split out as a pure function so the escalation is assertable without a network or a database
+/// — the same reason [`rejection_action`] and [`checkpoint_plan`] are shaped this way.
+///
+/// This exists because a request can become permanently unpollable. Observed on mainnet: an L1
+/// reorg made a PLONK proof panic, and afterwards the proposer held a `proof_request_id` that the
+/// network had no record of. Every loop asked for its details, timed out, and — because the
+/// non-cluster branch propagated with `?` — failed the whole iteration before anything else could
+/// run. The range was never re-requested, and recovery meant deleting the row by hand.
+///
+/// The threshold is shared with the cluster path so both backends give up after the same number
+/// of consecutive failures.
+///
+/// The cost of being wrong is asymmetric, which is what sets the threshold. Abandoning too eagerly
+/// throws away an in-flight proof and pays to redo it; abandoning too late — or never — stops the
+/// proposer indefinitely. With the defaults (`LOOP_INTERVAL` 60s, `NETWORK_CALLS_TIMEOUT` 15s)
+/// this tolerates roughly three minutes of continuous polling failure before giving up.
+fn poll_failure_action(consecutive_failures: u32) -> PollFailureAction {
+    if consecutive_failures >= MAX_CONSECUTIVE_POLL_FAILURES {
+        PollFailureAction::Abandon
+    } else {
+        PollFailureAction::Retry
+    }
+}
+
+/// Maximum number of legacy completed ranges hydrated in one proposer loop.
+const RANGE_METADATA_HYDRATION_LIMIT: i64 = 100;
+
+/// Select the L1 block number to checkpoint for an aggregation proof.
 ///
 /// The aggregation guest walks L1 headers back from the checkpointed head *by hash* and requires
 /// every range proof's `l1Head` to lie on that chain, so the checkpoint must be at or after
-/// `batch_max_l1_head` (the largest `l1Head` among the aggregated range proofs). A reorg-stable
-/// `safe` head is floored at that value:
-///
-/// - `safe` keeps the checkpoint inside the EVM `blockhash` window and immune to tip reorgs. Under
-///   `L1_BLOCK_TAG=finalized|safe`, range `l1Head`s are <= safe, so `safe` is the selected block.
+/// `batch_max_l1_head` (the largest `l1Head` among the aggregated range proofs). We floor a
+/// reorg-stable `safe` head at that value:
+/// - `safe` keeps the checkpoint inside the EVM `blockhash` window (256 blocks) and immune to tip
+///   reorgs. Under `L1_BLOCK_TAG=finalized|safe`, range `l1Head`s are <= safe, so this is the
+///   selected block.
 /// - The floor guarantees coverage under `L1_BLOCK_TAG=latest`, where a range `l1Head` can be newer
-///   than `safe`. Note the floor is by *number* while the guest enforces by *hash*, so the two
-///   agree only on the canonical chain: a boot `l1Head` above `safe` that is later orphaned stays
-///   reorg-exposed — inherent to `latest`, not resolved here.
+///   than `safe`. Note the floor is by *number*; the guest enforces by *hash*, so the two agree
+///   only on the canonical chain. A boot `l1Head` above `safe` that is later orphaned stays
+///   reorg-exposed — an inherent property of `latest`, not resolved here.
 ///
 /// `None` (no completed range proof has a recorded `l1_head_block_number`) falls back to `safe`.
-///
-/// [UPSTREAM #923] Body and signature backported verbatim from succinctlabs/op-succinct#923
-/// (upstream v3.10.0); this doc comment is reworded and drops upstream's `(256 blocks)`. Upstream
-/// replaced `BlockId::latest()` here. That PR's own description records the failure it fixes as
-/// having "Hit 3× on Mantle": the checkpoint head is pinned by hash while the guest's header range
-/// is fetched by number, so a tip reorg between the two orphans the checkpoint and the guest
-/// rejects the input, wasting one aggregation proof. Kept under the upstream name so a future sync
-/// can drop this copy cleanly.
 fn select_checkpoint_block_number(safe_block_number: u64, batch_max_l1_head: Option<u64>) -> u64 {
     batch_max_l1_head.map_or(safe_block_number, |max| max.max(safe_block_number))
 }
@@ -127,7 +190,7 @@ enum RecheckpointReason {
     /// The contract checkpointed a different hash at that number than the database recorded — the
     /// block was reorged out between writing the row and the checkpoint transaction executing.
     HashMismatch,
-    /// [UPSTREAM #923] Valid on chain, but below the batch's max `l1Head`.
+    /// [MANTLE] Valid on chain, but below the batch's max `l1Head`.
     BelowBatchMaxL1Head,
 }
 
@@ -144,12 +207,12 @@ enum CheckpointPlan {
 ///
 /// Split out of `create_aggregation_proofs` so every rejection reason — and, critically, the
 /// anchor a fresh checkpoint is taken from — is assertable. A mutation pass found that reverting
-/// [UPSTREAM #923] by changing that anchor back to `BlockId::latest()` left the whole suite green.
+/// the `safe` anchor by changing it back to `BlockId::latest()` left the whole suite green.
 fn checkpoint_plan(
     cached: Option<CachedCheckpoint>,
     batch_max_l1_head: Option<u64>,
 ) -> CheckpointPlan {
-    // [UPSTREAM #923] `safe` rather than `latest`: the header is read by number, so a tip reorg
+    // [MANTLE] `safe` rather than `latest`: the header is read by number, so a tip reorg
     // between reading it and the checkpoint transaction executing orphans the checkpoint and wastes
     // one aggregation proof. Observed 3x on Mantle.
     let fresh = |reason| CheckpointPlan::Fresh { anchor: BlockId::safe(), reason };
@@ -314,6 +377,175 @@ fn is_transient_transport_error(e: &anyhow::Error) -> bool {
         rendered.contains("error trying to connect")
 }
 
+/// Whether the prover backend rejected the request because its own state does not admit it,
+/// rather than because anything is wrong with the range.
+///
+/// The case this exists for is `FailedPrecondition: program not registered for vk_hash <...>`:
+/// the cluster has no program registered for the vkey this build computes, so it rejects every
+/// request on arrival. That happens whenever the deployed ELF and the cluster's registered
+/// programs drift apart — most predictably right after a dependency bump changes the vkey.
+///
+/// Such a failure must NOT bisect the range. Bisection exists for ranges that fail
+/// *deterministically because they are too big*; here the range is fine and splitting is
+/// actively harmful:
+/// - every split doubles the request volume aimed at a cluster that rejects all of it, and
+/// - the fragmentation is not undone once the program is registered, so the range is proved as many
+///   small pieces forever after, inflating range-proof count and aggregation cost.
+///
+/// Note the alternative is not "give up": a `Failed` range is not in the active set
+/// `add_new_ranges` reads, so it is re-created as a gap on the next pass either way. Bisecting
+/// only changes the *shape* of that retry, for the worse. Resetting to `Unrequested` retries
+/// the same range and recovers on its own once the program is registered.
+///
+/// Keyed on the typed gRPC code, with a string fallback for when the error is not a
+/// downcastable `Status` of our tonic version — same rationale as
+/// [`is_transient_transport_error`].
+///
+/// Why the whole code is treated as no-bisect rather than matching the "program not registered"
+/// text: gRPC defines `FAILED_PRECONDITION` as "the operation was rejected because the system is
+/// not in a state required for the operation's execution [...] the client should not retry until
+/// the system state has been explicitly fixed" — i.e. it describes the *system*, not the request.
+/// A problem with the request itself is `INVALID_ARGUMENT` by the same spec. So the code alone is
+/// the right signal, and it is robust to the cluster rewording its message.
+///
+/// **Failure mode to watch:** if the proving cluster ever uses `FAILED_PRECONDITION` to mean
+/// "this range cannot be proven" (spec-violating, but possible), this predicate would retry such a
+/// range forever instead of bisecting it. The symptom is a range retried indefinitely with a
+/// `reason` mentioning an unsatisfiable precondition while nothing about the cluster is actually
+/// wrong. The fix then is to narrow this to also require the message to name an unregistered
+/// program.
+fn is_unsatisfiable_precondition_error(e: &anyhow::Error) -> bool {
+    if let Some(status) = e.downcast_ref::<tonic::Status>() {
+        return status.code() == tonic::Code::FailedPrecondition;
+    }
+    format!("{e:?}").contains("status: FailedPrecondition")
+}
+
+/// Why this failure must not bisect the range, or `None` if bisection is the right response.
+///
+/// Single source of truth for the no-bisect policy, so every failure path applies the same
+/// classification and adding a class means editing one place. Callers reset the request to
+/// `Unrequested` and retry the SAME range instead of routing it through
+/// `handle_failed_request`, which is what feeds bisection.
+///
+/// The shared property of every class here is that **no proof was ever produced**, so nothing
+/// was learned about the range: splitting it cannot help, and the split is not undone once the
+/// underlying condition clears — the range stays fragmented, permanently inflating range-proof
+/// count and aggregation cost.
+fn no_bisect_reason(e: &anyhow::Error) -> Option<&'static str> {
+    if is_admission_shed_error(e) {
+        Some("self-hosted admission shed (prover pool full)")
+    } else if is_transient_transport_error(e) {
+        Some("transient transport failure (backend unreachable)")
+    } else if is_unsatisfiable_precondition_error(e) {
+        Some(
+            "unsatisfiable precondition on the prover backend (e.g. no program registered for \
+             this vk_hash) — ACTION: register the current range/aggregation ELF with the proving \
+             cluster",
+        )
+    } else {
+        None
+    }
+}
+
+/// Return the end of the completed range chain beginning at `expected_start`.
+fn highest_contiguous_end(
+    expected_start: i64,
+    completed_ranges: &[(i64, i64)],
+) -> Result<Option<i64>> {
+    let mut current_end = expected_start;
+    let mut found = false;
+
+    for &(start, end) in completed_ranges {
+        if start > current_end {
+            break;
+        }
+        if start < current_end {
+            return Err(anyhow!(
+                "Completed range ({start}, {end}] overlaps the contiguous chain ending at {current_end}"
+            ));
+        }
+        if end <= start {
+            return Err(anyhow!("Completed range ({start}, {end}] is empty or reversed"));
+        }
+
+        current_end = end;
+        found = true;
+    }
+
+    Ok(found.then_some(current_end))
+}
+
+async fn handle_terminal_proof_failure_before_request_details<F, FailureFut, DetailsFut, T>(
+    request: OPSuccinctRequest,
+    status: &GetProofRequestStatusResponse,
+    current_time: u64,
+    handle_failed: F,
+    request_details: DetailsFut,
+) -> Result<Option<T>>
+where
+    F: FnOnce(OPSuccinctRequest, i32) -> FailureFut,
+    FailureFut: Future<Output = Result<()>>,
+    DetailsFut: Future<Output = Result<T>>,
+{
+    if current_time > status.deadline() {
+        if let Err(error) = handle_failed(request.clone(), status.execution_status()).await {
+            ValidityGauge::RetryErrorCount.increment(1.0);
+            return Err(error);
+        }
+
+        ValidityGauge::ProofRequestRetryCount.increment(1.0);
+        ValidityGauge::ProofRequestTimeoutErrorCount.increment(1.0);
+
+        warn!(
+            proof_id = request.id,
+            start_block = request.start_block,
+            end_block = request.end_block,
+            req_type = ?request.req_type,
+            deadline = status.deadline(),
+            current_time,
+            "Proof request timed out"
+        );
+        return Ok(None);
+    }
+
+    if status.fulfillment_status() != FulfillmentStatus::Unfulfillable as i32 {
+        return Ok(Some(request_details.await?));
+    }
+
+    match request.req_type {
+        RequestType::Range => {
+            warn!(
+                proof_id = request.id,
+                start_block = request.start_block,
+                end_block = request.end_block,
+                proof_request_time = ?request.proof_request_time,
+                total_tx_fees = %request.total_tx_fees,
+                total_transactions = request.total_nb_transactions,
+                witnessgen_duration_s = request.witnessgen_duration,
+                total_eth_gas_used = request.total_eth_gas_used,
+                total_l1_fees = %request.total_l1_fees,
+                execution_status = ?status.execution_status(),
+                "Range proof request failed - unfulfillable"
+            );
+        }
+        RequestType::Aggregation => {
+            warn!(
+                proof_id = request.id,
+                start_block = request.start_block,
+                end_block = request.end_block,
+                witnessgen_duration_s = request.witnessgen_duration,
+                execution_status = ?status.execution_status(),
+                "Aggregation proof request failed - unfulfillable"
+            );
+        }
+    }
+
+    handle_failed(request, status.execution_status()).await?;
+    ValidityGauge::ProofRequestRetryCount.increment(1.0);
+    Ok(None)
+}
+
 /// Configuration for the driver.
 pub struct DriverConfig {
     pub network_prover: Option<Arc<NetworkProver>>,
@@ -335,6 +567,11 @@ where
     requester_config: RequesterConfig,
     proof_requester: Arc<OPSuccinctProofRequester<H>>,
     tasks: Arc<Mutex<TaskMap>>,
+    /// [MANTLE] Consecutive status-poll failures per `Prove` request on the SP1 network path,
+    /// keyed by request id. The cluster path keeps the same counter inside its
+    /// `ClusterProofHandle`; the network path had no equivalent, so a request the network could
+    /// no longer answer for was polled forever. Cleared on the first success and on abandon.
+    network_poll_failures: Arc<Mutex<HashMap<i64, u32>>>,
 }
 
 impl<P, H: OPSuccinctHost> Proposer<P, H>
@@ -350,6 +587,44 @@ where
         loop_interval: u64,
         host: Arc<H>,
     ) -> Result<Self> {
+        let is_cluster = is_cluster_mode();
+        anyhow::ensure!(
+            !requester_config.private_stdin || (!requester_config.mock && !is_cluster),
+            "PRIVATE_STDIN only applies to SP1 network proof requests; disable mock mode and SP1_PROVER=cluster"
+        );
+
+        // [MANTLE] The chain lock is a lease of `loop_interval`, refreshed by `update_chain_lock`
+        // at the end of each iteration and checked only here, at startup. For it to do its job the
+        // lease must outlast the slowest iteration: otherwise a restart during a slow one reads
+        // the lease as expired and starts a second proposer against the same account, and the two
+        // then fight over nonces and double-submit.
+        //
+        // An iteration can broadcast twice (aggregation submission and a checkpoint), each now
+        // waiting up to `(1 + L1_TX_MAX_BUMPS) * TX_CONFIRMATION_TIMEOUT` because of fee
+        // escalation. The imbalance predates escalation — two 60s sends already exceeded a 60s
+        // lease — but escalation widens it by the bump factor, so it is worth surfacing.
+        //
+        // Warned rather than enforced: the right setting depends on how the deployment supervises
+        // restarts, and refusing to start would be worse than the risk being warned about.
+        let worst_case_send = op_succinct_signer_utils::GasPolicy::from_env()
+            .worst_case_send_secs(requester_config.tx_confirmation_timeout);
+        let worst_case_iteration = loop_interval.saturating_add(2 * worst_case_send);
+        // Only complain when the gap is wide enough to matter; a lease merely a little shorter
+        // than the theoretical worst case is normal and would make this pure noise.
+        if worst_case_iteration > loop_interval.saturating_mul(2) {
+            tracing::warn!(
+                loop_interval,
+                tx_confirmation_timeout = requester_config.tx_confirmation_timeout,
+                worst_case_send,
+                worst_case_iteration,
+                "Chain lock lease (LOOP_INTERVAL) is well short of the slowest possible \
+                 iteration. A restart while a transaction is escalating may read the lease as \
+                 expired and allow a second proposer to start, which would contend for nonces. \
+                 ACTION: raise LOOP_INTERVAL toward the worst-case iteration, or lower \
+                 L1_TX_MAX_BUMPS / TX_CONFIRMATION_TIMEOUT."
+            );
+        }
+
         // This check prevents users from running multiple proposers for the same chain at the same
         // time.
         let is_locked = db_client
@@ -369,8 +644,6 @@ where
         db_client
             .add_chain_lock(requester_config.l1_chain_id, requester_config.l2_chain_id)
             .await?;
-
-        let is_cluster = is_cluster_mode();
 
         let cluster_config =
             if is_cluster { Some(Arc::new(ClusterProofConfig::from_env().await?)) } else { None };
@@ -444,6 +717,7 @@ where
             requester_config.agg_cycle_limit,
             requester_config.agg_gas_limit,
             requester_config.whitelist.clone(),
+            requester_config.private_stdin,
             requester_config.min_auction_period,
             requester_config.auction_timeout,
         )?);
@@ -472,6 +746,7 @@ where
             requester_config,
             proof_requester,
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            network_poll_failures: Arc::new(Mutex::new(HashMap::new())),
         };
         Ok(proposer)
     }
@@ -489,18 +764,21 @@ where
         let finalized_block_number = match self
             .proof_requester
             .host
-            .get_finalized_l2_block_number(
+            .get_max_provable_l2_block_number(
                 self.driver_config.fetcher.as_ref(),
                 latest_proposed_block_number,
             )
             .await?
         {
             Some(block_number) => {
-                tracing::debug!("Found finalized block number: {}", block_number);
+                tracing::debug!(
+                    "Found host-resolved max provable L2 block number: {}",
+                    block_number
+                );
                 block_number
             }
             None => {
-                tracing::debug!("No new finalized block number found since last proposed block. No new range proof requests will be added.");
+                tracing::debug!("No new max provable L2 block number found since last proposed block. No new range proof requests will be added.");
                 return Ok(());
             }
         };
@@ -609,6 +887,162 @@ where
         Ok(())
     }
 
+    /// Verify that active completed range proofs still reference canonical L1 blocks.
+    async fn reconcile_completed_range_canonicality(&self) -> Result<bool> {
+        let latest_proposed_block = get_latest_proposed_block_number(
+            self.contract_config.l2oo_address,
+            self.driver_config.fetcher.as_ref(),
+        )
+        .await? as i64;
+        let db = &self.driver_config.driver_db_client;
+        let commitments = &self.program_config.commitments;
+        let l1_chain_id = self.requester_config.l1_chain_id;
+        let l2_chain_id = self.requester_config.l2_chain_id;
+
+        let missing = db
+            .fetch_missing_range_metadata(
+                commitments,
+                latest_proposed_block,
+                l1_chain_id,
+                l2_chain_id,
+                RANGE_METADATA_HYDRATION_LIMIT + 1,
+            )
+            .await?;
+        let more_metadata_remains = missing.len() > RANGE_METADATA_HYDRATION_LIMIT as usize;
+
+        for range in missing.iter().take(RANGE_METADATA_HYDRATION_LIMIT as usize) {
+            let proof_bytes = range.proof.as_ref().ok_or_else(|| {
+                anyhow!(
+                    "Completed range ({}, {}] has no proof bytes",
+                    range.start_block,
+                    range.end_block
+                )
+            })?;
+            let mut proof: SP1ProofWithPublicValues = bincode::deserialize(proof_bytes)
+                .with_context(|| {
+                    format!(
+                        "Failed to deserialize completed range ({}, {}]",
+                        range.start_block, range.end_block
+                    )
+                })?;
+            let boot_info: BootInfoStruct = proof.public_values.read();
+            let expected_end_block =
+                u64::try_from(range.end_block).context("Completed range end block is negative")?;
+            anyhow::ensure!(
+                boot_info.l2BlockNumber == expected_end_block,
+                "Completed range ({}, {}] reports L2 block {}",
+                range.start_block,
+                range.end_block,
+                boot_info.l2BlockNumber
+            );
+            anyhow::ensure!(
+                boot_info.rollupConfigHash == commitments.rollup_config_hash,
+                "Completed range ({}, {}] has a different rollup config hash",
+                range.start_block,
+                range.end_block
+            );
+
+            let l1_head_number = if let Some(number) = range.l1_head_block_number {
+                u64::try_from(number).context("Completed range L1 head number is negative")?
+            } else {
+                self.driver_config.fetcher.get_l1_header(boot_info.l1Head.into()).await?.number
+            };
+            db.update_l1_head(
+                range.id,
+                i64::try_from(l1_head_number).context("Completed range L1 head is too large")?,
+                boot_info.l1Head,
+            )
+            .await?;
+        }
+
+        if more_metadata_remains {
+            info!(
+                hydrated = RANGE_METADATA_HYDRATION_LIMIT,
+                "Deferring proof scheduling while legacy range metadata is hydrated"
+            );
+            return Ok(false);
+        }
+
+        let completed_ranges = db
+            .fetch_completed_range_metadata(
+                commitments,
+                latest_proposed_block,
+                l1_chain_id,
+                l2_chain_id,
+            )
+            .await?;
+        let mut canonical_hashes = HashMap::new();
+
+        for range in &completed_ranges {
+            let l1_head_number = range.l1_head_block_number.ok_or_else(|| {
+                anyhow!(
+                    "Completed range ({}, {}] has no L1 head number",
+                    range.start_block,
+                    range.end_block
+                )
+            })?;
+            let l1_head_number = u64::try_from(l1_head_number)
+                .context("Completed range L1 head number is negative")?;
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                canonical_hashes.entry(l1_head_number)
+            {
+                let header =
+                    self.driver_config.fetcher.get_l1_header(l1_head_number.into()).await?;
+                entry.insert(header.hash_slow());
+            }
+        }
+
+        let mut stale_range_ids = Vec::new();
+        for range in &completed_ranges {
+            let l1_head_number = u64::try_from(range.l1_head_block_number.ok_or_else(|| {
+                anyhow!(
+                    "Completed range ({}, {}] has no L1 head number",
+                    range.start_block,
+                    range.end_block
+                )
+            })?)
+            .context("Completed range L1 head number is negative")?;
+            let stored_hash_bytes = range.l1_head_block_hash.as_deref().ok_or_else(|| {
+                anyhow!(
+                    "Completed range ({}, {}] has no L1 head hash",
+                    range.start_block,
+                    range.end_block
+                )
+            })?;
+            let stored_hash = B256::try_from(stored_hash_bytes).map_err(|_| {
+                anyhow!(
+                    "Completed range ({}, {}] has an invalid L1 head hash",
+                    range.start_block,
+                    range.end_block
+                )
+            })?;
+            let canonical_hash = canonical_hashes.get(&l1_head_number).ok_or_else(|| {
+                anyhow!("Canonical L1 hash was not fetched for block {l1_head_number}")
+            })?;
+            if canonical_hash != &stored_hash {
+                stale_range_ids.push(range.id);
+                warn!(
+                    request_id = range.id,
+                    start_block = range.start_block,
+                    end_block = range.end_block,
+                    l1_head_number,
+                    ?stored_hash,
+                    ?canonical_hash,
+                    "Completed range proof references a noncanonical L1 block"
+                );
+            }
+        }
+
+        let (range_count, aggregation_count) = db
+            .invalidate_noncanonical_ranges(&stale_range_ids, commitments, l1_chain_id, l2_chain_id)
+            .await?;
+        if range_count > 0 {
+            warn!(range_count, aggregation_count, "Invalidated noncanonical proof requests");
+        }
+
+        Ok(true)
+    }
+
     /// Handle all proof requests in the Prove state.
     ///
     /// No-op in mock mode (proofs are generated synchronously).
@@ -631,6 +1065,16 @@ where
             )
             .await?;
 
+        // [MANTLE] Drop counters for requests that are no longer in `Prove`. Rows leave that
+        // status through paths this loop never observes (invalidation, or a commitment change
+        // after a vkey bump making them invisible to the query above), and without this their
+        // entries would sit in the map for the lifetime of the process.
+        if !self.proof_requester.cluster {
+            let live: std::collections::HashSet<i64> =
+                prove_requests.iter().map(|request| request.id).collect();
+            self.network_poll_failures.lock().await.retain(|id, _| live.contains(id));
+        }
+
         for request in prove_requests {
             if self.proof_requester.cluster {
                 // Cluster mode: catch errors per-request so a single failed poll doesn't
@@ -639,7 +1083,97 @@ where
                     warn!(error = ?e, "Error processing cluster proof status");
                 }
             } else {
-                self.process_proof_request_status(request).await?;
+                // [MANTLE] Same per-request containment as the cluster branch above, which this
+                // previously lacked: it propagated with `?`, so one unpollable request failed the
+                // whole iteration — before `add_new_ranges`, proof submission, or
+                // `update_chain_lock` could run — and did so again every loop, since the
+                // condition never cleared itself.
+                let (request_id, start_block, end_block) =
+                    (request.id, request.start_block, request.end_block);
+                match self.process_proof_request_status(request).await {
+                    Ok(()) => {
+                        self.network_poll_failures.lock().await.remove(&request_id);
+                    }
+                    Err(e) if !is_network_poll_failure(&e) => {
+                        // Our own database or a local invariant failed, which says nothing about
+                        // the proof. Do not spend the request's abandon budget on it: discarding
+                        // an in-flight proof would not fix a local problem, and for a permanent
+                        // one it would loop forever re-requesting a range that fails identically.
+                        warn!(
+                            request_id,
+                            start_block,
+                            end_block,
+                            error = ?e,
+                            "Error processing proof request status (local failure, not counted \
+                             towards abandoning the proof)"
+                        );
+                    }
+                    Err(e) => {
+                        let consecutive_failures = {
+                            let mut failures = self.network_poll_failures.lock().await;
+                            let counter = failures.entry(request_id).or_insert(0);
+                            *counter += 1;
+                            *counter
+                        };
+
+                        match poll_failure_action(consecutive_failures) {
+                            PollFailureAction::Retry => {
+                                warn!(
+                                    request_id,
+                                    start_block,
+                                    end_block,
+                                    consecutive_failures,
+                                    error = ?e,
+                                    "Error processing proof request status; will retry"
+                                );
+                            }
+                            PollFailureAction::Abandon => {
+                                // The network cannot tell us about this proof any more (e.g. the
+                                // request is gone after a proof panicked). Put the row back to
+                                // `Unrequested` so it is proven again from scratch;
+                                // `update_request_to_prove` overwrites `proof_request_id` on the
+                                // next submission, so the dead id does not linger.
+                                //
+                                // NOT `Failed`, and not via `handle_failed_request`: the split
+                                // gate counts `Failed` rows for this exact block range, so
+                                // failing it here would push an otherwise healthy range towards
+                                // bisection — the very thing the no-bisect policy exists to
+                                // prevent. Nothing is wrong with this range; only the proof
+                                // request became unreachable.
+                                warn!(
+                                    request_id,
+                                    start_block,
+                                    end_block,
+                                    consecutive_failures,
+                                    error = ?e,
+                                    "Proof request status unavailable after repeated attempts; \
+                                     resetting to Unrequested so the range is proven again. \
+                                     ACTION: none, this is self-healing; investigate the prover \
+                                     network if it recurs across many requests."
+                                );
+                                // Guarded on the row still being in `Prove`: the poll that just
+                                // failed may have already stored a finished proof and moved it to
+                                // `Complete` before failing on a later step, and an unconditional
+                                // write would throw that proof away.
+                                let reset = self
+                                    .driver_config
+                                    .driver_db_client
+                                    .reset_prove_request_to_unrequested(request_id)
+                                    .await?;
+                                self.network_poll_failures.lock().await.remove(&request_id);
+                                if reset {
+                                    ValidityGauge::ProofRequestRetryCount.increment(1.0);
+                                } else {
+                                    info!(
+                                        request_id,
+                                        "Request left Prove while its poll was failing; \
+                                         leaving it as is"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -665,86 +1199,76 @@ where
                 )
                 .await?;
 
-            let request_details = self
-                .network_call_with_timeout(
+            // Check if current time exceeds deadline. If so, the proof has timed out.
+            let current_time =
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
+            let request_invalidated =
+                self.driver_config.driver_db_client.is_request_invalidated(request.id).await?;
+
+            if request_invalidated &&
+                (status.fulfillment_status() == FulfillmentStatus::Fulfilled as i32 ||
+                    status.fulfillment_status() == FulfillmentStatus::Unfulfillable as i32 ||
+                    current_time > status.deadline())
+            {
+                self.driver_config.driver_db_client.finish_invalidated_request(request.id).await?;
+                return Ok(());
+            }
+
+            if request_invalidated {
+                if network_prover.network_mode() == NetworkMode::Mainnet {
+                    let request_details = self
+                        .network_call_with_timeout(
+                            network_prover.get_proof_request(proof_request_id),
+                            "waiting for proof request details",
+                            &request,
+                        )
+                        .await?;
+
+                    if request_details.as_ref().is_some_and(|details| {
+                        details.fulfillment_status == FulfillmentStatus::Requested as i32
+                    }) {
+                        self.network_call_with_timeout(
+                            network_prover.cancel_request(proof_request_id),
+                            "cancelling invalidated proof request",
+                            &request,
+                        )
+                        .await?;
+                        self.driver_config
+                            .driver_db_client
+                            .finish_invalidated_request(request.id)
+                            .await?;
+                    }
+                }
+                return Ok(());
+            }
+
+            let request_details = async {
+                if status.fulfillment_status() == FulfillmentStatus::Fulfilled as i32 ||
+                    network_prover.network_mode() != NetworkMode::Mainnet
+                {
+                    return Ok(None);
+                }
+
+                self.network_call_with_timeout(
                     network_prover.get_proof_request(proof_request_id),
                     "waiting for proof request details",
                     &request,
                 )
-                .await?;
-
-            // Check if current time exceeds deadline. If so, the proof has timed out.
-            let current_time =
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
-
-            // Cancel the request in the network if the auction timeout is exceeded.
-            if let Some(request_details) = request_details {
-                let auction_deadline =
-                    request_details.created_at + self.requester_config.auction_timeout;
-                if network_prover.network_mode() == NetworkMode::Mainnet &&
-                    request_details.fulfillment_status == FulfillmentStatus::Requested as i32 &&
-                    current_time > auction_deadline
-                {
-                    // Cancel the request in the network.
-                    self.network_call_with_timeout(
-                        network_prover.cancel_request(proof_request_id),
-                        "cancelling proof request",
-                        &request,
-                    )
-                    .await?;
-
-                    // Mark the request as cancelled in the database.
-                    match self.proof_requester.handle_cancelled_request(request.clone()).await {
-                        Ok(_) => ValidityGauge::ProofRequestRetryCount.increment(1.0),
-                        Err(e) => {
-                            ValidityGauge::RetryErrorCount.increment(1.0);
-                            return Err(e);
-                        }
-                    }
-
-                    ValidityGauge::ProofRequestTimeoutErrorCount.increment(1.0);
-
-                    warn!(
-                        proof_id = request.id,
-                        start_block = request.start_block,
-                        end_block = request.end_block,
-                        req_type = ?request.req_type,
-                        auction_deadline,
-                        current_time,
-                        "Proof request auction deadline exceeded"
-                    );
-
-                    return Ok(());
-                }
-            }
-
-            if current_time > status.deadline() {
-                match self
-                    .proof_requester
-                    .handle_failed_request(request.clone(), status.execution_status())
-                    .await
-                {
-                    Ok(_) => ValidityGauge::ProofRequestRetryCount.increment(1.0),
-                    Err(e) => {
-                        ValidityGauge::RetryErrorCount.increment(1.0);
-                        return Err(e);
-                    }
-                }
-
-                ValidityGauge::ProofRequestTimeoutErrorCount.increment(1.0);
-
-                warn!(
-                    proof_id = request.id,
-                    start_block = request.start_block,
-                    end_block = request.end_block,
-                    req_type = ?request.req_type,
-                    deadline = status.deadline(),
-                    current_time,
-                    "Proof request timed out"
-                );
-
+                .await
+            };
+            let Some(request_details) = handle_terminal_proof_failure_before_request_details(
+                request.clone(),
+                &status,
+                current_time,
+                |request, execution_status| {
+                    self.proof_requester.handle_failed_request(request, execution_status)
+                },
+                request_details,
+            )
+            .await?
+            else {
                 return Ok(());
-            }
+            };
 
             // If the proof request has been fulfilled, update the request to status Complete and
             // add the proof bytes to the database.
@@ -765,32 +1289,57 @@ where
                 };
 
                 // Add the completed proof to the database.
-                self.driver_config
+                let stored = self
+                    .driver_config
                     .driver_db_client
                     .update_proof_to_complete(request.id, &proof_bytes)
                     .await?;
+                anyhow::ensure!(stored, "Request {} could not transition to Complete", request.id);
                 // Update the prove_duration based on the current time and the proof_request_time.
                 self.driver_config.driver_db_client.update_prove_duration(request.id).await?;
 
-                if let Some(proof_request) = self
+                // [MANTLE] Statistics are observability only, and by this point the proof is
+                // already stored and the row is `Complete`. Failing here used to propagate, which
+                // (a) reported a completed proof as a failed poll and (b) let that failure count
+                // towards abandoning the request — which could reset an already-Complete row and
+                // throw the finished proof away. Log and move on instead.
+                match self
                     .network_call_with_timeout(
                         network_prover.get_proof_request(proof_request_id),
                         "fetching execution statistics",
                         &request,
                     )
-                    .await?
+                    .await
                 {
-                    let execution_statistics = RequestExecutionStatistics::from(&proof_request);
+                    Ok(Some(proof_request)) => {
+                        let execution_statistics = RequestExecutionStatistics::from(&proof_request);
 
-                    // Write the execution data to the database.
-                    self.driver_config
-                        .driver_db_client
-                        .insert_execution_statistics(
-                            request.id,
-                            serde_json::to_value(execution_statistics)?,
-                            0,
-                        )
-                        .await?;
+                        // Write the execution data to the database.
+                        if let Err(e) = self
+                            .driver_config
+                            .driver_db_client
+                            .insert_execution_statistics(
+                                request.id,
+                                serde_json::to_value(execution_statistics)?,
+                                0,
+                            )
+                            .await
+                        {
+                            warn!(
+                                request_id = request.id,
+                                error = ?e,
+                                "Could not record execution statistics for a completed proof"
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        warn!(
+                            request_id = request.id,
+                            error = ?e,
+                            "Could not fetch execution statistics for a completed proof"
+                        );
+                    }
                 }
 
                 // Log completion of range and aggregation proofs.
@@ -821,46 +1370,69 @@ where
                         );
                     }
                 }
-            } else if status.fulfillment_status() == FulfillmentStatus::Unfulfillable as i32 {
-                // Log failure of range and aggregation proofs.
-                match request.req_type {
-                    RequestType::Range => {
+                return Ok(());
+            }
+
+            if network_prover.network_mode() == NetworkMode::Mainnet {
+                if let Some(request_details) = request_details {
+                    let auction_deadline =
+                        request_details.created_at + self.requester_config.auction_timeout;
+                    if request_details.fulfillment_status == FulfillmentStatus::Requested as i32 &&
+                        current_time > auction_deadline
+                    {
+                        self.network_call_with_timeout(
+                            network_prover.cancel_request(proof_request_id),
+                            "cancelling proof request",
+                            &request,
+                        )
+                        .await?;
+
+                        match self.proof_requester.handle_cancelled_request(request.clone()).await {
+                            Ok(_) => ValidityGauge::ProofRequestRetryCount.increment(1.0),
+                            Err(e) => {
+                                ValidityGauge::RetryErrorCount.increment(1.0);
+                                return Err(e);
+                            }
+                        }
+
+                        ValidityGauge::ProofRequestTimeoutErrorCount.increment(1.0);
+
                         warn!(
                             proof_id = request.id,
                             start_block = request.start_block,
                             end_block = request.end_block,
-                            proof_request_time = ?request.proof_request_time,
-                            total_tx_fees = %request.total_tx_fees,
-                            total_transactions = request.total_nb_transactions,
-                            witnessgen_duration_s = request.witnessgen_duration,
-                            total_eth_gas_used = request.total_eth_gas_used,
-                            total_l1_fees = %request.total_l1_fees,
-                            execution_status = ?status.execution_status(),
-                            "Range proof request failed - unfulfillable"
-                        );
-                    }
-                    RequestType::Aggregation => {
-                        warn!(
-                            proof_id = request.id,
-                            start_block = request.start_block,
-                            end_block = request.end_block,
-                            witnessgen_duration_s = request.witnessgen_duration,
-                            execution_status = ?status.execution_status(),
-                            "Aggregation proof request failed - unfulfillable"
+                            req_type = ?request.req_type,
+                            auction_deadline,
+                            current_time,
+                            "Proof request auction deadline exceeded"
                         );
                     }
                 }
-
-                self.proof_requester
-                    .handle_failed_request(request, status.execution_status())
-                    .await?;
-                ValidityGauge::ProofRequestRetryCount.increment(1.0);
             }
         } else {
             // There should never be a proof request in Prove status without a proof request id.
             tracing::warn!(id = request.id, start_block = request.start_block, end_block = request.end_block, req_type = ?request.req_type, "Request has no proof request id");
         }
 
+        Ok(())
+    }
+
+    /// [MANTLE] Retry a cluster proof request as-is: drop the in-memory handle and put the row
+    /// back to `Unrequested` so the next pass re-requests the SAME range.
+    ///
+    /// The no-bisect counterpart to [`Self::fail_cluster_request`], for the failure classes in
+    /// [`no_bisect_reason`]. Deliberately does NOT touch the range/agg error gauges: nothing
+    /// failed about this range, the backend just refused to work on it.
+    async fn reset_cluster_request_for_retry(&self, request: &OPSuccinctRequest) -> Result<()> {
+        // Remove the in-memory handle first so it doesn't leak if the DB update below fails.
+        self.proof_requester.cluster_handles.lock().await.remove(&request.id);
+
+        self.driver_config
+            .driver_db_client
+            .update_request_status(request.id, RequestStatus::Unrequested)
+            .await?;
+
+        ValidityGauge::ProofRequestRetryCount.increment(1.0);
         Ok(())
     }
 
@@ -907,6 +1479,8 @@ where
             .cluster_config
             .as_ref()
             .context("cluster_config required for cluster proof polling")?;
+        let invalidated =
+            self.driver_config.driver_db_client.is_request_invalidated(request.id).await?;
 
         // 1. Wall-clock timeout check — runs before handle lookup/reconstruction so we skip
         //    unnecessary deserialization and lock acquisition for already-timed-out proofs.
@@ -923,7 +1497,15 @@ where
                     "Cluster proof exceeded wall-clock timeout"
                 );
 
-                self.fail_cluster_request(&request).await?;
+                if invalidated {
+                    self.proof_requester.cluster_handles.lock().await.remove(&request.id);
+                    self.driver_config
+                        .driver_db_client
+                        .finish_invalidated_request(request.id)
+                        .await?;
+                } else {
+                    self.fail_cluster_request(&request).await?;
+                }
                 ValidityGauge::ProofRequestTimeoutErrorCount.increment(1.0);
 
                 return Ok(());
@@ -992,6 +1574,15 @@ where
         // 3. Poll the cluster for proof status.
         match cluster_poll_proof(cluster_config, proof_request).await {
             Ok(Some(results)) => {
+                if invalidated {
+                    self.proof_requester.cluster_handles.lock().await.remove(&request.id);
+                    self.driver_config
+                        .driver_db_client
+                        .finish_invalidated_request(request.id)
+                        .await?;
+                    return Ok(());
+                }
+
                 // Proof complete — convert and store.
                 let proof = SP1ProofWithPublicValues::from(results.proof);
 
@@ -1001,10 +1592,12 @@ where
                     SP1Proof::Core(_) => return Err(anyhow!("Core proofs are not supported.")),
                 };
 
-                self.driver_config
+                let stored = self
+                    .driver_config
                     .driver_db_client
                     .update_proof_to_complete(request.id, &proof_bytes)
                     .await?;
+                anyhow::ensure!(stored, "Request {} could not transition to Complete", request.id);
                 self.driver_config.driver_db_client.update_prove_duration(request.id).await?;
 
                 let prove_duration_s = request
@@ -1071,7 +1664,26 @@ where
                         "Cluster proof poll failed permanently"
                     );
 
-                    self.fail_cluster_request(&request).await?;
+                    if invalidated {
+                        self.proof_requester.cluster_handles.lock().await.remove(&request.id);
+                        self.driver_config
+                            .driver_db_client
+                            .finish_invalidated_request(request.id)
+                            .await?;
+                    } else if let Some(reason) = no_bisect_reason(&e) {
+                        // [MANTLE] Same policy as the task-failure path: these classes say
+                        // nothing about the range, so retry it whole rather than letting
+                        // `fail_cluster_request` route it into bisection.
+                        warn!(
+                            request_id = request.id,
+                            req_type = ?request.req_type,
+                            reason,
+                            "resetting to Unrequested for retry (no bisection)"
+                        );
+                        self.reset_cluster_request_for_retry(&request).await?;
+                    } else {
+                        self.fail_cluster_request(&request).await?;
+                    }
                 } else {
                     warn!(
                         request_id = request.id,
@@ -1151,12 +1763,10 @@ where
             .await?;
 
         // Get the highest block number of the completed range proofs.
-        let highest_proven_contiguous_block_number = match self
-            .get_highest_proven_contiguous_block(completed_range_proofs)?
-        {
-            Some(block) => block,
-            None => return Ok(()), /* No completed range proofs contiguous to the latest proposed
-                                    * block number, so no need to create an aggregation proof. */
+        let Some(highest_proven_contiguous_block_number) =
+            highest_contiguous_end(latest_proposed_block_number, &completed_range_proofs)?
+        else {
+            return Ok(());
         };
 
         // Get the submission interval from the contract.
@@ -1181,7 +1791,7 @@ where
             let existing_request = self
                 .driver_config
                 .driver_db_client
-                .fetch_failed_agg_request_with_checkpointed_block_hash(
+                .fetch_reusable_agg_checkpoint(
                     latest_proposed_block_number,
                     highest_proven_contiguous_block_number,
                     &self.program_config.commitments,
@@ -1190,9 +1800,10 @@ where
                 )
                 .await?;
 
-            // [UPSTREAM #923] The L1 head the guest must be able to walk back to: the largest
-            // `l1Head` among the range proofs this aggregation will consume. Gates both the reuse
-            // path below and the fresh checkpoint.
+            // Largest range-proof `l1Head` in the batch. The checkpoint must cover it (see
+            // `select_checkpoint_block_number`), so it gates both reuse and fresh selection below.
+            // `None` when no completed range proof has a recorded l1 head (e.g. proofs predating
+            // the column), in which case `safe` is a sufficient floor.
             let batch_max_l1_head = self
                 .driver_config
                 .driver_db_client
@@ -1249,7 +1860,7 @@ where
                             "No reusable checkpoint; taking a fresh one."
                         );
 
-                        // [UPSTREAM #923] Floor the reorg-stable anchor at the batch's max l1Head
+                        // [MANTLE] Floor the reorg-stable anchor at the batch's max l1Head
                         // so the aggregation guest's header walk covers
                         // every range proof. See
                         // `select_checkpoint_block_number`.
@@ -1650,7 +2261,8 @@ where
         info!("Relayed aggregation proof. Transaction hash: {:?}", transaction_hash);
 
         // Update the request to status RELAYED.
-        self.driver_config
+        let recorded = self
+            .driver_config
             .driver_db_client
             .update_request_to_relayed(
                 completed_agg_proof.id,
@@ -1658,6 +2270,11 @@ where
                 self.contract_config.l2oo_address,
             )
             .await?;
+        anyhow::ensure!(
+            recorded,
+            "Aggregation request {} changed before relay persistence",
+            completed_agg_proof.id
+        );
 
         Ok(Some(completed_agg_proof.end_block))
     }
@@ -1970,15 +2587,22 @@ where
         // tasks map, set it to status FAILED.
         for request in requests {
             if !self.tasks.lock().await.contains_key(&request.id) {
-                tracing::warn!(
-                    request_id = request.id,
-                    request_type = ?request.req_type,
-                    "Task is in the database in status Execution or WitnessGeneration but not in the tasks map, setting to status FAILED."
-                );
-                self.driver_config
-                    .driver_db_client
-                    .update_request_status(request.id, RequestStatus::Failed)
-                    .await?;
+                if self.driver_config.driver_db_client.is_request_invalidated(request.id).await? {
+                    self.driver_config
+                        .driver_db_client
+                        .finish_invalidated_request(request.id)
+                        .await?;
+                } else {
+                    tracing::warn!(
+                        request_id = request.id,
+                        request_type = ?request.req_type,
+                        "Task is in the database in status Execution or WitnessGeneration but not in the tasks map, setting to status FAILED."
+                    );
+                    self.driver_config
+                        .driver_db_client
+                        .update_request_status(request.id, RequestStatus::Failed)
+                        .await?;
+                }
             }
         }
 
@@ -2010,23 +2634,10 @@ where
                                 error = ?e,
                                 "Task failed with error"
                             );
-                            // Some failures must NOT bisect the range: a
-                            // self-hosted admission shed (prover pool momentarily
-                            // full) and a transient transport failure (the
-                            // backend was unreachable — e.g. the gateway is down,
-                            // gRPC `Unavailable` / "tcp connect error"). In both
-                            // cases the request never produced a proof, so the
-                            // range is fine; marking it Failed would feed range
-                            // bisection and needlessly fragment it. Reset it to
+                            // [MANTLE] Some failures must NOT bisect the range —
+                            // see `no_bisect_reason` for the policy. Reset to
                             // Unrequested and retry the SAME range next loop.
-                            let no_bisect_reason = if is_admission_shed_error(&e) {
-                                Some("self-hosted admission shed (prover pool full)")
-                            } else if is_transient_transport_error(&e) {
-                                Some("transient transport failure (backend unreachable)")
-                            } else {
-                                None
-                            };
-                            if let Some(reason) = no_bisect_reason {
+                            if let Some(reason) = no_bisect_reason(&e) {
                                 warn!(
                                     request_id = request.id,
                                     request_type = ?request.req_type,
@@ -2169,9 +2780,9 @@ where
             .await?;
 
         // Get the highest proven contiguous block.
-        let highest_block_number = self
-            .get_highest_proven_contiguous_block(completed_range_proofs)?
-            .map_or(latest_proposed_block_number, |block| block as u64);
+        let highest_block_number =
+            highest_contiguous_end(latest_proposed_block_number as i64, &completed_range_proofs)?
+                .map_or(latest_proposed_block_number, |block| block as u64);
 
         // Fetch request counts for different statuses
         let commitments = &self.program_config.commitments;
@@ -2229,12 +2840,31 @@ where
         ValidityGauge::HighestProvenContiguousBlock.set(highest_block_number as f64);
         ValidityGauge::LatestContractL2Block.set(latest_proposed_block_number as f64);
 
-        // Get and set L2 block metrics
+        // Get and set L2 block metrics.
+        //
+        // `L2FinalizedBlock` keeps its literal meaning — the L2 block returned by
+        // `eth_getBlockByNumber("finalized")` — regardless of `L1_BLOCK_TAG`. Operators relying
+        // on the existing dashboards/alerts continue to see the same number under default
+        // selection (and the literal L2 finalized under non-default selection).
+        //
+        // `L2MaxProvableBlock` is the new gauge: the L2 block the host is actually willing to
+        // anchor a proof against under the current backend + L1 selection. The value diverges
+        // from `L2FinalizedBlock` under non-default Ethereum/EigenDA (it reports the L2 safe
+        // head at the configured L1 anchor) and reflects the Blobstream-resolved max provable
+        // L2 block under Celestia.
         let fetcher = &self.proof_requester.fetcher;
         ValidityGauge::L2UnsafeHeadBlock
             .set(fetcher.get_l2_header(BlockId::latest()).await?.number as f64);
-        ValidityGauge::L2FinalizedBlock
-            .set(fetcher.get_l2_header(BlockId::finalized()).await?.number as f64);
+        let l2_finalized_block_number = fetcher.get_l2_header(BlockId::finalized()).await?.number;
+        ValidityGauge::L2FinalizedBlock.set(l2_finalized_block_number as f64);
+        if let Some(max_provable_l2_block_number) = self
+            .proof_requester
+            .host
+            .get_max_provable_l2_block_number(fetcher, latest_proposed_block_number)
+            .await?
+        {
+            ValidityGauge::L2MaxProvableBlock.set(max_provable_l2_block_number as f64);
+        }
 
         // Get submission interval from contract and set gauge
         let contract_submission_interval: u64 =
@@ -2284,7 +2914,25 @@ where
         self.validate_contract_config().await?;
 
         // Log the proposer metrics.
-        self.log_proposer_metrics().await?;
+        //
+        // [MANTLE] Observability must never be able to stop the proposer. This step only reads and
+        // sets gauges, yet it used to propagate — and `highest_contiguous_end`, which it calls,
+        // returns `Err` for a completed range that overlaps the contiguous chain or has
+        // `end <= start`. A single such row is not self-healing, so propagating here failed the
+        // iteration at step 2 forever: every later step was skipped, including the scheduling gate
+        // and `update_chain_lock`, and `run` sat on its 10s error path. Nothing downstream depends
+        // on these gauges, so a failure is logged and the pass continues; the same bad row is still
+        // reported (loudly) by `create_aggregation_proofs`, which is where it actually matters.
+        if let Err(e) = self.log_proposer_metrics().await {
+            ValidityGauge::TotalErrorCount.increment(1.0);
+            warn!(
+                error = ?e,
+                "Could not log proposer metrics this pass; the iteration continues since gauges \
+                 are observability only. ACTION: if this persists, check for completed range \
+                 proofs that overlap or have end_block <= start_block — \
+                 `highest_contiguous_end` rejects both."
+            );
+        }
 
         // Handle the ongoing tasks.
         self.handle_ongoing_tasks().await?;
@@ -2295,74 +2943,85 @@ where
         // Get all proof statuses of all requests in the proving state.
         self.handle_proving_requests().await?;
 
-        // Add new range requests to the database.
-        self.add_new_ranges().await?;
+        let canonicality_ready = self.reconcile_completed_range_canonicality().await?;
 
-        // [MANTLE] The next two steps are the only ones in this iteration that broadcast an L1
-        // transaction, and both are allowed to fail without aborting the pass. Every other step
-        // still propagates.
-        //
-        // The rule is: a step that sends an L1 transaction which can revert for reasons that
-        // resolve on their own is logged and skipped; a step that only reads or writes our
-        // own database propagates. An L1 revert says nothing about whether the rest of the
-        // iteration can make progress, and aborting costs far more than the step that
-        // failed — every later step is skipped, including `request_queued_proofs`, which is
-        // what keeps range proofs being produced at all, and `update_chain_lock`, whose
-        // lease is exactly `LOOP_INTERVAL`. `run` also drops onto its 10s error path
-        // instead of the configured interval.
-        //
-        // Concretely, both have a revert that waits on the chain rather than on us:
-        // `checkpointBlockHash` reads `blockhash()`, which covers only the last 256 L1 blocks, so a
-        // `safe` head outside that window during an L1 finality stall reverts until `safe` catches
-        // up; and `proposeL2Output` can fail to reach the required confirmations within
-        // `TX_CONFIRMATION_TIMEOUT` while L1 is congested.
-        //
-        // [MANTLE] Submit runs BEFORE create, and a sync must keep this order. It is NOT free to
-        // choose: `handle_relay_rejection` moves the rejected row from `Complete` to `Failed`
-        // within this very pass, and `fetch_active_agg_proofs_count` counts `Complete` while
-        // `fetch_failed_agg_request_with_checkpointed_block_hash` reads `Failed`. Running submit
-        // first is therefore what lets the same pass build the replacement for a rejected
-        // aggregation; reverting to create-then-submit costs a full `LOOP_INTERVAL` per rejection.
-        let relayed_end_block = match self.submit_agg_proofs().await {
-            Ok(relayed_end_block) => relayed_end_block,
-            Err(e) => {
+        // [UPSTREAM #952] Everything that schedules or delivers work is gated on the canonicality
+        // reconciliation above: while the legacy `l1_head_block_hash` backfill is still running it
+        // returns `false`, and until it finishes no completed range proof has been verified to sit
+        // on the canonical L1 chain. Acting on unverified range proofs is exactly what this gate
+        // exists to prevent, so submit is gated with the rest.
+        if canonicality_ready {
+            // Add new range requests to the database.
+            self.add_new_ranges().await?;
+
+            // [MANTLE] The next two steps are the only ones in this iteration that broadcast an L1
+            // transaction, and both are allowed to fail without aborting the pass. Every other step
+            // still propagates.
+            //
+            // The rule is: a step that sends an L1 transaction which can revert for reasons that
+            // resolve on their own is logged and skipped; a step that only reads or writes our
+            // own database propagates. An L1 revert says nothing about whether the rest of the
+            // iteration can make progress, and aborting costs far more than the step that
+            // failed — every later step is skipped, including `request_queued_proofs`, which is
+            // what keeps range proofs being produced at all, and `update_chain_lock`, whose
+            // lease is exactly `LOOP_INTERVAL`. `run` also drops onto its 10s error path
+            // instead of the configured interval.
+            //
+            // Concretely, both have a revert that waits on the chain rather than on us:
+            // `checkpointBlockHash` reads `blockhash()`, which covers only the last 256 L1 blocks,
+            // so a `safe` head outside that window during an L1 finality stall reverts until `safe`
+            // catches up; and `proposeL2Output` can fail to reach the required confirmations within
+            // `TX_CONFIRMATION_TIMEOUT` while L1 is congested.
+            //
+            // [MANTLE] Submit runs BEFORE create, and a sync must keep this order. It is NOT free
+            // to choose: `handle_relay_rejection` moves the rejected row from `Complete` to
+            // `Failed` within this very pass, and `fetch_active_agg_proofs_count` counts `Complete`
+            // while `fetch_reusable_agg_checkpoint` reads `Failed`. Running submit first is
+            // therefore what lets the same pass build the replacement for a rejected aggregation;
+            // reverting to upstream's create-then-submit order costs a full `LOOP_INTERVAL` per
+            // rejection.
+            let relayed_end_block = match self.submit_agg_proofs().await {
+                Ok(relayed_end_block) => relayed_end_block,
+                Err(e) => {
+                    ValidityGauge::TotalErrorCount.increment(1.0);
+                    error!(
+                        error = ?e,
+                        "Could not submit an aggregation proof this pass; the iteration continues \
+                         so range proofs are still requested and the chain lock is renewed. Note \
+                         this is NOT a rejection by the chain — those are classified and handled \
+                         inside `submit_agg_proofs` — but a failure to deliver the transaction at \
+                         all. ACTION: if it persists, check L1 congestion against \
+                         TX_CONFIRMATION_TIMEOUT, the proposer's balance and nonce, and that \
+                         DGF_ADDRESS is unset on this contract baseline."
+                    );
+                    // Either nothing was delivered, or the relay landed but recording it failed —
+                    // in which case the row is still `Complete` and `fetch_active_agg_proofs_count`
+                    // sees it, so create is safe either way. No floor is claimed.
+                    None
+                }
+            };
+
+            // Create aggregation proofs based on the completed range proofs. Checkpoints the block
+            // hash associated with the aggregation proof in advance.
+            //
+            // [MANTLE] Skipped only if the head read inside it is behind a relay this pass just
+            // landed — see [`create_should_run`], which is where that comparison happens.
+            if let Err(e) = self.create_aggregation_proofs(relayed_end_block).await {
                 ValidityGauge::TotalErrorCount.increment(1.0);
                 error!(
                     error = ?e,
-                    "Could not submit an aggregation proof this pass; the iteration continues so \
-                     range proofs are still requested and the chain lock is renewed. Note this is \
-                     NOT a rejection by the chain — those are classified and handled inside \
-                     `submit_agg_proofs` — but a failure to deliver the transaction at all. \
-                     ACTION: if it persists, check L1 congestion against TX_CONFIRMATION_TIMEOUT, \
-                     the proposer's balance and nonce, and that DGF_ADDRESS is unset on this \
-                     contract baseline."
+                    "Could not create an aggregation proof this pass; the iteration continues so \
+                     range proofs are still requested and the chain lock is renewed. ACTION: \
+                     usually none — this retries next loop. If it persists, check that the L1 \
+                     `safe` head is advancing and within 256 blocks of `latest` \
+                     (checkpointBlockHash reverts otherwise), and that the checkpoint transaction \
+                     is being confirmed."
                 );
-                // Either nothing was delivered, or the relay landed but recording it failed —
-                // in which case the row is still `Complete` and `fetch_active_agg_proofs_count`
-                // sees it, so create is safe either way. No floor is claimed.
-                None
             }
-        };
 
-        // Create aggregation proofs based on the completed range proofs. Checkpoints the block hash
-        // associated with the aggregation proof in advance.
-        //
-        // [MANTLE] Skipped only if the head read inside it is behind a relay this pass just
-        // landed — see [`create_should_run`], which is where that comparison happens.
-        if let Err(e) = self.create_aggregation_proofs(relayed_end_block).await {
-            ValidityGauge::TotalErrorCount.increment(1.0);
-            error!(
-                error = ?e,
-                "Could not create an aggregation proof this pass; the iteration continues so range \
-                 proofs are still requested and the chain lock is renewed. ACTION: usually none — \
-                 this retries next loop. If it persists, check that the L1 `safe` head is advancing \
-                 and within 256 blocks of `latest` (checkpointBlockHash reverts otherwise), and \
-                 that the checkpoint transaction is being confirmed."
-            );
+            // Request all unrequested proofs from the prover network.
+            self.request_queued_proofs().await?;
         }
-
-        // Request all unrequested proofs from the prover network.
-        self.request_queued_proofs().await?;
 
         // Update the chain lock.
         self.proof_requester
@@ -2371,15 +3030,6 @@ where
             .await?;
 
         Ok(())
-    }
-
-    /// Get the highest block number at the end of the largest contiguous range of completed range
-    /// proofs. Returns None if there are no completed range proofs.
-    fn get_highest_proven_contiguous_block(
-        &self,
-        completed_range_proofs: Vec<(i64, i64)>,
-    ) -> Result<Option<i64>> {
-        Ok(highest_proven_contiguous_block(&completed_range_proofs))
     }
 
     /// Wrap a network prover call with timeout, logging, and metrics.
@@ -2408,7 +3058,7 @@ where
                     error = %network_error,
                     "Network error during operation"
                 );
-                Err(anyhow!(
+                Err(NetworkPollError(format!(
                     "Network error {} for request {} (start_block={}, end_block={}): {}",
                     operation_name,
                     request.id,
@@ -2416,6 +3066,7 @@ where
                     request.end_block,
                     network_error
                 ))
+                .into())
             }
             Err(_) => {
                 warn!(
@@ -2427,7 +3078,7 @@ where
                     "Network call timeout"
                 );
                 ValidityGauge::NetworkCallTimeoutCount.increment(1.0);
-                Err(anyhow!(
+                Err(NetworkPollError(format!(
                     "Timeout after {}s {} for request {} (start_block={}, end_block={})",
                     self.requester_config.network_calls_timeout,
                     operation_name,
@@ -2435,28 +3086,74 @@ where
                     request.start_block,
                     request.end_block
                 ))
+                .into())
             }
         }
     }
 }
 
-/// Highest block reachable by a contiguous chain of completed range proofs, starting from the
-/// first proof and stopping at the first gap (a proof whose start block != the running end).
-/// Returns None when there are no completed range proofs.
-///
-/// `completed_range_proofs` must be sorted by start block (as `fetch_completed_ranges` returns
-/// them). Extracted as a free function so the contiguity semantics — which gate aggregation
-/// proof creation — can be unit-tested without constructing a full `Proposer`.
-fn highest_proven_contiguous_block(completed_range_proofs: &[(i64, i64)]) -> Option<i64> {
-    let (first, rest) = completed_range_proofs.split_first()?;
-    let mut current_end = first.1;
-    for &(start, end) in rest {
-        if start != current_end {
-            break;
+/// [MANTLE] Escalation for a `Prove` request the prover network can no longer answer for.
+#[cfg(test)]
+mod poll_failure_tests {
+    use super::{
+        is_network_poll_failure, poll_failure_action, NetworkPollError, PollFailureAction,
+        MAX_CONSECUTIVE_POLL_FAILURES,
+    };
+
+    /// Only failures from the prover network may spend a request's abandon budget.
+    ///
+    /// `process_proof_request_status` also fails on our own database (`is_request_invalidated`,
+    /// `update_prove_duration`, ...) and on local invariants ("Core proofs are not supported").
+    /// Counting those would throw away an in-flight proof over a local blip, and for a permanent
+    /// local error would loop forever re-requesting a range that fails identically every time.
+    #[test]
+    fn only_network_failures_count_towards_abandoning() {
+        let timeout: anyhow::Error = NetworkPollError(
+            "Timeout after 15s waiting for proof request details for request 19902".to_string(),
+        )
+        .into();
+        assert!(is_network_poll_failure(&timeout));
+
+        // Still recognised once wrapped in context, as the call sites do.
+        let wrapped = timeout.context("processing proof request status");
+        assert!(is_network_poll_failure(&wrapped));
+
+        for local in [
+            anyhow::anyhow!("error returned from database: connection reset"),
+            anyhow::anyhow!("Core proofs are not supported."),
+        ] {
+            assert!(
+                !is_network_poll_failure(&local),
+                "local failure must not spend the abandon budget: {local:?}"
+            );
         }
-        current_end = end;
     }
-    Some(current_end)
+
+    /// Transient poll failures must not cost a proof: a range mid-proof is expensive to redo, so
+    /// anything below the threshold keeps waiting.
+    #[test]
+    fn transient_failures_keep_retrying() {
+        for failures in 0..MAX_CONSECUTIVE_POLL_FAILURES {
+            assert_eq!(
+                poll_failure_action(failures),
+                PollFailureAction::Retry,
+                "{failures} consecutive failures must not abandon the proof"
+            );
+        }
+    }
+
+    /// The mainnet incident this fixes: the network had no record of the proof request, so the
+    /// poll could never succeed. Without an escalation the proposer polls it forever.
+    #[test]
+    fn persistent_failures_abandon_so_the_range_is_reproven() {
+        assert_eq!(poll_failure_action(MAX_CONSECUTIVE_POLL_FAILURES), PollFailureAction::Abandon);
+        // Escalation must be monotone — never fall back to Retry once past the threshold, which
+        // would restore the infinite loop.
+        for failures in MAX_CONSECUTIVE_POLL_FAILURES..MAX_CONSECUTIVE_POLL_FAILURES + 100 {
+            assert_eq!(poll_failure_action(failures), PollFailureAction::Abandon);
+        }
+        assert_eq!(poll_failure_action(u32::MAX), PollFailureAction::Abandon);
+    }
 }
 
 #[cfg(test)]
@@ -2510,36 +3207,6 @@ mod rejection_action_tests {
                 rejection.kind()
             );
         }
-    }
-}
-
-/// [UPSTREAM #923] Tests for the checkpoint selection this backport introduced.
-#[cfg(test)]
-mod checkpoint_selection_tests {
-    use super::select_checkpoint_block_number;
-
-    #[test]
-    fn falls_back_to_safe_when_no_range_proof_records_an_l1_head() {
-        // Proofs predating the `l1_head_block_number` column. `safe` is still reorg-stable, which
-        // is the whole point of moving off `latest`.
-        assert_eq!(select_checkpoint_block_number(1000, None), 1000);
-    }
-
-    #[test]
-    fn uses_safe_when_it_already_covers_the_batch() {
-        // The normal case under L1_BLOCK_TAG=finalized|safe: every range l1Head is at or below
-        // safe.
-        assert_eq!(select_checkpoint_block_number(1000, Some(900)), 1000);
-        // Exactly equal is covered — the guest starts at the checkpoint itself, so it only has to
-        // reach that head, not exceed it.
-        assert_eq!(select_checkpoint_block_number(1000, Some(1000)), 1000);
-    }
-
-    #[test]
-    fn floors_at_the_batch_max_when_a_range_head_is_newer_than_safe() {
-        // Reachable under L1_BLOCK_TAG=latest. Without the floor the guest could not walk back to
-        // that range proof's l1Head and the aggregation would fail on its header-chain assertion.
-        assert_eq!(select_checkpoint_block_number(1000, Some(1005)), 1005);
     }
 }
 
@@ -2744,7 +3411,9 @@ mod create_should_run_tests {
     }
 }
 
-/// [UPSTREAM #923] Tests for the reuse-or-recheckpoint decision.
+/// [MANTLE] Tests for the reuse-or-recheckpoint decision. Upstream expresses this decision as an
+/// inline `if`/`else` inside `create_aggregation_proofs`, so it has no equivalent coverage; these
+/// tests are the only thing pinning the reuse gate and the fresh-checkpoint anchor.
 #[cfg(test)]
 mod checkpoint_plan_tests {
     use alloy_eips::{BlockId, BlockNumberOrTag};
@@ -2766,7 +3435,7 @@ mod checkpoint_plan_tests {
         }
     }
 
-    /// The assertion that makes reverting [UPSTREAM #923] visible.
+    /// The assertion that makes reverting the `safe` anchor visible.
     ///
     /// The header is fetched by number and then checkpointed in a separate transaction. Anchoring
     /// that read at `latest` means a tip reorg between the two orphans the checkpoint, and the
@@ -2814,7 +3483,7 @@ mod checkpoint_plan_tests {
         );
     }
 
-    /// The reuse path's own contribution to [UPSTREAM #923].
+    /// The reuse path's own contribution to the reorg-safe checkpoint behaviour.
     ///
     /// A checkpoint can be genuinely on chain and still be useless: if it sits below a range
     /// proof's `l1Head`, the aggregation guest cannot walk its header chain back far enough and
@@ -2849,52 +3518,219 @@ mod checkpoint_plan_tests {
 }
 
 #[cfg(test)]
-mod contiguous_block_tests {
-    use super::highest_proven_contiguous_block;
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use sp1_sdk::network::proto::{
+        base_types, types::FulfillmentStatus, GetProofRequestStatusResponse,
+    };
+
+    use super::{
+        handle_terminal_proof_failure_before_request_details, highest_contiguous_end,
+        select_checkpoint_block_number, OPSuccinctRequest, RequestStatus, RequestType,
+    };
 
     #[test]
-    fn empty_returns_none() {
-        assert_eq!(highest_proven_contiguous_block(&[]), None);
+    fn checkpoint_falls_back_to_safe_when_no_batch_max() {
+        assert_eq!(select_checkpoint_block_number(100, None), 100);
     }
 
     #[test]
-    fn single_range_returns_its_end() {
-        assert_eq!(highest_proven_contiguous_block(&[(100, 200)]), Some(200));
+    fn checkpoint_uses_safe_when_batch_max_at_or_below_safe() {
+        assert_eq!(select_checkpoint_block_number(100, Some(80)), 100);
+        assert_eq!(select_checkpoint_block_number(100, Some(100)), 100);
     }
 
     #[test]
-    fn fully_contiguous_chain_returns_last_end() {
+    fn checkpoint_floors_at_batch_max_when_above_safe() {
+        assert_eq!(select_checkpoint_block_number(100, Some(150)), 150);
+    }
+
+    #[test]
+    fn contiguous_ranges_must_begin_at_expected_start() {
+        assert_eq!(highest_contiguous_end(100, &[(200, 300), (300, 400)]).unwrap(), None);
         assert_eq!(
-            highest_proven_contiguous_block(&[(100, 200), (200, 300), (300, 400)]),
-            Some(400)
-        );
-    }
-
-    #[test]
-    fn stops_at_first_gap() {
-        // 300 != 400: the chain breaks after the second range, so the third is not counted.
-        assert_eq!(
-            highest_proven_contiguous_block(&[(100, 200), (200, 300), (400, 500)]),
+            highest_contiguous_end(100, &[(100, 200), (200, 300), (400, 500)]).unwrap(),
             Some(300)
         );
     }
 
     #[test]
-    fn gap_immediately_after_first_range() {
-        // Second range does not start at 200, so only the first range is contiguous.
-        assert_eq!(highest_proven_contiguous_block(&[(100, 200), (300, 400)]), Some(200));
+    fn contiguous_ranges_reject_overlap() {
+        let error = highest_contiguous_end(100, &[(100, 200), (150, 250)]).unwrap_err();
+        assert!(error.to_string().contains("overlaps"));
     }
 
     #[test]
-    fn overlap_is_treated_as_a_gap() {
-        // Overlapping (not exactly adjacent) ranges break contiguity: 200 != 250.
-        assert_eq!(highest_proven_contiguous_block(&[(100, 250), (200, 300)]), Some(250));
+    fn contiguous_ranges_reject_empty_range() {
+        let error = highest_contiguous_end(100, &[(100, 100)]).unwrap_err();
+        assert!(error.to_string().contains("empty or reversed"));
+    }
+
+    #[tokio::test]
+    async fn unfulfillable_status_is_handled_before_request_details() {
+        let request = OPSuccinctRequest {
+            id: 496,
+            status: RequestStatus::Prove,
+            req_type: RequestType::Range,
+            start_block: 2_433_375,
+            end_block: 2_433_675,
+            ..Default::default()
+        };
+        let status =
+            GetProofRequestStatusResponse::Base(base_types::GetProofRequestStatusResponse {
+                fulfillment_status: FulfillmentStatus::Unfulfillable as i32,
+                deadline: u64::MAX,
+                ..Default::default()
+            });
+        let failure_calls = AtomicUsize::new(0);
+        let details_requests = AtomicUsize::new(0);
+        let failure_calls_for_handler = &failure_calls;
+
+        let request_details = async {
+            details_requests.fetch_add(1, Ordering::Relaxed);
+            Err::<(), _>(anyhow::anyhow!("proof request details timed out"))
+        };
+        let result = handle_terminal_proof_failure_before_request_details(
+            request,
+            &status,
+            0,
+            |failed_request, _| async move {
+                assert_eq!(failed_request.id, 496);
+                assert_eq!(failed_request.start_block, 2_433_375);
+                assert_eq!(failed_request.end_block, 2_433_675);
+                failure_calls_for_handler.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+            request_details,
+        )
+        .await
+        .unwrap();
+
+        assert!(result.is_none());
+        assert_eq!(failure_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(details_requests.load(Ordering::Relaxed), 0);
     }
 }
 
 #[cfg(test)]
 mod admission_shed_tests {
-    use super::{is_admission_shed_error, is_transient_transport_error};
+    use super::{
+        is_admission_shed_error, is_transient_transport_error, is_unsatisfiable_precondition_error,
+        no_bisect_reason,
+    };
+
+    /// `no_bisect_reason` is the single policy gate every failure path consults, so it has to
+    /// agree with the individual predicates. Drifting them apart would silently change which
+    /// failures fragment a range.
+    #[test]
+    fn the_policy_gate_agrees_with_its_predicates() {
+        let cases: [(anyhow::Error, bool); 5] = [
+            (
+                anyhow::anyhow!(
+                    "status: Unavailable, message: \"x-sp1-admission-shed: pool at capacity\""
+                ),
+                true,
+            ),
+            (tonic::Status::unavailable("backend down").into(), true),
+            (
+                tonic::Status::failed_precondition("program not registered for vk_hash abc").into(),
+                true,
+            ),
+            // Must still bisect: a range too big to execute is what bisection is for.
+            (anyhow::anyhow!("proof generation failed: execution unexecutable"), false),
+            // A backend fault that is neither transient nor a precondition.
+            (tonic::Status::internal("prover crashed").into(), false),
+        ];
+
+        for (e, expected_no_bisect) in cases {
+            let gate = no_bisect_reason(&e).is_some();
+            let predicates = is_admission_shed_error(&e) ||
+                is_transient_transport_error(&e) ||
+                is_unsatisfiable_precondition_error(&e);
+            assert_eq!(gate, predicates, "gate disagrees with predicates for {e:?}");
+            assert_eq!(gate, expected_no_bisect, "wrong bisection policy for {e:?}");
+        }
+    }
+
+    /// The reason string reaches operator-facing logs, and for this class the operator has to do
+    /// something specific (register the ELF). A reason that does not say so is a regression.
+    #[test]
+    fn the_precondition_reason_tells_the_operator_what_to_do() {
+        let e: anyhow::Error =
+            tonic::Status::failed_precondition("program not registered for vk_hash abc").into();
+        let reason = no_bisect_reason(&e).expect("must be classified no-bisect");
+        assert!(reason.contains("ACTION"), "reason must carry an operator action: {reason}");
+        assert!(reason.contains("register"), "reason must name the fix: {reason}");
+    }
+
+    /// The failure this predicate exists for: the cluster has no program registered for our
+    /// current range vkey, so every request is rejected on arrival.
+    ///
+    /// Bisecting is not just useless here, it is harmful — the range is fine, so each split
+    /// doubles the request volume against a cluster that rejects all of it, and leaves the
+    /// range permanently fragmented once the program is finally registered.
+    #[test]
+    fn program_not_registered_is_a_precondition_failure() {
+        let not_registered: anyhow::Error = tonic::Status::failed_precondition(
+            "program not registered for vk_hash \
+             1dc938274cd550224002662e765b50c838b6fcb3234308b847ece2ce0e4a5631",
+        )
+        .into();
+        assert!(
+            is_unsatisfiable_precondition_error(&not_registered),
+            "an unregistered program must not bisect the range"
+        );
+
+        // Survives anyhow context wrapping, as the sp1-sdk path wraps errors.
+        let wrapped = not_registered.context("make_proof_request failed");
+        assert!(is_unsatisfiable_precondition_error(&wrapped));
+
+        // String fallback, for when the error is not a downcastable Status of our tonic
+        // version (a future SDK tonic bump, or a pre-Status failure).
+        let rendered = anyhow::anyhow!(
+            "status: FailedPrecondition, message: \"program not registered for vk_hash 1dc93827\""
+        );
+        assert!(is_unsatisfiable_precondition_error(&rendered));
+    }
+
+    /// The predicate must not swallow failures that SHOULD still bisect. A range that is
+    /// genuinely too big to execute is the whole reason bisection exists.
+    #[test]
+    fn genuine_proof_failures_still_bisect() {
+        let unexecutable = anyhow::anyhow!("proof generation failed: execution unexecutable");
+        assert!(!is_unsatisfiable_precondition_error(&unexecutable));
+
+        // A non-FailedPrecondition Status is not a precondition failure, even when its text
+        // mentions one — the typed code is the signal.
+        let internal: anyhow::Error =
+            tonic::Status::internal("program not registered, allegedly").into();
+        assert!(
+            !is_unsatisfiable_precondition_error(&internal),
+            "the typed code must decide, not incidental text"
+        );
+    }
+
+    /// The three no-bisect predicates classify disjoint failures; a change that makes one
+    /// shadow another would silently reroute a whole failure class.
+    #[test]
+    fn the_no_bisect_predicates_do_not_overlap() {
+        let precondition: anyhow::Error =
+            tonic::Status::failed_precondition("program not registered for vk_hash abc").into();
+        assert!(is_unsatisfiable_precondition_error(&precondition));
+        assert!(!is_transient_transport_error(&precondition));
+        assert!(!is_admission_shed_error(&precondition));
+
+        let unavailable: anyhow::Error = tonic::Status::unavailable("backend down").into();
+        assert!(is_transient_transport_error(&unavailable));
+        assert!(!is_unsatisfiable_precondition_error(&unavailable));
+
+        let shed = anyhow::anyhow!(
+            "status: Unavailable, message: \"x-sp1-admission-shed: pool at capacity\""
+        );
+        assert!(is_admission_shed_error(&shed));
+        assert!(!is_unsatisfiable_precondition_error(&shed));
+    }
 
     #[test]
     fn detects_self_hosted_admission_shed_only() {

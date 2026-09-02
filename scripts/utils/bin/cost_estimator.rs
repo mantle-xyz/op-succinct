@@ -8,13 +8,30 @@ use op_succinct_host_utils::{
         split_range_basic, SpanBatchRange,
     },
     fetcher::OPSuccinctDataFetcher,
-    host::OPSuccinctHost,
+    host::{enforce_l1_selection_supported, OPSuccinctHost},
+    l1_selection::L1BlockSelectionConfig,
     stats::ExecutionStats,
     witness_cache::{load_stdin_from_cache, save_stdin_to_cache},
     witness_generation::WitnessGenerator,
 };
 use op_succinct_proof_utils::{get_range_elf_embedded, initialize_host};
 use op_succinct_scripts::HostExecutorArgs;
+
+// Cost-estimator-specific CLI args. Wraps `HostExecutorArgs` and adds the estimator-only
+// `--no-safe-head-split` flag so unrelated host binaries (e.g. `multi`,
+// `gen-sp1-test-artifacts`) don't advertise a flag they ignore.
+#[derive(Debug, Clone, Parser)]
+#[command(about = "Estimate OP Succinct execution costs over an L2 block range")]
+struct CostEstimatorArgs {
+    #[command(flatten)]
+    host: HostExecutorArgs,
+    /// Bypass span-batch-aligned splitting even when SafeDB is active. Forces the basic
+    /// fixed-size splitter so the range is partitioned solely by `--batch-size`. Useful for
+    /// estimating per-segment cost as the proposer sees it (one zkVM execution per
+    /// `RANGE_SPLIT_COUNT` segment) rather than per span batch.
+    #[arg(long)]
+    no_safe_head_split: bool,
+}
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use sp1_sdk::{
     blocking::{CpuProver, Prover},
@@ -114,7 +131,7 @@ where
         .map(|r| r.unwrap())
         .collect::<Vec<_>>();
 
-    let execution_inputs = stdins.into_iter().zip(block_data.into_iter()).collect::<Vec<_>>();
+    let execution_inputs = stdins.into_iter().zip(block_data).collect::<Vec<_>>();
 
     // Execute the program for each block range in parallel.
     // CpuProver creates its own tokio runtime, so run it outside the async context.
@@ -201,7 +218,7 @@ fn aggregate_execution_stats(
 
     // For statistics that are per-block or per-transaction, we take the average over the entire
     // range.
-    let safe_div = |a: u64, b: u64| if b > 0 { a / b } else { 0 };
+    let safe_div = |a: u64, b: u64| a.checked_div(b).unwrap_or(0);
     aggregate_stats.cycles_per_block =
         safe_div(aggregate_stats.total_instruction_count, aggregate_stats.nb_blocks);
     aggregate_stats.cycles_per_transaction =
@@ -226,16 +243,22 @@ fn aggregate_execution_stats(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = HostExecutorArgs::parse();
+    let args = CostEstimatorArgs::parse();
+    let no_safe_head_split = args.no_safe_head_split;
+    let args = args.host;
 
     dotenv::from_path(&args.env_file).ok();
     utils::setup_logger();
 
-    let data_fetcher = OPSuccinctDataFetcher::new_with_rollup_config().await?;
+    let l1_selection = L1BlockSelectionConfig::from_env()?;
+    let data_fetcher =
+        OPSuccinctDataFetcher::new_with_rollup_config_and_l1_selection(l1_selection).await?;
     let l2_chain_id = data_fetcher.get_l2_chain_id().await?;
 
     // Get the host CLIs in order, in parallel.
     let host = initialize_host(Arc::new(data_fetcher.clone()));
+
+    enforce_l1_selection_supported(host.as_ref(), &data_fetcher, l1_selection).await?;
 
     let (l2_start_block, l2_end_block) = if args.rolling {
         info!("Using rolling block range");
@@ -256,9 +279,14 @@ async fn main() -> Result<()> {
     // splitting algorithm. Otherwise, we use the simple range splitting algorithm.
     let safe_db_activated = data_fetcher.is_safe_db_activated().await?;
 
-    let split_ranges = if safe_db_activated {
-        split_range_based_on_safe_heads(l2_start_block, l2_end_block, args.effective_batch_size())
-            .await?
+    let split_ranges = if safe_db_activated && !no_safe_head_split {
+        split_range_based_on_safe_heads(
+            &data_fetcher,
+            l2_start_block,
+            l2_end_block,
+            args.effective_batch_size(),
+        )
+        .await?
     } else {
         split_range_basic(l2_start_block, l2_end_block, args.effective_batch_size())
     };

@@ -21,7 +21,7 @@ edition = "2021"
 authors = ["ratankaliani", "zachobront", "fakedev9999", "yuwen01"]
 homepage = "https://succinctlabs.github.io/op-succinct/"
 repository = "https://github.com/succinctlabs/op-succinct"
-version = "3.8.1"
+version = "3.12.0"
 
 [workspace.dependencies]
 # general
@@ -80,24 +80,24 @@ vergen = "=9.0.4"
 vergen-git2 = "=1.0.5"
 
 # kona
-kona-mpt = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
-kona-derive = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0", default-features = false }
-kona-driver = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
-kona-preimage = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0", features = [
+kona-mpt = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
+kona-derive = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2", default-features = false }
+kona-driver = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
+kona-preimage = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2", features = [
     "rkyv",
     "serde",
 ] }
-kona-executor = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
-kona-proof = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
+kona-executor = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
+kona-proof = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
 
-kona-client = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
-kona-host = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
-kona-providers-alloy = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
+kona-client = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
+kona-host = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
+kona-providers-alloy = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
 # Note: kona-rpc is NOT included to avoid rollup-boost -> reth-optimism-primitives dependency.
 # RPC types are defined locally in utils/host/src/rpc_types.rs instead.
-kona-protocol = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0", default-features = false }
-kona-registry = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0", default-features = false }
-kona-genesis = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0", default-features = false }
+kona-protocol = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2", default-features = false }
+kona-registry = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2", default-features = false }
+kona-genesis = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2", default-features = false }
 
 # op-succinct
 op-succinct-prove = { path = "scripts/prove" }
@@ -114,6 +114,14 @@ op-succinct-range-utils = { path = "programs/range/utils" }
 op-succinct-bindings = { path = "bindings" }
 
 # Alloy (Network)
+#
+# [MANTLE] Held at 2.0.4 rather than upstream v3.12.0's 2.0.5. These are caret
+# requirements, so `2.0.5` lets cargo resolve the whole family to the newest 2.x
+# (2.4.1 at the time of this sync). alloy-genesis >= 2.4.1 adds a `bogota_time`
+# field to `ChainConfig`, which mantle-v2's vendored kona (`kona-registry`
+# v1.6.2) does not initialize — the workspace fails to compile. Upstream avoids
+# this only because its own lockfile pins the family lower. Our kona is pinned to
+# mantle-v2, so the alloy family moves when mantle-v2's kona moves, not before.
 alloy-signer-local = { version = "2.0.4" }
 alloy-provider = { version = "2.0.4" }
 alloy-transport = { version = "2.0.4" }
@@ -159,42 +167,50 @@ alloy-sol-macro = { version = "1.5.6", default-features = false }
 alloy-chains = { version = "0.2.33", default-features = false }
 
 # OP Alloy - from mantle-v2 rust workspace (aligned with kona develop + alloy 2.0.4)
-op-alloy-consensus = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0", default-features = false }
-op-alloy-rpc-types = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0", default-features = false }
-op-alloy-rpc-types-engine = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0", default-features = false }
-op-alloy-network = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0", default-features = false }
+op-alloy-consensus = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2", default-features = false }
+op-alloy-rpc-types = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2", default-features = false }
+op-alloy-rpc-types-engine = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2", default-features = false }
+op-alloy-network = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2", default-features = false }
 
 # Execution
 alloy-evm = { version = "0.34.0", default-features = false }
-alloy-op-evm = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0", default-features = false }
-# [MANTLE] revm sourced from mantle-xyz/revm-ghsa-5vfr-x84h-hmvf @ 99707e9f (revm v38 +
+alloy-op-evm = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2", default-features = false }
+# [MANTLE] revm sourced from mantle-xyz/revm at tag v107-mantle-arsia.1 (revm v38 +
 # Mantle protocol changes: ARSIA/JOVIAN, BVM_ETH, token_ratio, DA footprint,
-# Arsia fee validation + GHSA-5vfr-x84h-hmvf fix). Aligns with mantle-v2 rust workspace.
-revm = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f", default-features = false, features = [
+# Arsia fee validation, and the GHSA-5vfr-x84h-hmvf fix). Aligns with the mantle-v2
+# rust workspace; the tag moves in lockstep with the mantle-v2 kona tag above.
+# Replaces the former mantle-xyz/revm-ghsa-5vfr-x84h-hmvf @ 99707e9f pin: that fork
+# was a private stopgap carrying the GHSA fix, and being private also broke
+# `just build-elfs` (the SP1 docker build cannot authenticate to it).
+revm = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1", default-features = false, features = [
     "bn",
 ] }
-revm-precompile = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f", default-features = false }
-op-revm = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f", default-features = false }
+revm-precompile = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1", default-features = false }
+op-revm = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1", default-features = false }
 
-# SP1 v6.1.0 (Hypercube)
-sp1-sdk = { version = "=6.1.0", features = ["network", "blocking", "profiling"] }
-sp1-lib = { version = "=6.1.0", features = ["verify"] }
-sp1-zkvm = { version = "=6.1.0", features = ["verify"] }
-sp1-build = "=6.1.0"
-sp1-prover = "=6.1.0"
-sp1-prover-types = "=6.1.0"
-sp1-core-executor = "=6.1.0"
-sp1-hypercube = "=6.1.0"
-sp1-primitives = "=6.1.0"
-sp1-cluster-artifact = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.1.5" }
-sp1-cluster-common = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.1.5" }
-sp1-cluster-utils = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.1.5" }
+# SP1 v6.4.0 (Hypercube)
+sp1-sdk = { version = "=6.4.0", features = ["network", "blocking", "profiling"] }
+sp1-lib = { version = "=6.4.0", features = ["verify"] }
+sp1-zkvm = { version = "=6.4.0", features = ["verify"] }
+sp1-build = "=6.4.0"
+sp1-prover = "=6.4.0"
+sp1-prover-types = "=6.4.0"
+sp1-core-executor = "=6.4.0"
+sp1-hypercube = "=6.4.0"
+sp1-primitives = "=6.4.0"
+sp1-cluster-artifact = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.7.2" }
+sp1-cluster-common = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.7.2" }
+sp1-cluster-utils = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.7.2" }
 
 # kzg
 kzg-rs = { version = "0.2.8", features = ["rkyv", "serde"] }
 c-kzg = { version = "2.1.5", default-features = false }
 
 # Cloud dependencies
+# [MANTLE] Held at 0.27 to match alloy-signer-gcp 2.0.4. Upstream v3.12.0 moved this
+# to 0.29 + explicit `tls-webpki-roots` because it also moved alloy to 2.0.5; we keep
+# the alloy family at 2.0.4 (see the Alloy block above), so the gcloud-sdk pin stays
+# with it. Bump both together or not at all.
 gcloud-sdk = "0.27"
 
 [profile.release-client-lto]
@@ -205,6 +221,24 @@ lto = "fat"
 
 [patch.crates-io]
 sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.0.0" }
+# [MANTLE] Held at the 0.10.8 patch tag, NOT upstream v3.12.0's 0.11.0.
+#
+# This tag must match the sha3 requirement of whatever `alloy-primitives` resolves to,
+# because `sha3-keccak` is what routes alloy's `keccak256()` through this crate — and the
+# patched fork is what turns that into an SP1 precompile syscall instead of software keccak.
+#   alloy-primitives 1.5.x  ->  sha3 "0.10.8"  ->  this tag
+#   alloy-primitives 1.6.0  ->  sha3 "0.11"    ->  upstream's patch-sha3-0.11.0 tag
+# sha3 is 0.x, so 0.11 is NOT a semver-compatible substitute for a 0.10.x requirement:
+# pairing our 1.5.x-era resolution with upstream's 0.11.0 tag makes cargo report
+# "patch ... was not used in the crate graph" and silently fall back to unaccelerated
+# keccak. Upstream is self-consistent (1.6.0 + 0.11.0); we stay self-consistent here.
+#
+# We deliberately do NOT move alloy-primitives to 1.6.0: it belongs to the same version
+# lockstep as the kona dependency family above, so it moves when mantle-v2's kona moves.
+#
+# When changing this tag, verify with: grep -c '^\[\[patch.unused\]\]' Cargo.lock  # want 0
+# Note cargo will not re-resolve sha3 on its own if the locked version still satisfies the
+# requirement — force it with `cargo update -p sha3 --precise <version>`.
 sha3 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha3", tag = "patch-sha3-0.10.8-sp1-6.0.0" }
 substrate-bn = { git = "https://github.com/sp1-patches/bn", tag = "patch-0.6.0-sp1-6.0.0-substrate-bn" }
 p256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-p256-13.2-sp1-6.0.0" }
@@ -213,30 +247,32 @@ tiny-keccak = { git = "https://github.com/sp1-patches/tiny-keccak", tag = "patch
 
 # Patch op-alloy and alloy-op-evm to use the mantle-v2 versions
 # Required so transitive deps from kona + op-alloy all resolve to the same source.
-op-alloy-consensus = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
-op-alloy-network = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
-op-alloy-rpc-types = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
-op-alloy-rpc-types-engine = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
-op-alloy-provider = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
-alloy-op-evm = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
-alloy-op-hardforks = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
-op-alloy = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.0" }
+op-alloy-consensus = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
+op-alloy-network = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
+op-alloy-rpc-types = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
+op-alloy-rpc-types-engine = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
+op-alloy-provider = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
+alloy-op-evm = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
+alloy-op-hardforks = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
+op-alloy = { git = "https://github.com/mantle-xyz/mantle-v2", tag = "v1.6.2" }
 
 # [MANTLE] Patch every revm-family crate (including transitively-pulled ones) to
-# mantle-xyz/revm-ghsa-5vfr-x84h-hmvf @ 99707e9f. Matches the pattern in mantle-v2/rust/Cargo.toml.
-revm = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f" }
-revm-bytecode = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f" }
-revm-context = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f" }
-revm-context-interface = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f" }
-revm-database = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f" }
-revm-database-interface = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f" }
-revm-handler = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f" }
-revm-inspector = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f" }
-revm-interpreter = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f" }
-revm-precompile = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f" }
-revm-primitives = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f" }
-revm-state = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f" }
-op-revm = { git = "https://github.com/mantle-xyz/revm-ghsa-5vfr-x84h-hmvf", rev = "99707e9f" }
+# mantle-xyz/revm @ tag v107-mantle-arsia.1. Matches the pattern in mantle-v2/rust/Cargo.toml.
+# All entries must share one tag — a split leaves two revm versions in the graph and
+# surfaces as OpSpecId / OpHaltReason / OpEvm type mismatches against the kona executor.
+revm = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1" }
+revm-bytecode = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1" }
+revm-context = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1" }
+revm-context-interface = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1" }
+revm-database = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1" }
+revm-database-interface = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1" }
+revm-handler = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1" }
+revm-inspector = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1" }
+revm-interpreter = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1" }
+revm-precompile = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1" }
+revm-primitives = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1" }
+revm-state = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1" }
+op-revm = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.1" }
 
 # [MANTLE] alloy-evm is intentionally NOT patched: it resolves from crates.io = upstream
 # alloy-rs/evm v0.34.0. The former mantle-xyz/evm@mantle-v0.34.0 fork only added a dead-code
