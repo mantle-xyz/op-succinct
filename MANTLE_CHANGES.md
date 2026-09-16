@@ -534,7 +534,7 @@ consults it instead of classifying inline. Three classes qualify, and they share
 |---|---|---|
 | Admission shed | `is_admission_shed_error` | self-hosted prover pool momentarily full |
 | Transient transport | `is_transient_transport_error` (gRPC `UNAVAILABLE`) | gateway down, connection reset |
-| Unsatisfiable precondition | `is_unsatisfiable_precondition_error` (gRPC `FAILED_PRECONDITION`) | **no program registered for our vk_hash** — i.e. the deployed ELF was never registered with the cluster, the predictable failure right after a vkey change |
+| Unsatisfiable precondition | `is_unsatisfiable_precondition_error` (gRPC `FAILED_PRECONDITION`) | **no program registered for our vk_hash** — something admitting requests by vk_hash in front of the prover refuses the current one, the predictable failure right after a vkey change. Not a missing cluster-side registration: the ELF is uploaded to the artifact store with every request (`ClusterElf::NewElf`) |
 
 These reset the row to `Unrequested` and retry the SAME range. Bisecting them is not merely
 useless, it is harmful: each split doubles the request volume aimed at a backend that rejects all
@@ -879,11 +879,15 @@ cargo-git checkout path, which is derived from the dependency URL and commit.
 4. **Rollback hazard:** once any row is written with `status = 8` (`Invalidated`), reverting to
    pre-v3.12.0 code will panic in `RequestStatus::From<i16>`, which has no arm for 8. Before
    rolling back, move those rows to another status.
-5. **Register the new ELFs with the proving cluster before starting the proposer.** Both vkeys
-   change in this sync, and an unregistered program makes the cluster reject every request with
-   `FAILED_PRECONDITION: program not registered for vk_hash <...>`. That is now classified
-   no-bisect (§3.10a), so the proposer retries whole ranges and recovers by itself once the
-   programs are registered — but it produces nothing until then.
+5. **A vkey change needs no cluster-side ELF registration.** The cluster submission path builds
+   `ClusterElf::NewElf`, and `setup_artifacts` uploads the whole guest binary to the artifact
+   store on every request — the ELF travels with the request, so a new vkey works as soon as the
+   new image is deployed. What does need updating is the pair of on-chain vkeys. If requests are
+   instead rejected with `FAILED_PRECONDITION: program not registered for vk_hash <...>`, the
+   refusal comes from whatever admits requests by vk_hash in front of the prover, not from the
+   cluster's artifact handling. That is classified no-bisect (§3.10a), so the proposer retries
+   whole ranges and recovers by itself once the vkey is admitted — but produces nothing until
+   then.
 6. `validity/Cargo.toml`'s `tonic` pin exists so `is_transient_transport_error` can downcast to
    the same `tonic::Status` type the pinned sp1-sdk uses. If SP1 6.4.0 pulls a different tonic,
    re-verify that downcast — a silent mismatch sends transient transport faults back into range

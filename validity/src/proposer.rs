@@ -380,22 +380,31 @@ fn is_transient_transport_error(e: &anyhow::Error) -> bool {
 /// Whether the prover backend rejected the request because its own state does not admit it,
 /// rather than because anything is wrong with the range.
 ///
-/// The case this exists for is `FailedPrecondition: program not registered for vk_hash <...>`:
-/// the cluster has no program registered for the vkey this build computes, so it rejects every
-/// request on arrival. That happens whenever the deployed ELF and the cluster's registered
-/// programs drift apart — most predictably right after a dependency bump changes the vkey.
+/// The case this exists for is `FailedPrecondition: program not registered for vk_hash <...>`,
+/// seen after a dependency bump changed the vkey.
+///
+/// That message is easy to misread as "the ELF must be registered with the cluster first". It
+/// must not: the cluster submission path builds `ClusterElf::NewElf`, and `setup_artifacts` in
+/// sp1-cluster-utils uploads the whole guest binary to the artifact store on every single
+/// request. The ELF travels with the request, so there is no cluster-side program registry to
+/// keep in sync and no pre-registration step before a vkey change. (`ClusterElf::ExistingElf`
+/// would reuse an already-uploaded artifact; nothing here ever constructs it.)
+///
+/// The rejection therefore originates in whatever admits requests by `vk_hash` in front of the
+/// prover — which layer that is depends on the deployment, so this predicate deliberately does
+/// not encode one.
 ///
 /// Such a failure must NOT bisect the range. Bisection exists for ranges that fail
 /// *deterministically because they are too big*; here the range is fine and splitting is
 /// actively harmful:
-/// - every split doubles the request volume aimed at a cluster that rejects all of it, and
-/// - the fragmentation is not undone once the program is registered, so the range is proved as many
-///   small pieces forever after, inflating range-proof count and aggregation cost.
+/// - every split doubles the request volume aimed at a backend that rejects all of it, and
+/// - the fragmentation is not undone once the vkey is admitted again, so the range is proved as
+///   many small pieces forever after, inflating range-proof count and aggregation cost.
 ///
 /// Note the alternative is not "give up": a `Failed` range is not in the active set
 /// `add_new_ranges` reads, so it is re-created as a gap on the next pass either way. Bisecting
 /// only changes the *shape* of that retry, for the worse. Resetting to `Unrequested` retries
-/// the same range and recovers on its own once the program is registered.
+/// the same range and recovers on its own once the vkey is admitted again.
 ///
 /// Keyed on the typed gRPC code, with a string fallback for when the error is not a
 /// downcastable `Status` of our tonic version — same rationale as
@@ -411,9 +420,8 @@ fn is_transient_transport_error(e: &anyhow::Error) -> bool {
 /// **Failure mode to watch:** if the proving cluster ever uses `FAILED_PRECONDITION` to mean
 /// "this range cannot be proven" (spec-violating, but possible), this predicate would retry such a
 /// range forever instead of bisecting it. The symptom is a range retried indefinitely with a
-/// `reason` mentioning an unsatisfiable precondition while nothing about the cluster is actually
-/// wrong. The fix then is to narrow this to also require the message to name an unregistered
-/// program.
+/// `reason` mentioning an unsatisfiable precondition while nothing about the backend is actually
+/// wrong. The fix then is to narrow this to also match on the message text, not the code alone.
 fn is_unsatisfiable_precondition_error(e: &anyhow::Error) -> bool {
     if let Some(status) = e.downcast_ref::<tonic::Status>() {
         return status.code() == tonic::Code::FailedPrecondition;
@@ -440,8 +448,9 @@ fn no_bisect_reason(e: &anyhow::Error) -> Option<&'static str> {
     } else if is_unsatisfiable_precondition_error(e) {
         Some(
             "unsatisfiable precondition on the prover backend (e.g. no program registered for \
-             this vk_hash) — ACTION: register the current range/aggregation ELF with the proving \
-             cluster",
+             this vk_hash) — ACTION: find what is admitting requests by vk_hash in front of the \
+             prover and why it refuses this one; the ELF itself ships with every request, so \
+             there is nothing to register",
         )
     } else {
         None
@@ -3653,23 +3662,29 @@ mod admission_shed_tests {
         }
     }
 
-    /// The reason string reaches operator-facing logs, and for this class the operator has to do
-    /// something specific (register the ELF). A reason that does not say so is a regression.
+    /// The reason string reaches operator-facing logs, and this class is the one where the
+    /// obvious reading of the error ("go register the ELF") is wrong — the guest binary is
+    /// uploaded with every request. The reason has to point at the admission layer instead, or
+    /// it sends the operator after a step that does not exist.
     #[test]
     fn the_precondition_reason_tells_the_operator_what_to_do() {
         let e: anyhow::Error =
             tonic::Status::failed_precondition("program not registered for vk_hash abc").into();
         let reason = no_bisect_reason(&e).expect("must be classified no-bisect");
         assert!(reason.contains("ACTION"), "reason must carry an operator action: {reason}");
-        assert!(reason.contains("register"), "reason must name the fix: {reason}");
+        assert!(reason.contains("vk_hash"), "reason must name what to investigate: {reason}");
+        assert!(
+            reason.contains("nothing to register"),
+            "reason must rule out the pre-registration misreading: {reason}"
+        );
     }
 
-    /// The failure this predicate exists for: the cluster has no program registered for our
+    /// The failure this predicate exists for: something in front of the prover refuses our
     /// current range vkey, so every request is rejected on arrival.
     ///
     /// Bisecting is not just useless here, it is harmful — the range is fine, so each split
-    /// doubles the request volume against a cluster that rejects all of it, and leaves the
-    /// range permanently fragmented once the program is finally registered.
+    /// doubles the request volume against a backend that rejects all of it, and leaves the
+    /// range permanently fragmented once the vkey is admitted again.
     #[test]
     fn program_not_registered_is_a_precondition_failure() {
         let not_registered: anyhow::Error = tonic::Status::failed_precondition(
