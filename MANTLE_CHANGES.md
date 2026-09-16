@@ -13,8 +13,8 @@ synchronizing future upstream changes.
 | Upstream tracking point | succinctlabs/op-succinct tag `v3.12.0` @ `94ce6393` |
 | Mantle branch | `main` (this repo, `origin` = `mantle-xyz/op-succinct`). Sync branches are cut from `main` and merged back by PR; both the `mantle/op-succinct-v3.8.1` and `mantle/proposer-hardening` branches were deleted once merged (PR #43 / #46). |
 | Rust toolchain | nightly-2026-05-15 (rustc 1.97-nightly; see `rust-toolchain.toml`) |
-| Dependency source: kona / op-alloy / alloy-op-evm | `mantle-xyz/mantle-v2` rust subtree @ tag `v1.6.2` (commit `37df2960`). Pinned by **tag**, not rev — 25 entries in `Cargo.toml` use `tag = "v1.6.2"`; bump them together. |
-| Dependency source: revm family | `mantle-xyz/revm` @ tag `v107-mantle-arsia.1` (commit `1ed03aac`) via `[patch.crates-io]`, 16 entries. Resolves to revm 38.0.0 / revm-handler 18.1.0 / **op-revm 19.0.0** (upstream op-succinct is on op-revm 20.0.0). Moves in **lockstep** with the kona tag above. |
+| Dependency source: kona / op-alloy / alloy-op-evm | `mantle-xyz/mantle-v2` rust subtree @ tag `mantle-v1.6.3` (commit `05e2f58d`). Pinned by **tag**, not rev — 25 entries in `Cargo.toml` use `tag = "mantle-v1.6.3"`; bump them together. Note mantle-v2 switched to the `mantle-v` tag prefix at this release; a plain `sort` puts those tags *before* every `v*` tag, so "latest" is not the tail of a sorted list. |
+| Dependency source: revm family | `mantle-xyz/revm` @ tag `v107-mantle-arsia.2` (commit `835cb4eb`) via `[patch.crates-io]`, 16 entries. Resolves to revm 38.0.0 / revm-handler 18.1.0 / **op-revm 19.0.0** (upstream op-succinct is on op-revm 20.0.0). Moves in **lockstep** with the kona tag above. |
 | Dependency source: alloy-evm | **upstream `alloy-rs/evm` v0.34.0 from crates.io — NOT patched.** The former `mantle-xyz/evm @ mantle-v0.34.0` fork only added a dead-code `token_ratio` trait method; mantle-v2/rust dropped it at `d2e4ebea` (commit `75d90fc71`), so the `[patch.crates-io]` redirect was removed here to stay in lockstep. |
 | Dependency source: alloy core/network | crates.io `2.0.4` — deliberately **behind** upstream v3.12.0's `2.0.5`. See §3.11. |
 | Dependency source: alloy-primitives | crates.io `1.5.x` (resolves 1.5.7) — deliberately behind upstream's 1.6.0, which belongs to the kona version lockstep. This is what fixes the `sha3` patch tag; see §3.11. |
@@ -89,7 +89,7 @@ Pick `--start` / `--end` ≥ 94355444 (mainnet) for any cost-estimator or proof 
 
 Every kona-genesis / kona-protocol / kona-derive / kona-executor / kona-host / op-alloy /
 alloy-op-evm dependency in `Cargo.toml` is sourced from `mantle-xyz/mantle-v2` at the
-pinned `tag = "v1.6.2"` (25 entries; commit `37df2960`). The mantle-v2/rust
+pinned `tag = "mantle-v1.6.3"` (25 entries; commit `05e2f58d`). The mantle-v2/rust
 side owns:
 
 - Mantle hardforks (ARSIA / JOVIAN / SKADI / LIMB) and their bundles
@@ -181,8 +181,8 @@ grep -rn "\[MANTLE\]" . --include="*.rs" --include="*.toml" --include="*.sol" \
 
 | File | Change |
 |---|---|
-| `Cargo.toml` | All `kona-*`, `op-alloy*`, `alloy-op-evm*` deps switched from crates.io / the official kona repo to `mantle-xyz/mantle-v2` git at the pinned tag (currently `v1.6.2`; see §1). |
-| `Cargo.toml` `[patch.crates-io]` | All 13 revm-family crates redirected to `mantle-xyz/revm` at the pinned tag (currently `v107-mantle-arsia.1`; see §1). |
+| `Cargo.toml` | All `kona-*`, `op-alloy*`, `alloy-op-evm*` deps switched from crates.io / the official kona repo to `mantle-xyz/mantle-v2` git at the pinned tag (currently `mantle-v1.6.3`; see §1). |
+| `Cargo.toml` `[patch.crates-io]` | All 13 revm-family crates redirected to `mantle-xyz/revm` at the pinned tag (currently `v107-mantle-arsia.2`; see §1). |
 | `Cargo.toml` `[patch.crates-io]` | ~~`alloy-evm` redirected to `mantle-xyz/evm @ mantle-v0.34.0`.~~ **Dropped at the `d2e4ebea` bump** — `alloy-evm` now resolves from crates.io (upstream `alloy-rs/evm` v0.34.0). See §3.1a. |
 | `Cargo.toml` | EigenDA and Celestia DA-backend crates dropped (`utils/eigenda/*`, `programs/range/*/celestia`, `programs/range/*/eigenda`, etc.). Validity-Oracle-only path. |
 
@@ -1042,7 +1042,7 @@ the host just needs `cargo` and the SP1 CLI on PATH.
 | Location | Why it churns | Post-sync checks |
 |---|---|---|
 | `Cargo.toml` `[patch.crates-io]` | Every upstream dep bump might add/remove a revm-family crate. | Diff against `mantle-v2/rust/Cargo.toml` `[patch.crates-io]` — keep them in lock-step. |
-| `Cargo.toml` mantle-v2 pins | 25 entries pin the same tag; bump them together. | `grep -c 'tag = "v1.6.2"' Cargo.toml` should equal 25, and `grep -c 'tag = "v107-mantle-arsia.1"'` should equal 16 for the revm family. Both move in lockstep. |
+| `Cargo.toml` mantle-v2 pins | 25 entries pin the same tag; bump them together. | `grep -c 'tag = "mantle-v1.6.3"' Cargo.toml` should equal 25, and `grep -c 'tag = "v107-mantle-arsia.2"'` should equal 16 for the revm family. Both move in lockstep. |
 | `utils/signer/src/lib.rs::from_env` | New auth backends or env-var conventions arrive in alloy-signer-gcp. | Verify the `HSM_API_NAME` branch still compiles + the precedence ordering still puts Mantle compat first. |
 | `bindings/build.rs` `required_contracts` | New contract ABIs land upstream. | Diff vs upstream's list; if a new FP-related ABI appears, drop it (FP is gone). |
 | `validity/src/proposer.rs` | The proposer flow is the most-edited file in this repo. | Look for any spot where upstream replaced our checkpoint-validation logic — `historicBlockHashes` cross-check must stay. |
