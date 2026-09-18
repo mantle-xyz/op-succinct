@@ -1,14 +1,14 @@
 //! [`PrecompileProvider`] for FPVM-accelerated OP Stack precompiles.
 
 use alloc::string::String;
-use alloy_primitives::{Address, Bytes};
+use alloy_primitives::Address;
 use op_revm::{precompiles::OpPrecompiles, OpSpecId};
 use revm::{
     context::{Cfg, ContextTr},
     context_interface::JournalTr,
-    handler::{EthPrecompiles, PrecompileProvider},
-    interpreter::{CallInput, CallInputs, Gas, InstructionResult, InterpreterResult},
-    precompile::{PrecompileError, PrecompileStatus},
+    handler::{precompile_output_to_interpreter_result, EthPrecompiles, PrecompileProvider},
+    interpreter::{CallInput, CallInputs, InterpreterResult},
+    primitives::AddressSet,
 };
 #[cfg(any(test, target_os = "zkvm"))]
 use revm_precompile::PrecompileId;
@@ -111,17 +111,11 @@ where
         context: &mut CTX,
         inputs: &CallInputs,
     ) -> Result<Option<Self::Output>, String> {
-        // Bail before allocating `result` or materializing input bytes when
-        // the call is not to a precompile; this mirrors canonical revm and
-        // keeps the non-precompile call path cheap in the zkVM.
+        // Bail before materializing input bytes when the call is not to a
+        // precompile; this mirrors canonical revm and keeps the
+        // non-precompile call path cheap in the zkVM.
         let Some(precompile) = self.inner.precompiles.get(&inputs.bytecode_address) else {
             return Ok(None);
-        };
-
-        let mut result = InterpreterResult {
-            result: InstructionResult::Return,
-            gas: Gas::new(inputs.gas_limit),
-            output: Bytes::new(),
         };
 
         // Track cycles for accelerated precompiles. zkVM acceleration comes
@@ -151,8 +145,7 @@ where
                 println!("cycle-tracker-report-start: precompile-{}", name);
             }
 
-            // Third argument is the EIP-8037 reservoir; pass 0 in the zkVM (not applicable).
-            let exec_result = precompile.execute(input_bytes, inputs.gas_limit, 0);
+            let exec_result = precompile.execute(input_bytes, inputs.gas_limit, inputs.reservoir);
 
             #[cfg(target_os = "zkvm")]
             if let Some(name) = tracker_name {
@@ -162,49 +155,26 @@ where
             exec_result
         };
 
-        match exec_result {
-            Ok(output) => {
-                // Mirrors revm-handler's EthPrecompiles::run gas accounting:
-                // - state/refund are always applied
-                // - success or revert: spend exactly gas_used as regular cost
-                // - halt (incl. OOG): consume ALL remaining gas (spend_all)
-                result.gas.set_state_gas_spent(output.state_gas_used);
-                result.gas.record_refund(output.gas_refunded);
-                if output.status.is_success_or_revert() {
-                    let _ = result.gas.record_regular_cost(output.gas_used);
-                } else {
-                    result.gas.spend_all();
-                }
-                match output.status {
-                    PrecompileStatus::Success => {
-                        result.result = InstructionResult::Return;
-                        result.output = output.bytes;
-                    }
-                    PrecompileStatus::Revert => {
-                        result.result = InstructionResult::Revert;
-                        result.output = output.bytes;
-                    }
-                    PrecompileStatus::Halt(halt) => {
-                        result.result = if halt.is_oog() {
-                            InstructionResult::PrecompileOOG
-                        } else {
-                            InstructionResult::PrecompileError
-                        };
-                        if !halt.is_oog() && context.journal().depth() == 1 {
-                            context.local_mut().set_precompile_error_context(halt.to_string());
-                        }
-                    }
-                }
+        // Only `PrecompileError::{Fatal, FatalAny}` come back as `Err`; all
+        // non-fatal halts (OOG, invalid input) are carried inside the
+        // `PrecompileOutput`'s `status` and mapped below.
+        let output = exec_result.map_err(|e| e.to_string())?;
+
+        // If this is a top-level precompile call (depth == 1), persist the
+        // halt message into the local context so it can be returned as output
+        // in the final result. Only do this for non-OOG halts.
+        if let Some(halt_reason) = output.halt_reason() {
+            if !halt_reason.is_oog() && context.journal().depth() == 1 {
+                context.local_mut().set_precompile_error_context(halt_reason.to_string());
             }
-            Err(PrecompileError::Fatal(e)) => return Err(e),
-            Err(PrecompileError::FatalAny(e)) => return Err(e.to_string()),
         }
 
+        let result = precompile_output_to_interpreter_result(output, inputs.gas_limit);
         Ok(Some(result))
     }
 
     #[inline]
-    fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
+    fn warm_addresses(&self) -> &AddressSet {
         self.inner.warm_addresses()
     }
 
@@ -218,7 +188,7 @@ where
 mod tests {
     use super::*;
     use alloc::vec::Vec;
-    use alloy_primitives::{B256, U256};
+    use alloy_primitives::{Bytes, B256, U256};
     use op_revm::{precompiles::bn254_pair, DefaultOp as _, OpContext};
     use revm::{
         bytecode::Bytecode,
@@ -232,7 +202,7 @@ mod tests {
 
     type TestContext = OpContext<EmptyDB>;
 
-    const ALL_OP_SPECS: [OpSpecId; 12] = [
+    const ALL_OP_SPECS: [OpSpecId; 13] = [
         OpSpecId::BEDROCK,
         OpSpecId::REGOLITH,
         OpSpecId::CANYON,
@@ -242,7 +212,9 @@ mod tests {
         OpSpecId::HOLOCENE,
         OpSpecId::ISTHMUS,
         OpSpecId::JOVIAN,
-        OpSpecId::INTEROP,
+        OpSpecId::KARST,
+        OpSpecId::LAGOON,
+        // [MANTLE] Mantle's own forks, absent upstream.
         OpSpecId::OSAKA,
         OpSpecId::ARSIA,
     ];
@@ -263,7 +235,8 @@ mod tests {
             OpSpecId::HOLOCENE |
             OpSpecId::ISTHMUS |
             OpSpecId::JOVIAN |
-            OpSpecId::INTEROP |
+            OpSpecId::KARST |
+            OpSpecId::LAGOON |
             OpSpecId::OSAKA |
             OpSpecId::ARSIA => {}
         }
@@ -276,9 +249,11 @@ mod tests {
             input: CallInput::Bytes(input),
             gas_limit,
             // [MANTLE] revm 38 added the EIP-8037 reservoir + replaced known_bytecode's
-            // Option with a (hash, Bytecode) tuple. The defaults below preserve the
+            // Option with a (hash, Bytecode) tuple; revm 41 added
+            // charged_new_account_state_gas. The defaults below preserve the
             // "no known bytecode" semantics the test previously expressed via `None`.
             reservoir: 0,
+            charged_new_account_state_gas: false,
             bytecode_address: address,
             target_address: Address::ZERO, // Simulates DELEGATECALL context
             caller: Address::ZERO,
@@ -415,8 +390,10 @@ mod tests {
         let call_inputs = CallInputs {
             input: CallInput::SharedBuffer(0..0),
             gas_limit: u64::MAX,
-            // [MANTLE] revm 38: see create_call_inputs() for reservoir / known_bytecode rationale.
+            // [MANTLE] revm 38/41: see create_call_inputs() for reservoir /
+            // charged_new_account_state_gas / known_bytecode rationale.
             reservoir: 0,
+            charged_new_account_state_gas: false,
             bytecode_address: sha256_addr,
             target_address: Address::ZERO,
             caller: Address::ZERO,
@@ -546,14 +523,12 @@ mod tests {
             let op_precompiles = OpPrecompiles::new_with_spec(spec);
             let zkvm_precompiles = OpZkvmPrecompiles::new_with_spec(spec);
 
-            let op_addresses: Vec<_> =
-                <OpPrecompiles as PrecompileProvider<TestContext>>::warm_addresses(&op_precompiles)
-                    .collect();
-            let zkvm_addresses: Vec<_> =
+            let op_addresses =
+                <OpPrecompiles as PrecompileProvider<TestContext>>::warm_addresses(&op_precompiles);
+            let zkvm_addresses =
                 <OpZkvmPrecompiles as PrecompileProvider<TestContext>>::warm_addresses(
                     &zkvm_precompiles,
-                )
-                .collect();
+                );
 
             assert_eq!(
                 zkvm_addresses.len(),
@@ -561,7 +536,7 @@ mod tests {
                 "ZKVM and canonical OP precompile counts must match for {spec:?}",
             );
 
-            for address in &op_addresses {
+            for address in op_addresses {
                 assert!(
                     <OpZkvmPrecompiles as PrecompileProvider<TestContext>>::contains(
                         &zkvm_precompiles,
@@ -571,7 +546,7 @@ mod tests {
                 );
             }
 
-            for address in &zkvm_addresses {
+            for address in zkvm_addresses {
                 assert!(
                     <OpPrecompiles as PrecompileProvider<TestContext>>::contains(
                         &op_precompiles,
@@ -589,6 +564,8 @@ mod tests {
             let op_precompiles = OpPrecompiles::new_with_spec(spec);
             let op_addresses: Vec<_> =
                 <OpPrecompiles as PrecompileProvider<TestContext>>::warm_addresses(&op_precompiles)
+                    .iter()
+                    .copied()
                     .collect();
 
             for address in op_addresses {
@@ -630,12 +607,12 @@ mod tests {
 
     #[test]
     fn test_jovian_family_uses_canonical_bn254_pairing_limits() {
-        // [MANTLE] mantle-elysium op-revm reroutes OSAKA/ARSIA away from jovian() precompiles to
-        // canonical OSAKA precompiles (see op-revm's OpPrecompiles::new_with_spec comment
-        // "[mantle] add osaka to the list of specs that use the osaka precompiles"). So only
-        // JOVIAN and INTEROP enforce the Jovian BN254 pairing input cap; OSAKA/ARSIA accept
-        // oversized inputs (they fall back to the standard bn254::run_pair path).
-        for spec in [OpSpecId::JOVIAN, OpSpecId::INTEROP] {
+        // [MANTLE] Mantle's op-revm reroutes OSAKA/ARSIA away from the jovian() precompiles to
+        // the plain eth set (op-geth PrecompiledContractsMantleSkadi parity), so they accept
+        // oversized inputs via the standard bn254::run_pair path and are excluded here. The
+        // three specs below route exactly as upstream does — JOVIAN to jovian(), KARST/LAGOON
+        // to karst() — so this matches upstream v3.14.0's spec list.
+        for spec in [OpSpecId::JOVIAN, OpSpecId::KARST, OpSpecId::LAGOON] {
             let oversized_pairing_input =
                 vec![0; oversized_aligned_pair_input_len(bn254_pair::JOVIAN_MAX_INPUT_SIZE)];
             let call_inputs =

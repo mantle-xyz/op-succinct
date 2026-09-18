@@ -1,6 +1,6 @@
 use std::{fmt::Debug, sync::Arc};
 
-use alloy_op_evm::post_exec::PostExecEvmFactoryAdapter;
+use alloy_op_evm::{block::OpAlloyReceiptBuilder, post_exec::PostExecEvmFactoryAdapter};
 use alloy_primitives::Sealed;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -135,11 +135,16 @@ pub trait WitnessExecutor {
         // [MANTLE] Wrap with PostExecEvmFactoryAdapter so the resulting OpBlockExecutorFactory
         // satisfies BlockExecutorFactory (only PostExecEvmFactoryAdapter<F> and OpEvmFactory<Tx>
         // are accepted by mantle-v2's alloy-op-evm).
+        // [MANTLE] kona v1.7.0 made the receipt builder a caller-supplied parameter (it was
+        // hardcoded to OpAlloyReceiptBuilder inside StatelessL2Builder before). OP Stack chains
+        // pass OpAlloyReceiptBuilder; only chains with a different receipt envelope (e.g. Celo's
+        // CIP-64) supply their own, so this preserves the previous behaviour exactly.
         let executor = KonaExecutor::new(
             rollup_config.as_ref(),
             l2_provider.clone(),
             l2_provider,
             PostExecEvmFactoryAdapter::new(ZkvmOpEvmFactory::new()),
+            OpAlloyReceiptBuilder::default(),
             None,
         );
         let mut driver = Driver::new(cursor, executor, pipeline);

@@ -13,12 +13,12 @@ synchronizing future upstream changes.
 | Upstream tracking point | succinctlabs/op-succinct tag `v3.12.0` @ `94ce6393` |
 | Mantle branch | `main` (this repo, `origin` = `mantle-xyz/op-succinct`). Sync branches are cut from `main` and merged back by PR; both the `mantle/op-succinct-v3.8.1` and `mantle/proposer-hardening` branches were deleted once merged (PR #43 / #46). |
 | Rust toolchain | nightly-2026-05-15 (rustc 1.97-nightly; see `rust-toolchain.toml`) |
-| Dependency source: kona / op-alloy / alloy-op-evm | `mantle-xyz/mantle-v2` rust subtree @ tag `mantle-v1.6.3` (commit `05e2f58d`). Pinned by **tag**, not rev — 25 entries in `Cargo.toml` use `tag = "mantle-v1.6.3"`; bump them together. Note mantle-v2 switched to the `mantle-v` tag prefix at this release; a plain `sort` puts those tags *before* every `v*` tag, so "latest" is not the tail of a sorted list. |
-| Dependency source: revm family | `mantle-xyz/revm` @ tag `v107-mantle-arsia.2` (commit `835cb4eb`) via `[patch.crates-io]`, 16 entries. Resolves to revm 38.0.0 / revm-handler 18.1.0 / **op-revm 19.0.0** (upstream op-succinct is on op-revm 20.0.0). Moves in **lockstep** with the kona tag above. |
+| Dependency source: kona / op-alloy / alloy-op-evm | ⚠️ **In development (§3.12): branch-pinned**, `mantle-xyz/mantle-v2` @ branch `dev/mantle-v1.6.3` (resolves `e8315fbf`), 27 entries — kona v1.7.0 line. Must become a tag before release. Last released state was tag `mantle-v1.6.3` (`05e2f58d`). Note mantle-v2 switched to the `mantle-v` tag prefix; a plain `sort` puts those *before* every `v*` tag, so "latest" is not the tail of a sorted list. |
+| Dependency source: revm family | ⚠️ **In development (§3.12): branch-pinned**, `mantle-xyz/revm` @ branch `dev/mantle-v1.6.3` (resolves `1903a86a`) via `[patch.crates-io]`, 14 entries → revm **41.0.0**. `op-revm` **20.0.0** now comes from mantle-v2 instead (it is a path member there since bluealloy deleted `crates/op-revm`). Moves in **lockstep** with the kona pin above. Last released state was tag `v107-mantle-arsia.2` (revm 38 / op-revm 19). |
 | Dependency source: alloy-evm | **upstream `alloy-rs/evm` v0.34.0 from crates.io — NOT patched.** The former `mantle-xyz/evm @ mantle-v0.34.0` fork only added a dead-code `token_ratio` trait method; mantle-v2/rust dropped it at `d2e4ebea` (commit `75d90fc71`), so the `[patch.crates-io]` redirect was removed here to stay in lockstep. |
-| Dependency source: alloy core/network | crates.io `2.0.4` — deliberately **behind** upstream v3.12.0's `2.0.5`. See §3.11. |
-| Dependency source: alloy-primitives | crates.io `1.5.x` (resolves 1.5.7) — deliberately behind upstream's 1.6.0, which belongs to the kona version lockstep. This is what fixes the `sha3` patch tag; see §3.11. |
-| SP1 | `=6.4.0` + sp1-cluster tag `v2.7.2` |
+| Dependency source: alloy core/network | crates.io `=2.4.2` — deliberately **ahead** of upstream v3.14.0's `=2.1.1`, because kona v1.7.0's Mantle registry sets `ChainConfig.bogota_time`, which needs alloy-genesis 2.4.x. The direction reversed from the previous sync; see §3.12. |
+| Dependency source: alloy-primitives | crates.io `1.6.0` (resolves 1.7.3), moved with the kona v1.7.0 lockstep. The `sha3` patch tag moved with it: `patch-sha3-0.11.0-sp1-6.0.0`. Getting this pair out of step silently drops SP1 keccak acceleration; see §3.11's trap and the `patch.unused` check in §3.12. |
+| SP1 | `=6.4.0` + sp1-cluster tag `v2.7.2`. Deliberately below upstream v3.14.0's `=6.8.0` — `sp1-cluster v2.7.2` pins SP1 exactly, so a bump cannot resolve. This blocks the mTLS feature; see §3.12a and the §6.2 time bomb. |
 | Contracts baseline | `mantle-xyz/op-succinct` tag `v1.1.7-2` (a.k.a. "v117"); ported into `contracts/` |
 
 ### 1.0 Release versioning
@@ -89,8 +89,8 @@ Pick `--start` / `--end` ≥ 94355444 (mainnet) for any cost-estimator or proof 
 
 Every kona-genesis / kona-protocol / kona-derive / kona-executor / kona-host / op-alloy /
 alloy-op-evm dependency in `Cargo.toml` is sourced from `mantle-xyz/mantle-v2` at the
-pinned `tag = "mantle-v1.6.3"` (25 entries; commit `05e2f58d`). The mantle-v2/rust
-side owns:
+pinned ref — currently `branch = "dev/mantle-v1.6.3"` (27 entries; resolves `e8315fbf`) while the
+kona v1.7.0 work is in development, see §3.12. The mantle-v2/rust side owns:
 
 - Mantle hardforks (ARSIA / JOVIAN / SKADI / LIMB) and their bundles
 - BVM_ETH deposit-tx fields end-to-end
@@ -182,7 +182,7 @@ grep -rn "\[MANTLE\]" . --include="*.rs" --include="*.toml" --include="*.sol" \
 | File | Change |
 |---|---|
 | `Cargo.toml` | All `kona-*`, `op-alloy*`, `alloy-op-evm*` deps switched from crates.io / the official kona repo to `mantle-xyz/mantle-v2` git at the pinned tag (currently `mantle-v1.6.3`; see §1). |
-| `Cargo.toml` `[patch.crates-io]` | All 13 revm-family crates redirected to `mantle-xyz/revm` at the pinned tag (currently `v107-mantle-arsia.2`; see §1). |
+| `Cargo.toml` `[patch.crates-io]` | 12 revm-family crates redirected to `mantle-xyz/revm` at the pinned ref, plus `op-revm` redirected to `mantle-xyz/mantle-v2` (see §1 / §3.12). The 12 must match mantle-v2's own patch list exactly; `op-revm` is deliberately absent from *its* list because it is a path member there. |
 | `Cargo.toml` `[patch.crates-io]` | ~~`alloy-evm` redirected to `mantle-xyz/evm @ mantle-v0.34.0`.~~ **Dropped at the `d2e4ebea` bump** — `alloy-evm` now resolves from crates.io (upstream `alloy-rs/evm` v0.34.0). See §3.1a. |
 | `Cargo.toml` | EigenDA and Celestia DA-backend crates dropped (`utils/eigenda/*`, `programs/range/*/celestia`, `programs/range/*/eigenda`, etc.). Validity-Oracle-only path. |
 
@@ -893,6 +893,125 @@ cargo-git checkout path, which is derived from the dependency URL and commit.
    re-verify that downcast — a silent mismatch sends transient transport faults back into range
    bisection (§3.9).
 
+### 3.12 Upstream sync v3.12.0 → v3.14.0 (kona v1.5.1 → v1.7.0 line)
+
+8 upstream commits. Two of them are deliberately **not** taken; both have a recorded unblock
+condition below rather than a "we don't want this" verdict, because one of them is blocked by a
+fact that can change without anyone noticing.
+
+> **⚠️ In-development state: the kona and revm dependencies are pinned to a BRANCH, not a tag.**
+> `Cargo.toml` carries `branch = "dev/mantle-v1.6.3"` for 27 mantle-v2 entries and 14
+> mantle-xyz/revm entries. `Cargo.lock` resolves that to a fixed commit, so builds are
+> reproducible, but the ref is mutable and **this state must not reach production**. Before
+> release: mantle-v2 cuts a tag on `dev/mantle-v1.6.3`, we swap every `branch = ...` to
+> `tag = ...`, re-run `cargo update -w`, and confirm the resolved SHAs in `Cargo.lock` are
+> **unchanged**. A changed SHA means the branch moved after the tag was cut — the artifact
+> would no longer be the one that was tested. Only then rebuild the ELFs.
+>
+> Currently resolved: mantle-v2 `e8315fbf`, revm `1903a86a`.
+
+**Held deliberately:**
+
+| Item | Upstream v3.14.0 | Ours | Why |
+|---|---|---|---|
+| SP1 family | `=6.8.0` | **`=6.4.0`** | Not a preference — a hard resolver conflict. `sp1-cluster v2.7.2` pins `sp1-sdk = "=6.4.0"` (exact, not caret), so any other exact version fails at `cargo metadata`, before compilation. See the deferred entry below. |
+| alloy core/network family | `=2.1.1` | **`=2.4.2`** | **The direction reversed from §3.11.** We used to hold alloy *back* because mantle-v2's `kona-registry` did not initialise `ChainConfig.bogota_time`. kona v1.7.0's registry now *sets* that field, which only exists in `alloy-genesis >= 2.4.x`, so `=2.1.1` fails to compile with four `E0560: no field named bogota_time`. Upstream escapes this because its kona comes from optimism, which has no Mantle L1 config. **Do not copy upstream's `=2.1.1` here.** `2.4.2` matches what mantle-v2 itself resolves. |
+| `kona-*` / `op-alloy-*` / `alloy-op-evm` | optimism tag `kona-client/v1.7.0` | `mantle-xyz/mantle-v2` branch `dev/mantle-v1.6.3` | Same kona version, different source; the Mantle protocol layer only exists in mantle-v2. Mechanical "keep ours" every sync. |
+| `op-revm` | crates.io / optimism tree | **`mantle-xyz/mantle-v2`** | Changed source this round. bluealloy deleted `crates/op-revm` after v107, so it is now a workspace path member (`rust/op-revm/`) of mantle-v2 rather than a crate in `mantle-xyz/revm`. Note crates.io's published `op-revm 20.0.0` is *older than its version string implies* — never resolve it from the registry. |
+| revm family (12 crates) | crates.io `41.0.0` | `mantle-xyz/revm` branch `dev/mantle-v1.6.3` | Same 12-crate list as mantle-v2's own `[patch.crates-io]`; `op-revm` is deliberately **not** in that list on either side. |
+| mTLS for network proving (#976) | added | **skipped** | Blocked by the SP1 pin above. Deferred entry below. |
+| validity gRPC server (#980/#987) | added | **skipped** | AggLayer-driven external aggregation. Deferred entry below. |
+| Celestia removal (#983) | removed | already absent | Dropped in Phase 2; take upstream's deletions to clear residue. |
+
+**Taken from upstream — the kona v1.7.0 code adaptation.** Upstream did this same adaptation in
+`0c9e2be0`, so all four files were aligned to v3.14.0 verbatim rather than hand-rolled:
+
+| File | Change |
+|---|---|
+| `utils/client/src/client.rs` | Hand-built `OpBlock` replaced by `L2BlockInfo::from_header_and_first_tx`. The old path decoded **every** transaction in the block only to hand the result to `from_block_and_genesis`, which reads just the first one (the L1-info deposit). Pure wasted cycles in a zkVM guest. This is also why `DriverError::Rlp` disappeared upstream — the decode moved inside, behind `FromBlockError::TxEnvelopeDecodeError`. |
+| `utils/client/src/precompiles/mod.rs` | `run()` now ends in revm 41's `precompile_output_to_interpreter_result` instead of our hand-rolled gas accounting (state gas / refund / `spend_all` on halt), which could silently drift from canonical revm. `warm_addresses` returns `&AddressSet`. `OpSpecId::INTEROP` was renamed `LAGOON` upstream and `KARST` added, so the completeness guard now lists 13 variants (upstream's 11 + Mantle's `OSAKA`/`ARSIA`). |
+| `utils/client/src/precompiles/factory.rs` | `PostExecEvmFactoryHooks` gained `Snapshot` + `refund_snapshot` + `seed_refund_snapshot`; `type Error<DBError>` narrowed to `DBErrorMarker`. |
+| `utils/client/src/witness/executor.rs` | `KonaExecutor::new` takes a caller-supplied `receipt_builder` (was hardcoded inside `StatelessL2Builder`). OP Stack chains pass `OpAlloyReceiptBuilder`, preserving previous behaviour. |
+
+**A real defect this alignment caught.** Our precompile `run()` passed a hardcoded `0` as the
+EIP-8037 reservoir argument; upstream passes `inputs.reservoir`. That argument feeds gas
+accounting, so the hardcoded zero was a live correctness bug, not a stub. It had been sitting
+under a `[MANTLE]` comment reading "pass 0 in the zkVM (not applicable)" since the revm 38 bump.
+
+**Verify after any dependency move in this family:**
+
+```bash
+grep -c '^\[\[patch.unused\]\]' Cargo.lock   # want 0 — a used-looking but unused patch silently
+                                             #   drops SP1 keccak acceleration (see §3.11 trap)
+grep -c '^name = "revm"$'    Cargo.lock      # want 1
+grep -c '^name = "op-revm"$' Cargo.lock      # want 1 — two op-revm versions means the guest and
+                                             #   host can run different BVM_ETH semantics, and
+                                             #   that does not fail to compile
+```
+
+#### 3.12a Deferred upstream features, with unblock conditions
+
+These are not rejections. Each records what it would take to revisit, so the next sync does not
+re-litigate the decision from scratch — and, for the first one, so nobody concludes "we chose not
+to" when the real answer is "we could not".
+
+**mTLS for network proving — blocked by a dependency fact, not by preference.**
+
+`5d0ff8d6` (#976) adds optional mutual-TLS client credentials for the Succinct Prover Network:
+two env vars (`NETWORK_MTLS_CERT_PATH` / `NETWORK_MTLS_KEY_PATH`, both-or-neither), a
+`client_identity` on the prover builder, and a 20s `get_balance()` preflight so a bad certificate
+fails at startup rather than at the first proof request. Unset both and behaviour is identical to
+today.
+
+This matters to us: **mainnet proves on the official network**, only the self-hosted cluster path
+is ours. But the commit also moves `sp1-sdk` `6.4.0 → 6.5.0`, and that is where it stops:
+
+```
+error: failed to select a version for `sp1-prover-types`.
+    ... required by package `sp1-cluster-artifact v2.7.2`
+versions that meet the requirements `=6.4.0` are: 6.4.0
+all possible versions conflict with previously selected packages
+  previously selected package `sp1-prover-types v6.5.0`
+```
+
+`sp1-cluster` pins the whole SP1 family with `=` rather than a caret, so there is no version of
+this that resolves. It fails at `cargo metadata`; nothing reaches the compiler.
+
+*Unblock condition* — a `sp1-cluster` release whose SP1 pin is above 6.4.0:
+
+```bash
+LATEST=$(git ls-remote --tags --refs https://github.com/succinctlabs/sp1-cluster.git \
+         | awk '{print $2}' | sed 's|refs/tags/||' | sort -V | tail -1)
+gh api "repos/succinctlabs/sp1-cluster/contents/Cargo.toml?ref=$LATEST" --jq '.content' \
+  | base64 -d | grep -E '^sp1-sdk'
+```
+
+*When it unblocks, in this order:* bump the `sp1-cluster` tag and the nine `=6.x.y` SP1 entries
+together → cherry-pick `5d0ff8d6`'s `utils/host/src/network.rs` hunk (the rest of that commit is
+version-string churn across CI, Dockerfiles and `book/`) → check whether `cargo-prove`'s image tag
+in `justfile` must move with the SDK (§3.7) → rebuild ELFs, because **both vkeys change** → confirm
+with Succinct that they actually issue client certificates for our mainnet requester, since
+without one the feature is inert.
+
+**validity gRPC server — declined on architecture, revisit only if the product needs AggLayer.**
+
+`c169267a` (#980/#987) lets an external system drive aggregation instead of the proposer deciding
+for itself: `validity/src/grpc.rs`, `proto/proofs.proto`, a `build.rs` protobuf step, a
+`Dockerfile.agglayer`, and two new `.sqlx` entries. Cost of taking it: **+388/-96 in
+`validity/src/proposer.rs`** — the most heavily customised file in this repo (§3.9, §3.10a–c, and
+the run-loop ordering that is load-bearing) — plus +411 in `db/client.rs`.
+
+We are Validity-Oracle-only with a self-driving proposer (§2.3), the same line that removed
+fault-proof, Celestia, EigenDA and AltDA. Adding an AggLayer control plane contradicts it, and the
+blast radius lands exactly on the code that carries our production incident fixes.
+
+*Unblock condition:* a product decision to integrate AggLayer. There is no technical gate — the
+feature is `Option`-gated upstream and would work if taken.
+
+*If it is ever taken:* land it as its own PR, not inside a sync. Regenerating the two `.sqlx`
+entries needs a live database, which sync branches do not have.
+
+
 ## 4. Sync workflow
 
 When a new upstream Succinct Labs release lands (e.g. v3.9.0, v4.0.0):
@@ -918,6 +1037,12 @@ git merge v<X.Y.Z>
 # DELETE our copy and keep upstream's rather than merging the two. Check §3 for the
 # per-site verdict first — not every marked test is ours to drop (see §3.10).
 ```
+
+**Before resolving anything, re-check the deferred list in §3.12a.** Features we skipped in an
+earlier sync reappear as "new" upstream code in every later one. Each entry there carries an
+unblock condition; run those checks first so the decision is made once with current facts, rather
+than re-argued at every merge. If a condition now holds, take the feature in its own PR *after*
+the sync lands, not inside it.
 
 Two things git will NOT flag for you:
 
@@ -1046,7 +1171,7 @@ the host just needs `cargo` and the SP1 CLI on PATH.
 | Location | Why it churns | Post-sync checks |
 |---|---|---|
 | `Cargo.toml` `[patch.crates-io]` | Every upstream dep bump might add/remove a revm-family crate. | Diff against `mantle-v2/rust/Cargo.toml` `[patch.crates-io]` — keep them in lock-step. |
-| `Cargo.toml` mantle-v2 pins | 25 entries pin the same tag; bump them together. | `grep -c 'tag = "mantle-v1.6.3"' Cargo.toml` should equal 25, and `grep -c 'tag = "v107-mantle-arsia.2"'` should equal 16 for the revm family. Both move in lockstep. |
+| `Cargo.toml` mantle-v2 / revm pins | All entries share one ref; bump them together. A split leaves two `alloy_evm` / `op-revm` versions in the graph. | Currently **branch**-pinned during the kona v1.7.0 work (§3.12): `grep -c 'mantle-v2", branch = "dev/mantle-v1.6.3"'` = 27 and `grep -c 'revm", branch = "dev/mantle-v1.6.3"'` = 14. These must become `tag = ...` before release — see the warning box in §3.12. |
 | `utils/signer/src/lib.rs::from_env` | New auth backends or env-var conventions arrive in alloy-signer-gcp. | Verify the `HSM_API_NAME` branch still compiles + the precedence ordering still puts Mantle compat first. |
 | `bindings/build.rs` `required_contracts` | New contract ABIs land upstream. | Diff vs upstream's list; if a new FP-related ABI appears, drop it (FP is gone). |
 | `validity/src/proposer.rs` | The proposer flow is the most-edited file in this repo. | Look for any spot where upstream replaced our checkpoint-validation logic — `historicBlockHashes` cross-check must stay. |
@@ -1058,6 +1183,7 @@ the host just needs `cargo` and the SP1 CLI on PATH.
 |---|---|---|
 | **alloy-evm major bump** | Upstream raises alloy-evm to v0.35+ | `alloy-evm` is unpatched (crates.io), but `alloy-op-evm` comes from mantle-v2 and the two must agree — a mismatch surfaces as duplicate `alloy_evm` types. Wait for mantle-v2 to move, then bump its tag here (kona + revm tags in lockstep). |
 | **op-revm v19 → v20+ drift** | mantle-elysium does not track upstream op-revm. New OpSpecId variants surface. | `cargo build` will flag non-exhaustive matches. The KARST treatment in mantle-v2/rust kona genesis sync is the reference pattern (comment out the unsupported arm with `[MANTLE]` rationale). |
+| **SP1 pin held below upstream** | A `sp1-cluster` release lands whose SP1 pin is above `6.4.0` | Today `sp1-cluster v2.7.2` pins `sp1-sdk = "=6.4.0"` exactly, which makes any SP1 bump fail at `cargo metadata`. That is the *only* thing keeping us off upstream's `=6.8.0`, and it can stop being true without anyone here noticing. §3.12a carries the one-command check and the ordered unblock steps (mTLS rides on this). |
 | **mantle-xyz/op-succinct origin/main divergence** | Someone lands new Mantle features directly on `origin/main` instead of this v3.8.1 branch. | Treat this branch as the source of truth going forward; pull-and-port new origin/main commits the way Phase 5 did. Add an entry to §3 for each port. |
 | **Contracts protocol change** | Mantle network upgrade lands new on-chain contracts. | New v117-style port from the canonical Mantle contracts release into `contracts/`. The contracts side is decoupled from the Rust workspace; bump independently. |
 | **GCP HSM auth model shift** | Mantle adopts Workload Identity Federation; ops stops setting `HSM_CREDENTIALS`. | The upstream 4-env branch and metadata-service fallback are already in place — no code change needed; just stop setting `HSM_API_NAME` and configure the cluster identity instead. |
