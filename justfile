@@ -562,12 +562,12 @@ tests:
 
 # Run fault-proof integration tests
 # target: test file (integration, sync, etc.)
-# da: DA feature (ethereum, eigenda, celestia). DA-agnostic tests like sync work with any.
+# da: DA feature (ethereum, eigenda). DA-agnostic tests like sync work with any.
 fp-integration-tests target="integration" da="ethereum":
   cd fault-proof && cargo t --test {{target}} --release --features integration,{{da}} -- --test-threads=1 --nocapture
 
 # Run DA-specific host utility tests
-# da: ethereum, eigenda, celestia
+# da: ethereum, eigenda
 da-integration-tests da="ethereum":
     #!/usr/bin/env bash
     set -euo pipefail

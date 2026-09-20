@@ -20,7 +20,6 @@
     - [Testing Guide]()
   - [Upgrading OP Succinct](./validity/upgrade.md)
   - [Experimental Features](./validity/experimental/experimental.md)
-    - [Celestia DA](./validity/experimental/celestia.md)
     - [EigenDA DA](./validity/experimental/eigenda.md)
 
 - [OP Succinct Lite (Fault Proofs)](./fault_proofs/intro.md)
@@ -39,10 +38,10 @@
     - [Pre-Flight Validation](./fault_proofs/preflight.md)
     - [Best Practices](./fault_proofs/best_practices.md)
   - [Experimental Features](./fault_proofs/experimental/experimental.md)
-    - [Celestia DA](./fault_proofs/experimental/celestia.md)
     - [EigenDA DA](./fault_proofs/experimental/eigenda.md)
 
 - [Advanced](./advanced/intro.md)
+  - [Prover Network Connection](./advanced/prover-network.md)
   - [Self-Hosted Proving Cluster](./advanced/self-hosted-cluster.md)
   - [Cost Estimation Tools](./advanced/cost-estimation-tools.md)
   - [Prove Scripts](./advanced/prove-scripts.md)

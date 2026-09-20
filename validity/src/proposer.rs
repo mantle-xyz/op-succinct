@@ -120,6 +120,15 @@ fn poll_failure_action(consecutive_failures: u32) -> PollFailureAction {
 /// Maximum number of legacy completed ranges hydrated in one proposer loop.
 const RANGE_METADATA_HYDRATION_LIMIT: i64 = 100;
 
+fn auction_timed_out(request_type: RequestType, status: i32, now: u64, deadline: u64) -> bool {
+    // The coordinator owns the auction lifecycle of external aggregation requests.
+    // [MANTLE] Upstream also excludes Aggregation here when built with its `agglayer` feature,
+    // where an external coordinator owns the auction lifecycle. That feature is not carried in
+    // this fork (MANTLE_CHANGES.md §3.12a), so the request type does not affect the verdict.
+    let _ = request_type;
+    status == FulfillmentStatus::Requested as i32 && now > deadline
+}
+
 /// Select the L1 block number to checkpoint for an aggregation proof.
 ///
 /// The aggregation guest walks L1 headers back from the checkpointed head *by hash* and requires
@@ -770,27 +779,9 @@ where
         )
         .await?;
 
-        let finalized_block_number = match self
-            .proof_requester
-            .host
-            .get_max_provable_l2_block_number(
-                self.driver_config.fetcher.as_ref(),
-                latest_proposed_block_number,
-            )
-            .await?
-        {
-            Some(block_number) => {
-                tracing::debug!(
-                    "Found host-resolved max provable L2 block number: {}",
-                    block_number
-                );
-                block_number
-            }
-            None => {
-                tracing::debug!("No new max provable L2 block number found since last proposed block. No new range proof requests will be added.");
-                return Ok(());
-            }
-        };
+        let finalized_block_number =
+            self.driver_config.fetcher.get_max_provable_l2_block_number().await?;
+        tracing::debug!("Found max provable L2 block number: {}", finalized_block_number);
 
         // Get all active (non-failed) requests with the same commitment config and start block >=
         // latest_proposed_block_number. These requests are non-overlapping.
@@ -1386,9 +1377,12 @@ where
                 if let Some(request_details) = request_details {
                     let auction_deadline =
                         request_details.created_at + self.requester_config.auction_timeout;
-                    if request_details.fulfillment_status == FulfillmentStatus::Requested as i32 &&
-                        current_time > auction_deadline
-                    {
+                    if auction_timed_out(
+                        request.req_type,
+                        request_details.fulfillment_status,
+                        current_time,
+                        auction_deadline,
+                    ) {
                         self.network_call_with_timeout(
                             network_prover.cancel_request(proof_request_id),
                             "cancelling proof request",
@@ -1950,60 +1944,9 @@ where
         Ok(())
     }
 
-    /// Request all unrequested proofs up to MAX_CONCURRENT_PROOF_REQUESTS. If there are already
-    /// MAX_CONCURRENT_PROOF_REQUESTS proofs in WitnessGeneration, Execute, and Prove status,
-    /// return. If there are already MAX_CONCURRENT_WITNESS_GEN proofs in WitnessGeneration or
-    /// Execute status, return.
-    ///
-    /// Note: In the future, submit up to MAX_CONCURRENT_PROOF_REQUESTS at a time. Don't do one per
-    /// loop.
+    /// Try one queued proof per loop. The requester reserves shared capacity before starting.
     #[tracing::instrument(name = "proposer.request_queued_proofs", skip(self))]
     async fn request_queued_proofs(&self) -> Result<()> {
-        let commitments = self.program_config.commitments.clone();
-        let l1_chain_id = self.requester_config.l1_chain_id;
-        let l2_chain_id = self.requester_config.l2_chain_id;
-
-        let witness_gen_count = self
-            .driver_config
-            .driver_db_client
-            .fetch_request_count(
-                RequestStatus::WitnessGeneration,
-                &commitments,
-                l1_chain_id,
-                l2_chain_id,
-            )
-            .await?;
-
-        let execution_count = self
-            .driver_config
-            .driver_db_client
-            .fetch_request_count(RequestStatus::Execution, &commitments, l1_chain_id, l2_chain_id)
-            .await?;
-
-        let prove_count = self
-            .driver_config
-            .driver_db_client
-            .fetch_request_count(RequestStatus::Prove, &commitments, l1_chain_id, l2_chain_id)
-            .await?;
-
-        // If there are already MAX_CONCURRENT_PROOF_REQUESTS proofs in WitnessGeneration, Execute,
-        // and Prove status, return.
-        if witness_gen_count + execution_count + prove_count >=
-            self.requester_config.max_concurrent_proof_requests as i64
-        {
-            debug!("There are already MAX_CONCURRENT_PROOF_REQUESTS proofs in WitnessGeneration, Execute, and Prove status.");
-            return Ok(());
-        }
-
-        // If there are already MAX_CONCURRENT_WITNESS_GEN proofs in WitnessGeneration status,
-        // return.
-        if witness_gen_count >= self.requester_config.max_concurrent_witness_gen as i64 {
-            debug!(
-                "There are already MAX_CONCURRENT_WITNESS_GEN proofs in WitnessGeneration status."
-            );
-            return Ok(());
-        }
-
         if let Some(request) = self.get_next_unrequested_proof().await? {
             // Guard: a request can be Unrequested yet still have a finished-but-not-yet-reaped task
             // in the map (e.g. one a witnessgen timeout just reset to Unrequested). Skip it this
@@ -2021,11 +1964,16 @@ where
             );
             let request_clone = request.clone();
             let proof_requester = self.proof_requester.clone();
-            let handle =
-                tokio::spawn(
-                    async move { proof_requester.make_proof_request(request_clone).await },
-                );
-            self.tasks.lock().await.insert(request.id, (handle, request));
+            let max_witnesses = self.requester_config.max_concurrent_witness_gen;
+            let max_proofs = self.requester_config.max_concurrent_proof_requests;
+            let mut tasks = self.tasks.lock().await;
+            if tasks.contains_key(&request.id) {
+                return Ok(());
+            }
+            let handle = tokio::spawn(async move {
+                proof_requester.make_proof_request(request_clone, max_witnesses, max_proofs).await
+            });
+            tasks.insert(request.id, (handle, request));
         }
 
         Ok(())
@@ -2043,48 +1991,51 @@ where
         )
         .await?;
 
-        let unreq_agg_request = self
-            .driver_config
-            .driver_db_client
-            .fetch_unrequested_agg_proof(
-                latest_proposed_block_number as i64,
-                &self.program_config.commitments,
-                self.requester_config.l1_chain_id,
-                self.requester_config.l2_chain_id,
-            )
-            .await?;
-
-        if let Some(unreq_agg_request) = unreq_agg_request {
-            // Fetch consecutive range proofs from the database associated with the aggregation
-            // proof request.
-            let range_proofs = self
-                .proof_requester
-                .db_client
-                .get_consecutive_complete_range_proofs(
-                    unreq_agg_request.start_block,
-                    unreq_agg_request.end_block,
+        // External aggregation requests belong to their RPC task, including queued rows.
+        {
+            let unreq_agg_request = self
+                .driver_config
+                .driver_db_client
+                .fetch_unrequested_agg_proof(
+                    latest_proposed_block_number as i64,
                     &self.program_config.commitments,
                     self.requester_config.l1_chain_id,
                     self.requester_config.l2_chain_id,
                 )
                 .await?;
 
-            // Validate the aggregation proof request
-            match self.validate_aggregation_request(&range_proofs, &unreq_agg_request).await {
-                true => {
-                    debug!(
+            if let Some(unreq_agg_request) = unreq_agg_request {
+                // Fetch consecutive range proofs from the database associated with the aggregation
+                // proof request.
+                let range_proofs = self
+                    .proof_requester
+                    .db_client
+                    .get_consecutive_complete_range_proofs(
+                        unreq_agg_request.start_block,
+                        unreq_agg_request.end_block,
+                        &self.program_config.commitments,
+                        self.requester_config.l1_chain_id,
+                        self.requester_config.l2_chain_id,
+                    )
+                    .await?;
+
+                // Validate the aggregation proof request
+                match self.validate_aggregation_request(&range_proofs, &unreq_agg_request).await {
+                    true => {
+                        debug!(
                         "Aggregation request validated successfully: start_block={}, end_block={}",
                         unreq_agg_request.start_block, unreq_agg_request.end_block
                     );
-                    return Ok(Some(unreq_agg_request));
-                }
-                false => {
-                    debug!(
+                        return Ok(Some(unreq_agg_request));
+                    }
+                    false => {
+                        debug!(
                         "Aggregation request validation failed, moving to range proofs: start_block={}, end_block={}",
                         unreq_agg_request.start_block, unreq_agg_request.end_block
                     );
-                    ValidityGauge::AggProofValidationErrorCount.increment(1.0);
-                    // Validation failed, continue to try fetching range proofs
+                        ValidityGauge::AggProofValidationErrorCount.increment(1.0);
+                        // Validation failed, continue to try fetching range proofs
+                    }
                 }
             }
         }
@@ -2856,24 +2807,17 @@ where
         // on the existing dashboards/alerts continue to see the same number under default
         // selection (and the literal L2 finalized under non-default selection).
         //
-        // `L2MaxProvableBlock` is the new gauge: the L2 block the host is actually willing to
-        // anchor a proof against under the current backend + L1 selection. The value diverges
-        // from `L2FinalizedBlock` under non-default Ethereum/EigenDA (it reports the L2 safe
-        // head at the configured L1 anchor) and reflects the Blobstream-resolved max provable
-        // L2 block under Celestia.
+        // `L2MaxProvableBlock` is the new gauge: the L2 block the fetcher resolves
+        // under the configured L1 selection. The value diverges
+        // from `L2FinalizedBlock` under non-default L1 selection (it reports the L2 safe
+        // head at the configured L1 anchor).
         let fetcher = &self.proof_requester.fetcher;
         ValidityGauge::L2UnsafeHeadBlock
             .set(fetcher.get_l2_header(BlockId::latest()).await?.number as f64);
         let l2_finalized_block_number = fetcher.get_l2_header(BlockId::finalized()).await?.number;
         ValidityGauge::L2FinalizedBlock.set(l2_finalized_block_number as f64);
-        if let Some(max_provable_l2_block_number) = self
-            .proof_requester
-            .host
-            .get_max_provable_l2_block_number(fetcher, latest_proposed_block_number)
-            .await?
-        {
-            ValidityGauge::L2MaxProvableBlock.set(max_provable_l2_block_number as f64);
-        }
+        let max_provable_l2_block_number = fetcher.get_max_provable_l2_block_number().await?;
+        ValidityGauge::L2MaxProvableBlock.set(max_provable_l2_block_number as f64);
 
         // Get submission interval from contract and set gauge
         let contract_submission_interval: u64 =
@@ -2887,8 +2831,8 @@ where
         Ok(())
     }
 
-    #[tracing::instrument(name = "proposer.run", skip(self))]
-    pub async fn run(&self) -> Result<()> {
+    #[tracing::instrument(name = "proposer.initialize", skip(self))]
+    pub async fn initialize(&self) -> Result<()> {
         // Handle the case where the proposer is being re-started and the proposer state needs to be
         // updated.
         self.initialize_proposer().await?;
@@ -2896,6 +2840,11 @@ where
         // Initialize the metrics gauges.
         ValidityGauge::init_all();
 
+        Ok(())
+    }
+
+    #[tracing::instrument(name = "proposer.run", skip(self))]
+    pub async fn run(self: Arc<Self>) -> Result<()> {
         // Loop interval in seconds.
         loop {
             // Wrap the entire loop body in a match to handle errors
@@ -3535,9 +3484,24 @@ mod tests {
     };
 
     use super::{
-        handle_terminal_proof_failure_before_request_details, highest_contiguous_end,
-        select_checkpoint_block_number, OPSuccinctRequest, RequestStatus, RequestType,
+        auction_timed_out, handle_terminal_proof_failure_before_request_details,
+        highest_contiguous_end, select_checkpoint_block_number, OPSuccinctRequest, RequestStatus,
+        RequestType,
     };
+
+    #[test]
+    fn auction_timeout_preserves_external_coordinator_ownership() {
+        let requested = FulfillmentStatus::Requested as i32;
+        assert!(auction_timed_out(RequestType::Range, requested, 61, 60));
+        assert!(auction_timed_out(RequestType::Aggregation, requested, 61, 60));
+        assert!(!auction_timed_out(RequestType::Range, requested, 60, 60));
+        assert!(!auction_timed_out(
+            RequestType::Range,
+            FulfillmentStatus::Fulfilled as i32,
+            61,
+            60
+        ));
+    }
 
     #[test]
     fn checkpoint_falls_back_to_safe_when_no_batch_max() {

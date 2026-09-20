@@ -92,11 +92,12 @@ Depending on the one you choose, you must provide the corresponding environment 
 | `L1_BEACON_RPC` | L1 Beacon RPC endpoint URL | (Only used if `FAST_FINALITY_MODE` is `true`) |
 | `L2_NODE_RPC` | L2 Node RPC endpoint URL | (Only used if `FAST_FINALITY_MODE` is `true`) |
 | `SAFE_DB_FALLBACK` | Whether to fallback to timestamp-based L1 head estimation even though SafeDB is not activated for op-node. When `false`, proposer will return an error if SafeDB is not available. It is by default `false` since using the fallback mechanism will result in higher proving cost. | `false` |
-| `L1_BLOCK_TAG` | Which L1 block to anchor proof generation against. One of `finalized`, `safe`, `latest`. Non-default values trade finality for latency. On Ethereum/EigenDA backends they require SafeDB to be activated on op-node (the proposer hard-fails at startup otherwise). On Celestia backends non-default values are rejected at startup — both by the proposer binary and by the covered operator-facing utility scripts under `scripts/` that initialize a host — because the Blobstream-driven proving path does not honor them. See the Validity proposer docs for the full risk table. | `finalized` |
+| `L1_BLOCK_TAG` | Which L1 block to anchor proof generation against. One of `finalized`, `safe`, `latest`. Non-default values trade finality for latency. On Ethereum/EigenDA backends they require SafeDB to be activated on op-node (the proposer hard-fails at startup otherwise). See the Validity proposer docs for the full risk table. | `finalized` |
 | `L1_CONFIRMATIONS` | Number of additional L1 block confirmations to subtract from the block returned by `L1_BLOCK_TAG`. Subject to the same backend restrictions as `L1_BLOCK_TAG`. | `0` |
 | `PROPOSER_METRICS_PORT` | The port to expose metrics on. Update prometheus.yml to use this port, if using docker compose. | `9000` |
 | `FAST_FINALITY_PROVING_LIMIT` | Maximum number of concurrent proving tasks allowed in fast finality mode. | `1` |
 | `USE_KMS_REQUESTER` | Whether to expect NETWORK_PRIVATE_KEY to be an AWS KMS key ARN instead of a plaintext private key. | `false` |
+| `NETWORK_MTLS_CERT_PATH`, `NETWORK_MTLS_KEY_PATH` | Client identity paths for an mTLS endpoint. See [Prover Network Connection](../advanced/prover-network.md#mutual-tls-client-authentication). | (disabled) |
 | `MAX_PRICE_PER_PGU` | The maximum price per pgu for proving. | `300,000,000` |
 | `MIN_AUCTION_PERIOD` | The minimum auction period (in seconds). | `1` |
 | `TIMEOUT` | The proving timeout (in seconds). Used as the server-side deadline for proof requests and as the client-side maximum wait time when polling for proof completion. | `14,400` (4 hours) |

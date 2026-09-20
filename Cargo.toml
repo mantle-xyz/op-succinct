@@ -21,7 +21,7 @@ edition = "2021"
 authors = ["ratankaliani", "zachobront", "fakedev9999", "yuwen01"]
 homepage = "https://succinctlabs.github.io/op-succinct/"
 repository = "https://github.com/succinctlabs/op-succinct"
-version = "3.12.0"
+version = "3.14.0"
 
 [workspace.dependencies]
 # general
@@ -188,7 +188,9 @@ revm = { git = "https://github.com/mantle-xyz/revm", branch = "dev/mantle-v1.6.3
 revm-precompile = { git = "https://github.com/mantle-xyz/revm", branch = "dev/mantle-v1.6.3", default-features = false }
 op-revm = { git = "https://github.com/mantle-xyz/mantle-v2", branch = "dev/mantle-v1.6.3", default-features = false }
 
-# SP1 v6.4.0 (Hypercube)
+# SP1 v6.4.0 (Hypercube). [MANTLE] Held below upstream v3.14.0's 6.8.0 — see MANTLE_CHANGES.md
+# §3.12a. Moving this requires bumping sp1-cluster in lockstep (upstream pairs 6.8.0 with
+# sp1-cluster v2.8.3; we are on v2.7.2, which pins 6.4.0 exactly).
 sp1-sdk = { version = "=6.4.0", features = ["network", "blocking", "profiling"] }
 sp1-lib = { version = "=6.4.0", features = ["verify"] }
 sp1-zkvm = { version = "=6.4.0", features = ["verify"] }
@@ -205,6 +207,10 @@ sp1-cluster-utils = { git = "https://github.com/succinctlabs/sp1-cluster.git", t
 # kzg
 kzg-rs = { version = "0.2.8", features = ["rkyv", "serde"] }
 c-kzg = { version = "2.1.5", default-features = false }
+
+tonic = "0.12.3"
+tonic-build = "0.12.3"
+prost = "0.13.5"
 
 # Cloud dependencies
 # [MANTLE] Held at 0.27 to match alloy-signer-gcp 2.0.4. Upstream v3.12.0 moved this

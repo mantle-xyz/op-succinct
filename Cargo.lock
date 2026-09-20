@@ -30,7 +30,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "aggregation"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
  "alloy-consensus 2.4.2",
  "alloy-primitives",
@@ -6628,7 +6628,7 @@ dependencies = [
 
 [[package]]
 name = "op-succinct-bindings"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
  "alloy",
  "alloy-sol-types",
@@ -6638,7 +6638,7 @@ dependencies = [
 
 [[package]]
 name = "op-succinct-build-utils"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
  "cargo_metadata",
  "sp1-build",
@@ -6646,7 +6646,7 @@ dependencies = [
 
 [[package]]
 name = "op-succinct-client-utils"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
  "alloy-consensus 2.4.2",
  "alloy-eips 2.4.2",
@@ -6680,11 +6680,11 @@ dependencies = [
 
 [[package]]
 name = "op-succinct-elfs"
-version = "3.12.0"
+version = "3.14.0"
 
 [[package]]
 name = "op-succinct-ethereum-client-utils"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6700,9 +6700,8 @@ dependencies = [
 
 [[package]]
 name = "op-succinct-ethereum-host-utils"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
- "alloy-eips 2.4.2",
  "alloy-primitives",
  "anyhow",
  "async-trait",
@@ -6719,7 +6718,7 @@ dependencies = [
 
 [[package]]
 name = "op-succinct-host-utils"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
  "alloy-consensus 2.4.2",
  "alloy-contract",
@@ -6774,7 +6773,7 @@ dependencies = [
 
 [[package]]
 name = "op-succinct-proof-utils"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -6794,7 +6793,7 @@ dependencies = [
 
 [[package]]
 name = "op-succinct-prove"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
  "alloy-contract",
  "alloy-eips 2.4.2",
@@ -6830,7 +6829,7 @@ dependencies = [
 
 [[package]]
 name = "op-succinct-range-utils"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
  "anyhow",
  "kona-proof",
@@ -6843,7 +6842,7 @@ dependencies = [
 
 [[package]]
 name = "op-succinct-scripts"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
  "alloy-eips 2.4.2",
  "alloy-network 2.4.2",
@@ -6880,7 +6879,7 @@ dependencies = [
 
 [[package]]
 name = "op-succinct-signer-utils"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
  "alloy-consensus 2.4.2",
  "alloy-eips 2.4.2",
@@ -6903,7 +6902,7 @@ dependencies = [
 
 [[package]]
 name = "op-succinct-validity"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
  "alloy-eips 2.4.2",
  "alloy-json-rpc 2.4.2",
@@ -8269,7 +8268,7 @@ dependencies = [
 
 [[package]]
 name = "range"
-version = "3.12.0"
+version = "3.14.0"
 dependencies = [
  "kona-proof",
  "op-succinct-client-utils",

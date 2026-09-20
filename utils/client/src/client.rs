@@ -159,9 +159,5 @@ where
         // Advance the derivation pipeline cursor
         drop(pipeline_cursor);
         driver.cursor.write().advance(origin, tip_cursor);
-
-        // Add forget calls to save cycles
-        #[cfg(target_os = "zkvm")]
-        std::mem::forget(block);
     }
 }

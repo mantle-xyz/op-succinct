@@ -99,11 +99,9 @@ where
     }
 
     // NOTE: This `run` mirrors the canonical `EthPrecompiles::run` in
-    // revm-handler v18.1.0 / op-revm v19.0.0 — the versions mantle-xyz/revm
-    // @ v107-mantle-arsia.1 resolves to, NOT upstream op-succinct's op-revm
-    // v20.0.0 — with cycle-tracker prints wrapped around
-    // `precompile.execute()` for the zkVM target. Keep the body in sync when
-    // bumping revm-handler / op-revm — see
+    // revm-handler v41.0.0 / op-revm v20.0.0, with cycle-tracker prints
+    // wrapped around `precompile.execute()` for the zkVM target. Keep the
+    // body in sync when bumping revm-handler / op-revm — see
     // https://github.com/bluealloy/revm/blob/main/crates/handler/src/precompile_provider.rs
     #[inline]
     fn run(

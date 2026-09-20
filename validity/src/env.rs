@@ -83,6 +83,18 @@ fn parse_whitelist(whitelist_str: &str) -> Result<Option<Vec<Address>>> {
 // 1 minute default loop interval.
 const DEFAULT_LOOP_INTERVAL: u64 = 60;
 
+fn parse_agg_proof_mode(value: &str, allow_compressed: bool) -> Result<SP1ProofMode> {
+    match value.to_lowercase().as_str() {
+        "plonk" => Ok(SP1ProofMode::Plonk),
+        "groth16" => Ok(SP1ProofMode::Groth16),
+        "compressed" if allow_compressed => Ok(SP1ProofMode::Compressed),
+        "compressed" => {
+            anyhow::bail!("Invalid AGG_PROOF_MODE: compressed (this fork proves plonk or groth16)")
+        }
+        _ => anyhow::bail!("Invalid AGG_PROOF_MODE: {value}"),
+    }
+}
+
 /// Read proposer environment variables and return a config.
 ///
 /// Signer address and signer URL take precedence over private key.
@@ -100,12 +112,11 @@ pub async fn read_proposer_env() -> Result<EnvironmentConfig> {
     )?)?;
 
     // Parse proof mode
+    // [MANTLE] `allow_compressed` is upstream's `agglayer` escape hatch, where an external
+    // coordinator consumes compressed aggregation proofs. Not carried here (§3.12a), so a
+    // compressed AGG_PROOF_MODE is always rejected.
     let agg_proof_mode =
-        if get_env_var("AGG_PROOF_MODE", Some("plonk".to_string()))?.to_lowercase() == "groth16" {
-            SP1ProofMode::Groth16
-        } else {
-            SP1ProofMode::Plonk
-        };
+        parse_agg_proof_mode(&get_env_var("AGG_PROOF_MODE", Some("plonk".to_string()))?, false)?;
 
     // Optional loop interval
     let loop_interval = get_env_var("LOOP_INTERVAL", Some(DEFAULT_LOOP_INTERVAL))?;
@@ -154,4 +165,19 @@ pub async fn read_proposer_env() -> Result<EnvironmentConfig> {
     };
 
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_agg_proof_mode;
+    use sp1_sdk::SP1ProofMode;
+
+    #[test]
+    fn validates_aggregation_proof_mode() {
+        assert!(matches!(parse_agg_proof_mode("plonk", false), Ok(SP1ProofMode::Plonk)));
+        assert!(matches!(parse_agg_proof_mode("groth16", false), Ok(SP1ProofMode::Groth16)));
+        assert!(parse_agg_proof_mode("compressed", false).is_err());
+        assert!(matches!(parse_agg_proof_mode("compressed", true), Ok(SP1ProofMode::Compressed)));
+        assert!(parse_agg_proof_mode("unknown", true).is_err());
+    }
 }
