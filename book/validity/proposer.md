@@ -120,12 +120,12 @@ The proposer decides which L1 block to anchor each proof against using the `L1_B
 
 `L1_CONFIRMATIONS` subtracts additional blocks from the selected tag (e.g. `L1_BLOCK_TAG=latest` with `L1_CONFIRMATIONS=4` resolves to `latest.number - 4`).
 
-### SafeDB requirement for non-default selections (Ethereum / EigenDA)
+### SafeDB requirement for non-default selections
 
-For Ethereum and EigenDA backends, any non-default selection (tag != `finalized` or `confirmations != 0`) resolves the max provable L2 block via `optimism_safeHeadAtL1Block(resolved_l1_number)`. This RPC requires SafeDB to be activated on the op-node. The proposer hard-fails at startup if SafeDB is unavailable under a non-default selection on these backends. `SAFE_DB_FALLBACK` only applies to the default selection; it does not provide a fallback for the non-default L1 -> L2 resolution path.
+Any non-default selection (tag != `finalized` or `confirmations != 0`) resolves the max provable L2 block via `optimism_safeHeadAtL1Block(resolved_l1_number)`. This RPC requires SafeDB to be activated on the op-node. The proposer hard-fails at startup if SafeDB is unavailable under a non-default selection. `SAFE_DB_FALLBACK` only applies to the default selection; it does not provide a fallback for the non-default L1 -> L2 resolution path.
 
 ### Operational notes
 
 - The existing `succinct_l2_finalized_block` gauge reports the L2 block returned by `eth_getBlockByNumber("finalized")`, regardless of `L1_BLOCK_TAG`.
-  A separate `succinct_l2_max_provable_block` gauge reports the L2 block the host is actually willing to anchor a proof against under the current backend + L1 selection (matches `succinct_l2_finalized_block` under default Ethereum/EigenDA; reflects the L2 safe head at the configured L1 anchor under non-default Ethereum/EigenDA).
+  A separate `succinct_l2_max_provable_block` gauge reports the L2 block the host is actually willing to anchor a proof against under the current L1 selection (matches `succinct_l2_finalized_block` under the default selection; reflects the L2 safe head at the configured L1 anchor under a non-default selection).
 - Invalid values for `L1_BLOCK_TAG` or `L1_CONFIRMATIONS` cause the proposer and covered utility scripts (which parse via `from_env()?`) to exit cleanly at startup with an error naming the offending env var and value. Non-covered scripts that build a fetcher via the default constructors (e.g. `agg.rs`, `block_data.rs`, `config.rs`, `preflight.rs`) parse via `from_env_or_default()` and will instead panic with the same env var name and value in the message. Double-check env values before running scripts.

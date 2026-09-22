@@ -244,12 +244,6 @@ cargo run --bin multi --release -- --start 1000 --end 1020 --cache --prove
 data/{chain_id}/witness-cache/{start_block}-{end_block}-stdin.bin
 ```
 
-### DA Compatibility
-
-Reuse cache files with the same DA backend that produced them.
-Ethereum DA and AltDA use the same witness format, while EigenDA uses a different format.
-A shared format does not make cache files interchangeable between DA backends.
-
 ### Cache Management
 
 ```bash

@@ -1175,6 +1175,37 @@ Resolve order:
 4. `contracts/`: only resolve if upstream changed a file that v117 also changed; v117
    wins. Otherwise prefer upstream.
 
+### 4.2a Paths this fork has deleted — re-delete them, do not restore
+
+Upstream keeps maintaining features this fork dropped, so every sync produces `delete/modify`
+conflicts on the paths below. **That conflict is the expected outcome, not a mistake.** Resolve
+each one with `git rm -r <path>` without reading what upstream changed — the feature is gone from
+this fork, so the content is irrelevant by construction.
+
+```bash
+# Re-delete in one go after a sync merge reports delete/modify on any of these:
+git rm -r --ignore-unmatch \
+  book/fault_proofs book/validity/experimental book/advanced/prover-network.md \
+  .github/workflows/docker-build-lite.yml .github/workflows/integration-tests.yml \
+  tests/e2e/faultproof tests/presets/faultproof.go \
+  tests/monitoring/grafana/dashboards/faultproof.json \
+  docker-compose-eigenda.yml
+```
+
+| Path | Dropped because | Recorded in |
+|---|---|---|
+| `book/fault_proofs/**`, `tests/e2e/faultproof/**`, `tests/presets/faultproof.go`, `tests/monitoring/grafana/dashboards/faultproof.json`, `.github/workflows/docker-build-lite.yml` | Fault Proof removed wholesale in Phase 3 — the Rust crate and contracts went then, these did not | §2.3, §3.3 |
+| `book/validity/experimental/**`, `docker-compose-eigenda.yml`, `.github/workflows/integration-tests.yml` | EigenDA/Celestia dropped in Phase 2; the workflow's only two jobs are Fault Proof and an EigenDA-only DA matrix | §3.1 |
+| `book/advanced/prover-network.md` | Documents the mTLS feature declined in §3.12a | §3.12a |
+
+**Why delete rather than keep them in sync.** Measured on the v3.12.0 → v3.14.0 range: had these
+paths already been deleted, that sync would have raised **10** extra `delete/modify` conflicts —
+including two `celestia.md` pages, for a backend dropped two phases earlier. Ten mechanical `git rm`
+calls is the entire cost. The alternative is what §3.12b documents: upstream edits land by clean
+auto-merge, git says nothing, and the fork accumulates CI that references missing Dockerfiles and
+documentation that instructs operators to configure features that do not exist. A noisy conflict
+you must answer beats a silent merge you never see.
+
 ### 4.3 Verification
 
 ```bash

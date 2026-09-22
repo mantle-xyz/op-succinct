@@ -16,7 +16,6 @@ on:
       - "programs/**"
       - "scripts/**"
       - "utils/**"
-      - "fault-proof/**"
       - "validity/**"
   merge_group:
 

@@ -54,79 +54,6 @@ upgrade-l2oo l1_rpc admin_pk etherscan_api_key="":
 
   cd contracts && forge script script/validity/OPSuccinctUpgrader.s.sol:OPSuccinctUpgrader  --rpc-url $L1_RPC --private-key $ADMIN_PK $VERIFY --broadcast --slow
 
-# Deploy OPSuccinct FDG contracts
-deploy-fdg-contracts env_file=".env" *features='':
-    #!/usr/bin/env bash
-    set -aeo pipefail
-    
-    # First fetch FDG config using the env file
-    echo "Fetching Fault Dispute Game configuration..."
-    if [ -z "{{features}}" ]; then
-        RUST_LOG=info cargo run --bin fetch-fault-dispute-game-config --release -- --env-file {{env_file}}
-    else
-        echo "Fetching fault dispute game config with features: {{features}}"
-        RUST_LOG=info cargo run --bin fetch-fault-dispute-game-config --release --features {{features}} -- --env-file {{env_file}}
-    fi
-    
-    # Load environment variables from project root
-    source {{env_file}}
-    
-    # Load environment variables from contracts directory if it exists
-    if [ -f "contracts/.env" ]; then
-        source contracts/.env
-    fi
-    
-    # Check if required environment variables are set
-    if [ -z "${RPC_URL:-}" ] && [ -z "${L1_RPC:-}" ]; then
-        echo "Error: Neither RPC_URL nor L1_RPC environment variable is set"
-        exit 1
-    fi
-    
-    if [ -z "${PRIVATE_KEY:-}" ]; then
-        echo "Error: PRIVATE_KEY environment variable is not set"
-        exit 1
-    fi
-    
-    # Use RPC_URL if set, otherwise fall back to L1_RPC
-    RPC_URL_TO_USE="${RPC_URL:-$L1_RPC}"
-    echo "Using RPC URL: $RPC_URL_TO_USE"
-
-    echo "Deploying FDG contracts..."
-    
-    # Change to contracts directory
-    cd contracts
-
-    # Install dependencies only if not already present 
-    # (avoids git lock conflicts in parallel test runs)
-    if [ ! -d "lib/forge-std" ]; then
-        echo "Installing forge dependencies..."
-        forge install
-    else
-        echo "Forge dependencies already installed, skipping..."
-    fi
-
-    # Build contracts
-    echo "Building contracts..."
-    forge build
-    
-    # Setup verification flags
-    VERIFY=""
-    if [ -n "${ETHERSCAN_API_KEY:-}" ]; then
-        VERIFY="--verify --verifier etherscan --etherscan-api-key $ETHERSCAN_API_KEY --retries 10 --delay 5"
-        echo "Verification enabled with Etherscan"
-    fi
-    
-    # Run deployment script
-    echo "Running deployment script..."
-    forge script script/fp/DeployOPSuccinctFDG.s.sol \
-        --broadcast \
-        --slow \
-        --rpc-url "$RPC_URL_TO_USE" \
-        --private-key "$PRIVATE_KEY" \
-        $VERIFY
-    
-    echo "FDG contract deployment complete!"
-
 # Deploy mock verifier
 deploy-mock-verifier env_file=".env":
     #!/usr/bin/env bash
@@ -156,38 +83,6 @@ deploy-mock-verifier env_file=".env":
     --private-key $PRIVATE_KEY \
     --broadcast \
     $VERIFY
-
-# Upgrade the game implementation contract (for hardfork/upgrade)
-# This script deploys a new OPSuccinctFaultDisputeGame implementation and sets it in the factory.
-# Required env vars: FACTORY_ADDRESS, GAME_TYPE, VERIFIER_ADDRESS, ANCHOR_STATE_REGISTRY, ACCESS_MANAGER,
-#                    AGGREGATION_VKEY, RANGE_VKEY_COMMITMENT, ROLLUP_CONFIG_HASH,
-#                    MAX_CHALLENGE_DURATION, MAX_PROVE_DURATION, CHALLENGER_BOND_WEI
-upgrade-game-impl env_file=".env":
-    #!/usr/bin/env bash
-    set -aeo pipefail
-
-    source {{env_file}}
-
-    if [ -z "$L1_RPC" ]; then
-        echo "L1_RPC not set in {{env_file}}"
-        exit 1
-    fi
-
-    if [ -z "$PRIVATE_KEY" ]; then
-        echo "PRIVATE_KEY not set in {{env_file}}"
-        exit 1
-    fi
-
-    cd contracts
-
-    echo "Upgrading game implementation..."
-    forge script script/fp/UpgradeOPSuccinctFDG.s.sol \
-        --rpc-url "$L1_RPC" \
-        --private-key "$PRIVATE_KEY" \
-        --broadcast \
-        --slow
-
-    echo "Game implementation upgrade complete!"
 
 # Deploy the OPSuccinct L2 Output Oracle
 deploy-oracle env_file=".env" *features='':
@@ -270,74 +165,6 @@ upgrade-oracle env_file=".env" *features='':
             --private-key $PRIVATE_KEY \
             $VERIFY_FLAGS \
             --broadcast
-    fi
-
-deploy-dispute-game-factory env_file=".env":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    # Load environment variables
-    source {{env_file}}
-
-    # Check if required environment variables are set.
-    if [ -z "${L2OO_ADDRESS:-}" ]; then
-        echo "Error: L2OO_ADDRESS environment variable is not set"
-        exit 1
-    fi
-    if [ -z "${PROPOSER_ADDRESSES:-}" ]; then
-        echo "Error: PROPOSER_ADDRESSES environment variable is not set"
-        exit 1
-    fi
-
-    # cd into contracts directory
-    cd contracts
-
-    # forge install
-    forge install
-
-    VERIFY=""
-    if [ -n "$ETHERSCAN_API_KEY" ]; then
-      VERIFY="--verify --verifier etherscan --etherscan-api-key $ETHERSCAN_API_KEY"
-    fi
-    
-    # Run the forge deployment script
-    env L2OO_ADDRESS=$L2OO_ADDRESS \
-        PROPOSER_ADDRESSES=$PROPOSER_ADDRESSES \
-        forge script script/validity/OPSuccinctDGFDeployer.s.sol:OPSuccinctDFGDeployer \
-        --rpc-url $L1_RPC \
-        --private-key $PRIVATE_KEY \
-        --broadcast \
-        $VERIFY
-
-# Upgrade the OPSuccinct Fault Dispute Game implementation.
-upgrade-fault-dispute-game env_file="fault-proof/.env.upgrade":
-    #!/usr/bin/env bash
-    set -aeo pipefail
-
-    # Load environment variables
-    source {{env_file}}
-
-    # cd into contracts directory.
-    cd contracts
-
-    # Install dependencies.
-    forge install
-
-    # Run the forge upgrade script.
-    if [ "${DRY_RUN}" = "false" ]; then
-        if [ -z "${PRIVATE_KEY:-}" ]; then
-            echo "Error: PRIVATE_KEY environment variable is required when DRY_RUN=false"
-            exit 1
-        fi
-
-        forge script script/fp/UpgradeOPSuccinctFDG.s.sol:UpgradeOPSuccinctFDG \
-            --rpc-url $L1_RPC \
-            --private-key $PRIVATE_KEY \
-            --etherscan-api-key $ETHERSCAN_API_KEY \
-            --broadcast
-    else
-        forge script script/fp/UpgradeOPSuccinctFDG.s.sol:UpgradeOPSuccinctFDG \
-            --sig "getUpgradeCalldata()"
     fi
 
 # Add a new OpSuccinctConfig to the L2 Output Oracle
@@ -560,27 +387,12 @@ tests:
     --skip test_cycle_count_diff \
     --skip test_post_to_github
 
-# Run fault-proof integration tests
-# target: test file (integration, sync, etc.)
-# da: DA feature (ethereum, eigenda). DA-agnostic tests like sync work with any.
-fp-integration-tests target="integration" da="ethereum":
-  cd fault-proof && cargo t --test {{target}} --release --features integration,{{da}} -- --test-threads=1 --nocapture
-
 # Run DA-specific host utility tests
-# da: ethereum, eigenda
+# [MANTLE] Ethereum DA only — this fork is Validity-Oracle-only (MANTLE_CHANGES.md §3.1),
+# so the EigenDA/Celestia/AltDA host-utils crates and their SRS setup are gone.
 da-integration-tests da="ethereum":
     #!/usr/bin/env bash
     set -euo pipefail
-
-    # EigenDA tests require SRS file - create symlink if needed
-    if [ "{{da}}" = "eigenda" ] && [ ! -e "utils/eigenda/host/resources" ]; then
-        if [ ! -d "resources" ]; then
-            echo "Error: resources/ directory not found. Run from workspace root."
-            exit 1
-        fi
-        ln -sf ../../../resources utils/eigenda/host/resources
-        echo "Created symlink: utils/eigenda/host/resources -> resources/"
-    fi
 
     cargo t -p op-succinct-{{da}}-host-utils --features integration --release -- --test-threads=1 --nocapture
 

@@ -50,9 +50,9 @@ pub enum ValidityGauge {
     #[strum(
         serialize = "succinct_l2_max_provable_block",
         message = "Maximum L2 block the host is willing to anchor a proof against under the \
-                   current backend + L1 selection. Matches L2 finalized under default \
-                   Ethereum/EigenDA; reflects the L2 safe head at the configured L1 anchor under \
-                   non-default Ethereum/EigenDA."
+                   current L1 selection. Matches L2 finalized under the default selection; \
+                   reflects the L2 safe head at the configured L1 anchor under a non-default \
+                   selection."
     )]
     L2MaxProvableBlock,
     #[strum(

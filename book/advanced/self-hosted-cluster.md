@@ -136,10 +136,9 @@ Proofs are saved to `data/<chain_id>/proofs/<start_block>-<end_block>.bin`.
 
 Before running a proposer, complete the relevant setup guide to deploy contracts and configure your environment:
 
-- **Fault proofs**: [Quick Start Guide](../fault_proofs/quick_start.md)
 - **Validity proofs**: [Contract Deployment](../validity/contracts/deploy.md)
 
-Then add the following cluster variables to your proposer environment file (`.env` for [validity](../validity/proposer.md), `.env.proposer` for [fault proofs](../fault_proofs/proposer.md)):
+Then add the following cluster variables to your proposer environment file (`.env`, see [validity](../validity/proposer.md)):
 
 ```env
 SP1_PROVER=cluster
