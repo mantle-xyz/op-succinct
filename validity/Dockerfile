@@ -29,10 +29,15 @@ RUN curl -LO https://go.dev/dl/go1.24.0.linux-amd64.tar.gz && \
     rm go1.24.0.linux-amd64.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Install SP1
-RUN curl -L https://sp1.succinct.xyz | bash && \
-    ~/.sp1/bin/sp1up -v 6.4.0 && \
-    ~/.sp1/bin/cargo-prove prove --version
+# [MANTLE] No SP1 toolchain here. Upstream installs one (sp1up + cargo-prove) in
+# both stages, but nothing in this repo invokes it: `build_all()` in
+# utils/build has every `build_program` call commented out — upstream's copy is
+# empty too — so no guest program is compiled during the image build, and the
+# ELFs in elf/ are committed artefacts that utils/elfs `include_bytes!`s. A grep
+# for `cargo-prove`, `~/.sp1` or `SP1_HOME` across the workspace returns nothing.
+# sp1-sdk itself is an ordinary crate; the only external toolchain its build
+# needs is Go, installed above for sp1-recursion-gnark-ffi.
+# Installing it cost ~300MB of download and 4.8GB unpacked, per stage.
 
 # Pre-cook only clear-stuck-txs's dependency graph, keyed on the recipe
 # (Cargo.toml/Cargo.lock) rather than the full source tree.
@@ -81,10 +86,11 @@ RUN apt-get update && apt-get install -y \
     jq \
     && rm -rf /var/lib/apt/lists/*
 
-# Install SP1
-RUN curl -L https://sp1.succinct.xyz | bash && \
-    ~/.sp1/bin/sp1up -v 6.4.0 && \
-    ~/.sp1/bin/cargo-prove prove --version
+# [MANTLE] No SP1 toolchain in the runtime image either — see the note in the
+# builder stage. The proposer requests proofs over the network (or from the
+# cluster) and submits them to L1; it never shells out to cargo-prove, and the
+# circuit artefacts sp1-sdk may need are fetched by the SDK at runtime, not
+# installed by sp1up (there is no circuits/ directory under ~/.sp1 after it runs).
 
 # Copy only the built binaries from builder
 COPY --from=builder /build/validity-proposer /usr/local/bin/validity-proposer
