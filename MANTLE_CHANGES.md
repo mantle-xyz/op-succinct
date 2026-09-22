@@ -1318,6 +1318,7 @@ the host just needs `cargo` and the SP1 CLI on PATH.
 | `bindings/build.rs` `required_contracts` | New contract ABIs land upstream. | Diff vs upstream's list; if a new FP-related ABI appears, drop it (FP is gone). |
 | `validity/src/proposer.rs` | The proposer flow is the most-edited file in this repo. | Look for any spot where upstream replaced our checkpoint-validation logic — `historicBlockHashes` cross-check must stay. |
 | `contracts/foundry.toml` remappings | Upstream may rename or split source dirs. | Re-run `forge build`; missing-import errors point at the broken remap. |
+| `justfile` forge-script paths | **Upstream's `contracts/script/` is split into `fp/` and `validity/` (upstream `94fe30b9`, #446); ours is flat.** Phase 3 ported Mantle's own contracts (`e85261c9`) and kept the flat layout, so every upstream `script/validity/X.s.sol` path is wrong here. Upstream edits to these recipes will keep reintroducing the prefix. | `grep -c 'script/validity/' justfile` must be **0**. Then verify each path resolves: `grep -oE 'script/[a-zA-Z0-9/_.]+\.s\.sol' justfile \| sort -u \| while read f; do [ -e "contracts/$f" ] \|\| echo "MISS $f"; done` |
 
 ### 6.2 Time bombs
 

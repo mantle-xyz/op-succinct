@@ -52,7 +52,7 @@ upgrade-l2oo l1_rpc admin_pk etherscan_api_key="":
   L1_RPC="{{l1_rpc}}"
   ADMIN_PK="{{admin_pk}}"
 
-  cd contracts && forge script script/validity/OPSuccinctUpgrader.s.sol:OPSuccinctUpgrader  --rpc-url $L1_RPC --private-key $ADMIN_PK $VERIFY --broadcast --slow
+  cd contracts && forge script script/OPSuccinctUpgrader.s.sol:OPSuccinctUpgrader  --rpc-url $L1_RPC --private-key $ADMIN_PK $VERIFY --broadcast --slow
 
 # Deploy mock verifier
 deploy-mock-verifier env_file=".env":
@@ -78,7 +78,7 @@ deploy-mock-verifier env_file=".env":
       VERIFY="--verify --verifier etherscan --etherscan-api-key $ETHERSCAN_API_KEY"
     fi
     
-    forge script script/validity/DeployMockVerifier.s.sol:DeployMockVerifier \
+    forge script script/DeployMockVerifier.s.sol:DeployMockVerifier \
     --rpc-url $L1_RPC \
     --private-key $PRIVATE_KEY \
     --broadcast \
@@ -113,7 +113,7 @@ deploy-oracle env_file=".env" *features='':
     if [ -n "${DEPLOY_PK:-}" ]; then ENV_VARS="$ENV_VARS DEPLOY_PK=$DEPLOY_PK"; fi
 
     # Run the forge deployment script
-    $ENV_VARS forge script script/validity/OPSuccinctDeployer.s.sol:OPSuccinctDeployer \
+    $ENV_VARS forge script script/OPSuccinctDeployer.s.sol:OPSuccinctDeployer \
         --rpc-url $L1_RPC \
         --private-key $PRIVATE_KEY \
         --broadcast \
@@ -156,11 +156,11 @@ upgrade-oracle env_file=".env" *features='':
     fi
 
     if [ "${EXECUTE_UPGRADE_CALL:-true}" = "false" ]; then
-        env $ENV_VARS forge script script/validity/OPSuccinctUpgrader.s.sol:OPSuccinctUpgrader \
+        env $ENV_VARS forge script script/OPSuccinctUpgrader.s.sol:OPSuccinctUpgrader \
             --rpc-url $L1_RPC \
             --private-key $PRIVATE_KEY
     else
-        env $ENV_VARS forge script script/validity/OPSuccinctUpgrader.s.sol:OPSuccinctUpgrader \
+        env $ENV_VARS forge script script/OPSuccinctUpgrader.s.sol:OPSuccinctUpgrader \
             --rpc-url $L1_RPC \
             --private-key $PRIVATE_KEY \
             $VERIFY_FLAGS \
@@ -194,7 +194,7 @@ add-config config_name env_file=".env" *features='':
         ${EXECUTE_UPGRADE_CALL:+EXECUTE_UPGRADE_CALL="$EXECUTE_UPGRADE_CALL"} \
         ${ADMIN_PK:+ADMIN_PK="$ADMIN_PK"} \
         ${DEPLOY_PK:+DEPLOY_PK="$DEPLOY_PK"} \
-        forge script script/validity/OPSuccinctParameterUpdater.s.sol:OPSuccinctParameterUpdater \
+        forge script script/OPSuccinctParameterUpdater.s.sol:OPSuccinctParameterUpdater \
         --sig "addConfig(string)" "{{config_name}}" \
         --rpc-url $L1_RPC \
         --private-key $PRIVATE_KEY \
@@ -219,7 +219,7 @@ remove-config config_name env_file=".env":
         ${EXECUTE_UPGRADE_CALL:+EXECUTE_UPGRADE_CALL="$EXECUTE_UPGRADE_CALL"} \
         ${ADMIN_PK:+ADMIN_PK="$ADMIN_PK"} \
         ${DEPLOY_PK:+DEPLOY_PK="$DEPLOY_PK"} \
-        forge script script/validity/OPSuccinctParameterUpdater.s.sol:OPSuccinctParameterUpdater \
+        forge script script/OPSuccinctParameterUpdater.s.sol:OPSuccinctParameterUpdater \
         --sig "removeConfig(string)" "{{config_name}}" \
         --rpc-url $L1_RPC \
         --private-key $PRIVATE_KEY \
@@ -411,7 +411,7 @@ forge-build *ARGS:
     # Notes:
     # - A single `forge script <any script> --skip-simulation` is sufficient to compile the script
     #   dependency graph into the cache.
-    forge script "script/validity/DeployMockVerifier.s.sol" \
+    forge script "script/DeployMockVerifier.s.sol" \
     --skip "/**/test/**" \
     --sig "idonotexist()" \
     --skip-simulation \
