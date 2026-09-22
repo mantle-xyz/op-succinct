@@ -175,10 +175,12 @@ op-alloy-network = { git = "https://github.com/mantle-xyz/mantle-v2", branch = "
 # Execution
 alloy-evm = { version = "0.37.0", default-features = false }
 alloy-op-evm = { git = "https://github.com/mantle-xyz/mantle-v2", branch = "dev/mantle-v1.6.3", default-features = false }
-# [MANTLE] revm sourced from mantle-xyz/revm at tag v107-mantle-arsia.2 (revm v38 +
-# Mantle protocol changes: ARSIA/JOVIAN, BVM_ETH, token_ratio, DA footprint,
-# Arsia fee validation, and the GHSA-5vfr-x84h-hmvf fix). Aligns with the mantle-v2
-# rust workspace; the tag moves in lockstep with the mantle-v2 kona tag above.
+# [MANTLE] revm sourced from mantle-xyz/revm (revm v41 + Mantle protocol changes:
+# ARSIA/JOVIAN, BVM_ETH, token_ratio, DA footprint, Arsia fee validation, and the
+# GHSA-5vfr-x84h-hmvf fix). Aligns with the mantle-v2 rust workspace; the ref moves in
+# lockstep with the mantle-v2 kona ref above.
+# NOTE: this is currently a MUTABLE branch ref, not a tag. It must be swapped to a tag
+# before release — see the in-development warning in MANTLE_CHANGES.md §3.12.
 # Replaces the former mantle-xyz/revm-ghsa-5vfr-x84h-hmvf @ 99707e9f pin: that fork
 # was a private stopgap carrying the GHSA fix, and being private also broke
 # `just build-elfs` (the SP1 docker build cannot authenticate to it).
@@ -207,10 +209,6 @@ sp1-cluster-utils = { git = "https://github.com/succinctlabs/sp1-cluster.git", t
 # kzg
 kzg-rs = { version = "0.2.8", features = ["rkyv", "serde"] }
 c-kzg = { version = "2.1.5", default-features = false }
-
-tonic = "0.12.3"
-tonic-build = "0.12.3"
-prost = "0.13.5"
 
 # Cloud dependencies
 # [MANTLE] Held at 0.27 to match alloy-signer-gcp 2.0.4. Upstream v3.12.0 moved this
@@ -267,9 +265,13 @@ alloy-op-hardforks = { git = "https://github.com/mantle-xyz/mantle-v2", branch =
 op-alloy = { git = "https://github.com/mantle-xyz/mantle-v2", branch = "dev/mantle-v1.6.3" }
 
 # [MANTLE] Patch every revm-family crate (including transitively-pulled ones) to
-# mantle-xyz/revm @ tag v107-mantle-arsia.2. Matches the pattern in mantle-v2/rust/Cargo.toml.
-# All entries must share one tag — a split leaves two revm versions in the graph and
-# surfaces as OpSpecId / OpHaltReason / OpEvm type mismatches against the kona executor.
+# mantle-xyz/revm. Matches the pattern in mantle-v2/rust/Cargo.toml.
+# All revm-family entries must share one ref — a split leaves two revm versions in the graph
+# and surfaces as OpSpecId / OpHaltReason / OpEvm type mismatches against the kona executor.
+# `op-revm` is deliberately NOT one of them: bluealloy deleted crates/op-revm after v107, so
+# it is now a workspace path member of mantle-xyz/mantle-v2 and is patched from there. Never
+# resolve it from crates.io — the published op-revm 20.0.0 is older than its version string
+# implies. See MANTLE_CHANGES.md §3.12.
 revm = { git = "https://github.com/mantle-xyz/revm", branch = "dev/mantle-v1.6.3" }
 revm-bytecode = { git = "https://github.com/mantle-xyz/revm", branch = "dev/mantle-v1.6.3" }
 revm-context = { git = "https://github.com/mantle-xyz/revm", branch = "dev/mantle-v1.6.3" }
@@ -285,7 +287,7 @@ revm-state = { git = "https://github.com/mantle-xyz/revm", branch = "dev/mantle-
 op-revm = { git = "https://github.com/mantle-xyz/mantle-v2", branch = "dev/mantle-v1.6.3" }
 
 # [MANTLE] alloy-evm is intentionally NOT patched: it resolves from crates.io = upstream
-# alloy-rs/evm v0.34.0. The former mantle-xyz/evm@mantle-v0.34.0 fork only added a dead-code
+# alloy-rs/evm v0.37.x. The former mantle-xyz/evm@mantle-v0.34.0 fork only added a dead-code
 # `token_ratio` trait method; mantle-v2 rust dropped the fork at d2e4ebea (commit 75d90fc71),
 # so we drop the patch here too to stay in lockstep. See MANTLE_CHANGES.md §2.2 / §3.1.
 

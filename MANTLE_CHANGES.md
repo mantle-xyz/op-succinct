@@ -954,8 +954,13 @@ removing it from `validity/src/{proposer,env,proof_requester,lib}.rs`, `db/clien
 `bin/validity.rs`, `build.rs`, plus `proto/`, `grpc.rs` and `tests/external_aggregation.rs`.
 Three `cfg!(feature = "agglayer")` *macro* call sites also had to be folded by hand — those are
 expressions, not attributes, so they survive with the feature undefined and silently evaluate to
-`false` rather than failing the build. Nothing `agglayer`-gated is left; a leftover would be dead
-code that the `unexpected_cfgs` lint eventually reports.
+`false` rather than failing the build. **That sweep was incomplete, and `unexpected_cfgs` does not
+catch the remainder** — the lint sees `cfg`, not the places that name the feature as a plain
+string. What survived it, and was removed afterwards (§3.12b): the `--features agglayer` branch in
+`tests/justfile` together with the `external_aggregation` target and the `agglayer` Go build tag,
+`tests/e2e/validity/agglayer/aggregation_test.go`, the unreachable
+`get_mock_aggregation_proof_by_request_id` in `db/client.rs`, and the workspace `tonic-build` /
+`prost` entries that no member ever inherited.
 
 **Two resolutions that needed a judgement call rather than a side:**
 
@@ -1055,6 +1060,40 @@ feature is `Option`-gated upstream and would work if taken.
 
 *If it is ever taken:* land it as its own PR, not inside a sync. Regenerating the two `.sqlx`
 entries needs a live database, which sync branches do not have.
+
+#### 3.12b Residue the merge carried past the first review
+
+The §3.12 review followed git's conflict list, so it covered Rust and little else. Four classes of
+damage reached the branch untouched; three of them broke CI outright, and none of them would have
+been noticed by reading a conflict.
+
+| Where | What | Why it survived, and what it costs |
+|---|---|---|
+| `.github/workflows/e2e-sysgo-tests.yml` | An `if [ … ]; then` with an **empty body** followed by `fi`, left behind when the agglayer branch inside it was deleted | Bash fails at *parse* time, so the entire `run:` block never executes — every matrix target fails, not just the one named in the condition |
+| `.github/workflows/docker-build.yml` | Duplicate `tags:` and duplicate `cache-from:`/`cache-to:` keys, left behind when the celestia/eigenda steps were deleted | Duplicate YAML keys break workflow parsing. Note the gate in §3.12 ("every `file:` must exist on disk") cannot run on a file that does not parse — a gate is only as good as the parse that precedes it |
+| `validity/Dockerfile` (×2), `lint.yml`, `cycle-count-diff.yml`, `elf.yml`, `cargo-tests.yml` | `sp1up -v 6.8.0` against `Cargo.toml`'s `=6.4.0` — 6 occurrences across 5 files | §3.12 reverted the SP1 bump **in `Cargo.toml` only**. The repo's own gates (`lint.yml:45`, `docker-build.yml:38`) compare the two and fail every run. `justfile`'s `cargo-prove --tag v6.4.0` was already correct, so the committed ELFs were never affected |
+| `validity/.sqlx/` | **15** orphaned offline query entries against 14 real `sqlx::query!` macros | `cargo sqlx prepare --check` regenerates and compares; extra entries fail it |
+
+**On counting the sqlx orphans.** Reading the diff finds one. Fifteen is what a mechanical check
+finds: normalise whitespace on every cached `query` and on every macro's string literal, then
+compare as sets. Two traps — a `grep -c` for the macro name counts the one that appears inside a
+comment (`db/client.rs`, the note explaining why one query uses the runtime API), and substring
+matching reports a short query as live when it is only a prefix of a longer one. Match exactly.
+
+**The book announced three features this fork does not have.** A whole new page
+(`book/advanced/prover-network.md`) documented the mTLS variables declined in §3.12a;
+`book/validity/proposer.md` documented `GRPC_ADDRESS` plus an entire "Externally driven
+aggregation" section; `book/validity/experimental/experimental.md` told the reader to build with
+the `altda` feature, which is not in this workspace (§3.1). The mTLS page is the one that would
+have cost an operator real time: set both variables against a private endpoint and the process
+starts normally, presents no client certificate, and then fails at the first proof request with an
+error that says nothing about certificates. All three are removed, along with `AGG_PROOF_MODE`'s
+`compressed` value, which `parse_agg_proof_mode(…, false)` rejects.
+
+**Gate for the next sync: the conflict list is not the review scope.** After the merge, check the
+files git never flagged — workflow YAML, `Dockerfile*`, `justfile`, `book/`, `.sqlx/` — separately
+and by hand. A clean auto-merge into a file this fork has never edited produces exactly zero
+signal, which is the same mechanism as the auto-merge table in §3.12, one layer further out.
 
 
 ## 4. Sync workflow
