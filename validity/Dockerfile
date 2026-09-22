@@ -70,20 +70,41 @@ RUN --mount=type=ssh \
     cp target/release/clear-stuck-txs /build/clear-stuck-txs
 
 # Final stage
-FROM rust:1.85-slim
+#
+# [MANTLE] Runtime-only image. This was `rust:1.85-slim` carrying a build-time
+# package set, but nothing in this stage compiles: it copies two finished
+# binaries and execs one. Debian bookworm matches the builder (cargo-chef's
+# rust-1.85 image is bookworm-based), so the glibc and OpenSSL ABIs line up.
+FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# Install required runtime dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    clang \
-    pkg-config \
-    libssl-dev \
+# [MANTLE] Exactly what the two binaries link against at runtime, resolved with
+#   cargo tree -p op-succinct-validity --target x86_64-unknown-linux-gnu
+# Resolving on a developer's macOS is misleading here: native-tls selects
+# Security.framework there and openssl-sys never shows up, which would make
+# libssl3 look unnecessary.
+#
+#   ca-certificates  root store for outbound HTTPS (L1/L2 RPCs, prover network)
+#   libssl3          openssl-sys 0.9, reached via native-tls <- hyper-tls <-
+#                    alloy-transport-http. Not vendored (no openssl-src in the
+#                    lockfile), so it links the system libssl at runtime.
+#   libstdc++6       librocksdb-sys — RocksDB is C++ — reached via kona-host.
+#   curl             not linked by anything; kept purely for `kubectl exec`
+#                    debugging. Drop it if you want the image smaller still.
+#
+# Removed as build-time only: clang, libclang-dev (bindgen), pkg-config,
+# libssl-dev (headers; the runtime needs libssl3, not the -dev package), git
+# and jq — no code path shells out to any of them (`Command::new` appears only
+# in cost-estimator and gen_sp1_test_artifacts, neither of which ships here).
+#
+# If a binary ever fails to start with "error while loading shared libraries",
+# the missing .so names the package to add back.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    git \
-    libclang-dev \
-    jq \
+    libssl3 \
+    libstdc++6 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # [MANTLE] No SP1 toolchain in the runtime image either — see the note in the
