@@ -22,6 +22,7 @@
 
 - [Advanced](./advanced/intro.md)
   - [Self-Hosted Proving Cluster](./advanced/self-hosted-cluster.md)
+  - [Prover Network Connection](./advanced/prover-network.md)
   - [Cost Estimation Tools](./advanced/cost-estimation-tools.md)
   - [Prove Scripts](./advanced/prove-scripts.md)
   - [Reproduce Binaries](./advanced/verify-binaries.md)
