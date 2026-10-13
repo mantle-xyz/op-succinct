@@ -640,9 +640,22 @@ mod tests {
     /// `GRANITE_MAX_INPUT_SIZE`; the wrapper must enforce the same cap.
     /// Input length is aligned to `PAIR_ELEMENT_LEN` so the test
     /// distinguishes the cap from `bn254::run_pair`'s modulo check.
+    ///
+    /// [MANTLE] ISTHMUS is the exception. Mantle maps its whole pre-Limb era onto
+    /// `OpSpecId::ISTHMUS`, and mantle-v2's op-revm builds that set from `fjord()`
+    /// with the *unrestricted* Istanbul pairing, to match op-geth's
+    /// `PrecompiledContractsMantleSkadi` (see `isthmus()` in mantle-v2
+    /// `rust/op-revm/src/precompiles.rs`). Upstream's assertion that ISTHMUS is
+    /// capped is OP Stack consensus, not Mantle's. The invariant that matters for
+    /// soundness — the zkVM wrapper agrees with canonical op-revm — is asserted
+    /// for every spec, ISTHMUS included.
     #[test]
     fn test_granite_family_uses_canonical_bn254_pairing_limits() {
-        for spec in [OpSpecId::GRANITE, OpSpecId::HOLOCENE, OpSpecId::ISTHMUS] {
+        for (spec, expected) in [
+            (OpSpecId::GRANITE, InstructionResult::PrecompileError),
+            (OpSpecId::HOLOCENE, InstructionResult::PrecompileError),
+            (OpSpecId::ISTHMUS, InstructionResult::Return),
+        ] {
             let oversized_pairing_input =
                 vec![0; oversized_aligned_pair_input_len(bn254_pair::GRANITE_MAX_INPUT_SIZE)];
             let call_inputs =
@@ -659,9 +672,8 @@ mod tests {
             let result = zkvm_result.unwrap().expect("BN254 pairing precompile must exist");
 
             assert_eq!(
-                result.result,
-                InstructionResult::PrecompileError,
-                "{spec:?} must use canonical Granite BN254 pairing limits",
+                result.result, expected,
+                "{spec:?} BN254 pairing input-size limit does not match Mantle consensus",
             );
         }
     }
