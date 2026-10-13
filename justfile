@@ -368,7 +368,7 @@ build-range-elfs:
     #!/usr/bin/env bash
 
     cd programs/range/ethereum
-    ~/.sp1/bin/cargo-prove prove build --elf-name range-elf-embedded --docker --tag v6.4.0 --output-directory ../../../elf --ignore-rust-version
+    ~/.sp1/bin/cargo-prove prove build --elf-name range-elf-embedded --docker --tag v6.8.1 --output-directory ../../../elf --ignore-rust-version
 
 # Build ELF file for aggregation program.
 #
@@ -378,7 +378,7 @@ build-agg-elf:
     #!/usr/bin/env bash
 
     cd programs/aggregation
-    ~/.sp1/bin/cargo-prove prove build --elf-name aggregation-elf --docker --tag v6.4.0 --output-directory ../../elf --ignore-rust-version
+    ~/.sp1/bin/cargo-prove prove build --elf-name aggregation-elf --docker --tag v6.8.1 --output-directory ../../elf --ignore-rust-version
 
 # Run all unit tests except for the specified ones.
 tests:
