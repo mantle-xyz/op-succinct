@@ -6,6 +6,23 @@
 FROM lukemathwalker/cargo-chef:latest-rust-1.85 AS chef
 WORKDIR /build
 
+# [MANTLE] Install the pinned toolchain once, in the stage both planner and
+# builder inherit. rust-toolchain.toml pins a nightly (see that file for why:
+# several deps need rustc >= 1.94, so the image's baked-in 1.85 never compiles
+# anything real — rustup switches toolchains based on this file). Left to
+# itself, rustup installs that nightly lazily on the first cargo invocation,
+# which happened twice per build: once in planner's `cargo chef prepare`
+# (~130s, mostly downloading rustc/rustc-dev/llvm-tools) and again in cook.
+# planner re-runs on every source change because it starts with `COPY . .`,
+# so every code change paid for a fresh toolchain download. Copying only this
+# file keeps the layer keyed on the toolchain pin alone.
+#
+# `cargo --version` rather than `rustup show` / `rustup toolchain install`:
+# it goes through the same rustup-proxy auto-install that prepare and cook
+# were already triggering, whose behaviour differs less across rustup releases.
+COPY rust-toolchain.toml rust-toolchain.toml
+RUN cargo --version && rustc --version
+
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --bin clear-stuck-txs --recipe-path recipe.json
@@ -29,21 +46,33 @@ RUN curl -LO https://go.dev/dl/go1.24.0.linux-amd64.tar.gz && \
     rm go1.24.0.linux-amd64.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Install SP1
-RUN curl -L https://sp1.succinct.xyz | bash && \
-    ~/.sp1/bin/sp1up -v 6.4.0 && \
-    ~/.sp1/bin/cargo-prove prove --version
+# [MANTLE] sp1-recursion-gnark-ffi's build script fetches Go modules, and one of
+# them — github.com/consensys/gnark-ignition-verifier, pinned in its go.sum —
+# now 404s on GitHub and is no longer served by proxy.golang.org (checked
+# 2026-10-13; every SP1 version from 6.4.0 to 6.8.1 needs it). goproxy.cn still
+# serves that exact version. Try the default proxy first and fall back; go
+# verifies whatever it downloads against go.sum, so the fallback cannot swap
+# content. Without this, any cold cook layer (i.e. every Cargo.lock change)
+# fails. Same fix as mantle-xyz/sp1-cluster 7a825cd.
+ENV GOPROXY="https://proxy.golang.org,https://goproxy.cn,direct"
+
+# [MANTLE] No SP1 toolchain here. Upstream installs one (sp1up + cargo-prove) in
+# both stages, but nothing in this repo invokes it: `build_all()` in
+# utils/build has every `build_program` call commented out — upstream's copy is
+# empty too — so no guest program is compiled during the image build, and the
+# ELFs in elf/ are committed artefacts that utils/elfs `include_bytes!`s. A grep
+# for `cargo-prove`, `~/.sp1` or `SP1_HOME` across the workspace returns nothing.
+# sp1-sdk itself is an ordinary crate; the only external toolchain its build
+# needs is Go, installed above for sp1-recursion-gnark-ffi.
+# Installing it cost ~300MB of download and 4.8GB unpacked, per stage.
 
 # Pre-cook only clear-stuck-txs's dependency graph, keyed on the recipe
 # (Cargo.toml/Cargo.lock) rather than the full source tree.
 #
-# rust-toolchain.toml pins a nightly channel (see that file for why — several
-# deps require rustc >= 1.94, hence FROM rust:1.85 alone isn't actually what
-# compiles anything real: rustup auto-switches based on this file). cook's
-# reconstructed skeleton dir doesn't otherwise contain it, so without this
-# COPY, cargo falls back to the image's baked-in 1.85 and errors out on any
-# dependency with a higher MSRV — unrelated to which --bin is requested.
-COPY --from=planner /build/rust-toolchain.toml rust-toolchain.toml
+# rust-toolchain.toml is already at /build/ from the chef stage, so cook runs
+# on the pinned nightly. It must stay there: cook's reconstructed skeleton
+# doesn't otherwise contain it, and without it cargo falls back to the image's
+# baked-in 1.85 and errors out on any dependency with a higher MSRV.
 COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=ssh \
     cargo chef cook --release --bin clear-stuck-txs --recipe-path recipe.json
@@ -65,26 +94,48 @@ RUN --mount=type=ssh \
     cp target/release/clear-stuck-txs /build/clear-stuck-txs
 
 # Final stage
-FROM rust:1.85-slim
+#
+# [MANTLE] Runtime-only image. This was `rust:1.85-slim` carrying a build-time
+# package set, but nothing in this stage compiles: it copies two finished
+# binaries and execs one. Debian bookworm matches the builder (cargo-chef's
+# rust-1.85 image is bookworm-based), so the glibc and OpenSSL ABIs line up.
+FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# Install required runtime dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    clang \
-    pkg-config \
-    libssl-dev \
+# [MANTLE] Exactly what the two binaries link against at runtime, resolved with
+#   cargo tree -p op-succinct-validity --target x86_64-unknown-linux-gnu
+# Resolving on a developer's macOS is misleading here: native-tls selects
+# Security.framework there and openssl-sys never shows up, which would make
+# libssl3 look unnecessary.
+#
+#   ca-certificates  root store for outbound HTTPS (L1/L2 RPCs, prover network)
+#   libssl3          openssl-sys 0.9, reached via native-tls <- hyper-tls <-
+#                    alloy-transport-http. Not vendored (no openssl-src in the
+#                    lockfile), so it links the system libssl at runtime.
+#   libstdc++6       librocksdb-sys — RocksDB is C++ — reached via kona-host.
+#   curl             not linked by anything; kept purely for `kubectl exec`
+#                    debugging. Drop it if you want the image smaller still.
+#
+# Removed as build-time only: clang, libclang-dev (bindgen), pkg-config,
+# libssl-dev (headers; the runtime needs libssl3, not the -dev package), git
+# and jq — no code path shells out to any of them (`Command::new` appears only
+# in cost-estimator and gen_sp1_test_artifacts, neither of which ships here).
+#
+# If a binary ever fails to start with "error while loading shared libraries",
+# the missing .so names the package to add back.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    git \
-    libclang-dev \
-    jq \
+    libssl3 \
+    libstdc++6 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install SP1
-RUN curl -L https://sp1.succinct.xyz | bash && \
-    ~/.sp1/bin/sp1up -v 6.4.0 && \
-    ~/.sp1/bin/cargo-prove prove --version
+# [MANTLE] No SP1 toolchain in the runtime image either — see the note in the
+# builder stage. The proposer requests proofs over the network (or from the
+# cluster) and submits them to L1; it never shells out to cargo-prove, and the
+# circuit artefacts sp1-sdk may need are fetched by the SDK at runtime, not
+# installed by sp1up (there is no circuits/ directory under ~/.sp1 after it runs).
 
 # Copy only the built binaries from builder
 COPY --from=builder /build/validity-proposer /usr/local/bin/validity-proposer

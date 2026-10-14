@@ -72,6 +72,8 @@ rustls = "0.23.23"
 strum = { workspace = true, features = ["derive"] }
 strum_macros.workspace = true
 
+# grpc
+
 [build-dependencies]
 op-succinct-build-utils.workspace = true
 

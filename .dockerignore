@@ -4,3 +4,26 @@
 /book
 /audits
 .github
+
+# [MANTLE] The build context is the whole checkout, and mantle-config's build
+# workflow checks it out with `fetch-depth: 0` + `submodules: recursive`, so
+# without these the daemon receives ~2.7GB that no build step reads.
+#
+# .git also makes `COPY . .` unstable: FETCH_HEAD and logs/ differ on every
+# checkout, so the layer hash changes even when no source file did, and every
+# layer after it is rebuilt.
+#
+# Verified before excluding:
+#   - no build.rs reads git metadata (all four are `build_all()` or the
+#     contracts probe); `vergen`/`vergen-git2` are declared in the workspace
+#     but no member depends on them
+#   - contracts/src stays: validity/src/relay_rejection.rs `include_str!`s
+#     OPSuccinctL2OutputOracle.sol. It is under #[cfg(test)] and the image
+#     builds binaries only, but src/ is 32K so keeping it costs nothing and
+#     leaves `cargo test` working inside the image
+#   - elf/ stays: utils/elfs `include_bytes!`s both committed ELFs
+.git
+/contracts/lib
+/contracts/out
+/contracts/cache
+/tests

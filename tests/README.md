@@ -9,7 +9,6 @@ run the suite with the expected environment.
 - `e2e/`: Go e2e tests.
   - `nodes/`: Nodes-only tests (no proposer) for local development.
   - `validity/`: Validity proposer tests.
-  - `faultproof/`: Fault proof proposer and challenger tests.
 - `artifacts/`: Contract artifacts; a compressed tarball lives at
   `artifacts/compressed/artifacts.tzst` and is unpacked into `artifacts/src`
   before tests.
@@ -57,12 +56,6 @@ run the suite with the expected environment.
   just test-e2e-sysgo ./e2e/validity/...
   ```
 
-- Faultproof proposer only:
-
-  ```just
-  just test-e2e-sysgo ./e2e/faultproof/...
-  ```
-
 - Run a single test with a filter:
 
   ```just
@@ -104,8 +97,6 @@ Run nodes with a proposer:
 
 ```bash
 just long-running validity      # Validity proposer
-just long-running faultproof    # Fault proof proposer
-just long-running faultproof-ff # Fault proof with fast finality
 ```
 
 At startup, env files are written with variables needed for debugging:
@@ -113,7 +104,6 @@ At startup, env files are written with variables needed for debugging:
 | Mode | Env Files |
 |------|-----------|
 | validity | `.env.validity` |
-| faultproof / faultproof-ff | `.env.proposer`, `.env.challenger` |
 
 Source them to use with tools like `cast`:
 
@@ -129,8 +119,6 @@ setting `SYSGO_METRICS_ENABLED=true`:
 
 ```bash
 SYSGO_METRICS_ENABLED=true just long-running validity
-SYSGO_METRICS_ENABLED=true just long-running faultproof
-SYSGO_METRICS_ENABLED=true just long-running faultproof-ff
 ```
 
 > **Note**: Run only one test at a time when metrics are enabled. Multiple

@@ -18,11 +18,9 @@ OP Succinct is the only production-ready proving solution for the OP Stack and t
 
 ## Proving Options
 
-Rollups can choose between two configurations:
-- ZK fault proofs (OP Succinct Lite) — only generate a zero-knowledge proof when there is a dispute
-- Validity proofs (OP Succinct) — generate a zero-knowledge proof for every transaction, eliminating disputes entirely
-
-Both configurations offer meaningful advantages over the standard OP Stack design.
+This fork runs validity proofs only (OP Succinct): a zero-knowledge proof is generated for every
+transaction, eliminating disputes entirely. The upstream ZK fault proof configuration
+(OP Succinct Lite) is not carried here.
 
 ![Comparison Table](./assets/comparison-table.png)
 

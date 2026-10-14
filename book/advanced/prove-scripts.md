@@ -70,6 +70,8 @@ AGG_PROOF_MODE=plonk             # Options: plonk, groth16
 
 Each script reads only its own strategy env var, so `RANGE_PROOF_STRATEGY` and `AGG_PROOF_STRATEGY` can be set independently.
 
+For an mTLS endpoint, configure the client identity as described in [Prover Network Connection](./prover-network.md#mutual-tls-client-authentication).
+
 **Proof Strategies:**
 - `reserved`: Uses reserved SP1 network capacity
 - `hosted`: Uses hosted proof generation service
@@ -243,16 +245,6 @@ cargo run --bin multi --release -- --start 1000 --end 1020 --cache --prove
 ```
 data/{chain_id}/witness-cache/{start_block}-{end_block}-stdin.bin
 ```
-
-### DA Compatibility
-
-| DA Type | Compatible With |
-|---------|-----------------|
-| Ethereum (default) | Celestia |
-| Celestia | Ethereum |
-| EigenDA | EigenDA only |
-
-Cache files are compatible between Ethereum and Celestia, but **not** with EigenDA. Don't mix cache files across incompatible DA types.
 
 ### Cache Management
 
