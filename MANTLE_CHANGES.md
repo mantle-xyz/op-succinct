@@ -320,12 +320,87 @@ The upstream `GOOGLE_PROJECT_ID` 4-env path is retained as a fallback so deploym
 that can use ADC / GCE metadata service / Workload Identity Federation aren't forced
 into the hex-JSON convention.
 
-**Env var precedence in `Signer::from_env()`:**
+**Env var precedence in `Signer::from_env()`** — *superseded by §3.5a, kept for history:*
 1. `HSM_API_NAME` set → Mantle compat branch (memory-only creds)
 2. `GOOGLE_PROJECT_ID` + `GOOGLE_LOCATION` + `GOOGLE_KEYRING` set → upstream branch (ADC)
 3. `SIGNER_URL` + `SIGNER_ADDRESS` set → Web3Signer
 4. `PRIVATE_KEY` set → local plaintext signer
 5. None set → error
+
+### 3.5a AWS KMS L1 signer, and exactly-one signer selection
+
+Added for the move of the proposer's L1 key from GCP KMS to AWS KMS (after the 2026-10-06 HSM
+compromise). Host-only — no guest code, **no vkey change**.
+
+| File | Change |
+|---|---|
+| `utils/signer/src/lib.rs` | `Signer::AwsKmsSigner(alloy_signer_aws::AwsSigner)`, built from `L1_SIGNER_AWS_KMS_KEY_ID`. Two regions are kept apart: credentials (IRSA → STS) use the *home* region from the default chain (`AWS_REGION` — which EKS injects into every IRSA pod — `AWS_DEFAULT_REGION`, profile; the key's region only as a fallback when none is found), while **only the KMS client** uses the key ARN's region, with a warning if it differs from home. A cross-region (e.g. `mrk-`) key is legitimate, and pointing STS at the key's region would break pods whose egress only covers their own region. |
+| | `from_env` now goes through `select_signer_backend`: exactly one backend. |
+| | KMS signers (GCP and AWS) sign a fixed probe digest at startup and check it recovers to their address; backend + address logged as `L1 transaction signer ready`. |
+| | Local / GCP / AWS dispatch share `send_with_wallet` (the per-signer bodies were identical). It now **signs, records the tx hash, then broadcasts** (`fill` → `send_tx_envelope`) instead of `send_transaction`, which only yields the hash after the broadcast returns; the Web3Signer path records its hash before broadcasting too. Required by the attempt timeout below: a timeout firing mid-broadcast must not lose the hash of a transaction the node already accepted, or the escalation loop would report a mined transaction as failed and the proposer could resend a checkpoint. |
+| | Timeouts: AWS KMS calls 10s per attempt / 30s per operation (the SDK sets none); each L1 send attempt is bounded by the confirmation timeout + 120s for fill/sign/broadcast (all signer kinds); every L1 read made under the lock — the pre-send nonce/fee reads, the post-failure receipt lookup, the final nonce read — is bounded by 30s (the default HTTP client has no request timeout); the startup self-check by 60s. A hung KMS or RPC call would otherwise hold the `SignerLock` and stall every later send while probes stay green. `GasPolicy::worst_case_send_secs` is computed from the same bounds, so the proposer's chain-lock lease check (`validity/src/proposer.rs`) sees the real worst case — with defaults, 4 × (60 + 120 + 30 + 60) + 2 × 30 = 1140s per send instead of 240s. |
+| | **Post-failure success now requires the same `NUM_CONFIRMATIONS` (3) as the normal path** (`confirmed_receipt_among`). Pre-existing on `main`: after an attempt failed, the first receipt found among our hashes was returned as success immediately, so a transaction one block deep — still reorg-able — was reported to the proposer as a completed checkpoint/submission. It now waits (≤ the confirmation timeout) for 3 confirmations, re-reading the receipt each round; a receipt that disappears (reorg) resumes escalation, and a mined transaction that does not reach depth in time is an error, not a success. |
+| `Cargo.toml` | `alloy-signer-aws =2.0.4` (moves with the alloy family); `aws-config` / `aws-sdk-kms` `^1` resolve to the copies sp1-sdk already pulls. `Cargo.lock` adds only `alloy-signer-aws 2.0.4`; sp1-sdk's own `alloy-signer-aws 1.8.3` (alloy 1.x) coexists. |
+
+**Selection rules (replace the §3.5 precedence list):**
+- AWS KMS, GCP KMS (either shape) and Web3Signer are *remote* backends. One is configured as soon
+  as one of its **signer-specific** selecting variables is **present — even if empty** —
+  `L1_SIGNER_AWS_KMS_KEY_ID`, `HSM_API_NAME`, `GOOGLE_KEYRING`, `SIGNER_URL` — and must then have
+  all its required variables set to non-empty values, otherwise startup fails. Previously a
+  half-configured remote signer fell through, ultimately to `PRIVATE_KEY`, which mainnet's secret
+  also carries; that silent fallback is what this closes. "Present but empty" counts as configured
+  for the same reason: a template whose value failed to render (`HSM_API_NAME: ""`) must fail
+  loudly rather than start on the plaintext key.
+  Generic names other components read (`GOOGLE_PROJECT_ID`, `GOOGLE_LOCATION`, `HSM_KEY_NAME`, a
+  leftover `SIGNER_ADDRESS`) deliberately do not select a backend, or an unrelated setting would
+  become a "partially configured signer" startup failure.
+- Two configured remote backends → startup error (no precedence order).
+- `PRIVATE_KEY` only when no remote backend is configured; alongside one it is ignored with a
+  warning.
+- Values are trimmed before use (a secret mounted with a trailing newline is harmless).
+
+**Why `L1_SIGNER_AWS_KMS_KEY_ID`.** Two obvious names are taken:
+- `CRYPTO_KEY_ID` — other Mantle services name a KMS key this, but there it is the key
+  `/usr/lib/crypto` uses to *decrypt* the secrets listed in `CRYPTO_SECRET_NAMES` at startup —
+  mantle-succinct's mainnet config sets it today, next to `HSM_API_NAME`. Reading it as a signing
+  key would make mainnet fail at startup under the exactly-one rule (and a symmetric decrypt key
+  cannot sign anyway). Pinned by `mantle_crypto_key_id_is_not_a_signer`.
+- `AWS_KMS_KEY_ID` — Foundry's `--aws` wallet variable, which this repo's deploy scripts
+  (`contracts/lib/func.sh`) use for the **deployer** key. An operator who deployed and then ran
+  `clear-stuck-txs` from the same shell would sign as the deployer, with only a warning that
+  `PRIVATE_KEY` was ignored. Pinned by `foundry_and_stray_gcp_variables_do_not_select_a_backend`.
+  (An earlier revision of this branch used this name; a second review caught it.)
+
+**Deployment checklist (mantle-config, not this repo):**
+- The mantle-succinct IRSA role (`cicd/services/mantle-succinct/aws-<env>.yaml`) has only
+  Secrets Manager today. Add `kms:GetPublicKey` + `kms:Sign` on the key ARN; the IRSA role has no
+  implicit KMS permission. Missing `kms:Sign` is caught by the startup self-check, which is the
+  point of it: `GetPublicKey` alone lets the signer build.
+- Set `L1_SIGNER_AWS_KMS_KEY_ID` to the key **ARN** (then the region comes from it; `AWS_REGION` is only
+  needed for a bare key id or alias); remove `HSM_API_NAME` / `HSM_CREDENTIALS` and
+  `PRIVATE_KEY`. `CRYPTO_*` can stay if other secrets still need decrypting.
+- On chain: `addProposer(<new address>)` from the owner Safe, fund it, switch, then
+  `removeProposer(<old address>)`.
+- The proposer's lease warning now accounts for the send and read timeouts (1140s per send with
+  defaults). If `LOOP_INTERVAL` was tuned tight against the old 240s figure, the startup warning may
+  start firing; that is the check becoming accurate, not a regression.
+- New L2OO deployments only: `fetch_l2oo_config` derives the default proposer address from
+  `PRIVATE_KEY`. With a KMS signer, set `PROPOSER=<KMS address>` explicitly.
+
+**Verifying against a real key locally.** `aws_kms_live_signer_builds_and_self_checks` is
+`#[ignore]`d. The Rust SDK does **not** read the AWS CLI's MFA cache, so with an MFA-gated
+`assume_role` profile it re-runs AssumeRole without MFA and is denied. Export the CLI's cached
+credentials into the environment first:
+
+```bash
+eval "$(AWS_PROFILE=<profile> aws configure export-credentials --format env)"
+unset AWS_PROFILE
+L1_SIGNER_AWS_KMS_KEY_ID=<key arn> cargo test -p op-succinct-signer-utils aws_kms_live -- --ignored --nocapture
+```
+
+Verified 2026-10-15 against `ECC_SECG_P256K1` key `mrk-3227…5bc8` (ap-southeast-1, region taken
+from the ARN): address `0x59415743C6035a338D2661A9b5B325225237D91B`, self-check passed. A role
+with `kms:GetPublicKey` but not `kms:Sign` failed at the self-check, as intended.
 
 ### 3.6 Rollup configs maintained outside this repo
 

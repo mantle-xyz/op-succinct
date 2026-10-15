@@ -85,7 +85,9 @@ const DEFAULT_LOOP_INTERVAL: u64 = 60;
 
 /// Read proposer environment variables and return a config.
 ///
-/// Signer address and signer URL take precedence over private key.
+/// The L1 signer is chosen by `SignerLock::from_env`: exactly one backend (AWS KMS, GCP KMS,
+/// Web3Signer, or `PRIVATE_KEY` when no remote backend is configured) — see
+/// `op_succinct_signer_utils::Signer::from_env`.
 pub async fn read_proposer_env() -> Result<EnvironmentConfig> {
     let signer = SignerLock::from_env().await?;
 

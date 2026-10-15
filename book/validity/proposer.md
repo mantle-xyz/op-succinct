@@ -32,7 +32,7 @@ Before starting the proposer, ensure you have deployed the relevant contracts an
 | `L2_NODE_RPC` | L2 Rollup Node (`op-node`). |
 | `NETWORK_PRIVATE_KEY` | Private key for the Succinct Prover Network. See the [Succinct Prover Network Quickstart](https://docs.succinct.xyz/docs/sp1/prover-network/quickstart) for setup instructions. |
 | `L2OO_ADDRESS` | Address of the `OPSuccinctL2OutputOracle` contract. |
-| `PRIVATE_KEY` | Private key for the account that will be posting output roots to L1. |
+| L1 signer | Exactly one signer backend for the account that posts output roots to L1 — AWS KMS, GCP KMS, Web3Signer or `PRIVATE_KEY`. See [L1 Transaction Signer](#l1-transaction-signer). |
 
 ### Optional Environment Variables
 
@@ -55,8 +55,6 @@ Before starting the proposer, ensure you have deployed the relevant contracts an
 | `OP_SUCCINCT_MOCK` | Default: `false`. Set to `true` to run in mock proof mode. The `OPSuccinctL2OutputOracle` contract must be configured to use an `SP1MockVerifier`. |
 | `METRICS_PORT` | Default: `8080`. The port to run the metrics server on. |
 | `LOOP_INTERVAL` | Default: `60`. The interval (in seconds) between each iteration of the OP Succinct service. |
-| `SIGNER_URL` | URL for the Web3Signer. Note: This takes precedence over the `PRIVATE_KEY` environment variable. |
-| `SIGNER_ADDRESS` | Address of the account that will be posting output roots to L1. Note: Only set this if the signer is a Web3Signer. Note: Required if `SIGNER_URL` is set. |
 | `SAFE_DB_FALLBACK` | Default: `false`. Whether to fallback to timestamp-based L1 head estimation even though SafeDB is not activated for op-node.  When `false`, proposer will panic if SafeDB is not available. It is by default `false` since using the fallback mechanism will result in higher proving cost. |
 | `L1_BLOCK_TAG` | Default: `finalized`. Which L1 block to anchor proof generation against. One of `finalized` (Casper FFG finalized, ~13 min), `safe` (FFG justified checkpoint, ~6.4 min), `latest` (chain tip). Non-default values trade cryptoeconomic finality for latency and must only be used by operators who understand the L1-reorg implications for validity-mode chains. See the [L1 block selection](#l1-block-selection) section below. |
 | `L1_CONFIRMATIONS` | Default: `0`. Number of additional L1 block confirmations to wait behind the block returned by `L1_BLOCK_TAG` (e.g. `L1_BLOCK_TAG=latest` with `L1_CONFIRMATIONS=4` proves against `latest - 4`). Saturates at 0 if the offset would underflow. |
@@ -77,6 +75,30 @@ Before starting the proposer, ensure you have deployed the relevant contracts an
 | `MIN_AUCTION_PERIOD` | Default: `1`. The minimum auction period (in seconds). |
 | `AUCTION_TIMEOUT` | Default: `60` (1 minute). How long to wait before canceling a proof request that hasn't been assigned (in seconds). |
 | `TX_CONFIRMATION_TIMEOUT` | Default: `60`. Maximum time (in seconds) to wait for an L1 transaction to reach the required number of confirmations. Raise on congested L1s to avoid timeout-triggered retries. |
+
+### L1 Transaction Signer
+
+The account that posts output roots to L1 is configured by exactly **one** of the backends below.
+
+| Backend | Environment variables |
+|---------|-----------------------|
+| AWS KMS | `L1_SIGNER_AWS_KMS_KEY_ID` — key id, key ARN, alias name or alias ARN. When it is an ARN, KMS calls go to the key's region even if the process runs elsewhere (EKS injects `AWS_REGION` into every IRSA pod); credentials keep using the process's own region. Otherwise set `AWS_REGION`. Credentials come from the default AWS provider chain (IRSA on EKS). The key must be an asymmetric `ECC_SECG_P256K1` / `SIGN_VERIFY` key, and the role needs `kms:GetPublicKey` and `kms:Sign` on it. |
+| GCP KMS | `HSM_API_NAME` (`projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>[/cryptoKeyVersions/<V>]`) + `HSM_CREDENTIALS` (hex-encoded service-account JSON). Alternatively `GOOGLE_PROJECT_ID` + `GOOGLE_LOCATION` + `GOOGLE_KEYRING` + `HSM_KEY_NAME` (+ optional `HSM_KEY_VERSION`, default `1`) with ambient Google credentials. |
+| Web3Signer | `SIGNER_URL` + `SIGNER_ADDRESS`. |
+| Local key | `PRIVATE_KEY`. |
+
+Selection rules:
+
+- Configuring more than one of AWS KMS, GCP KMS and Web3Signer is a startup error. A backend counts as configured when one of its signer-specific variables is **present, even if empty**: `L1_SIGNER_AWS_KMS_KEY_ID`, `HSM_API_NAME`, `GOOGLE_KEYRING`, or `SIGNER_URL`. Generic variables such as `GOOGLE_PROJECT_ID`, `HSM_KEY_NAME` or a leftover `SIGNER_ADDRESS` do not select anything on their own.
+- A partially configured backend (for example `HSM_API_NAME` without `HSM_CREDENTIALS`, or `L1_SIGNER_AWS_KMS_KEY_ID=""`) is a startup error; the proposer does not fall back to another backend — in particular not to `PRIVATE_KEY`.
+- `PRIVATE_KEY` is used only when no other backend is configured. Set alongside one, it is ignored with a warning.
+- Values are trimmed, so a trailing newline from a mounted secret is harmless.
+- `CRYPTO_KEY_ID` is **not** a signer variable. In Mantle deployments it names the AWS KMS key that decrypts secrets at startup.
+- Plain `AWS_KMS_KEY_ID` is **not** a signer variable either. It is Foundry's `--aws` wallet variable, used by this repo's deploy scripts for the deployer key.
+
+At startup a KMS signer signs one fixed probe digest and checks that the signature recovers to its address, so a missing `kms:Sign` (or GCP signing) permission fails immediately rather than at the first L1 transaction. The selected backend and address are logged as `L1 transaction signer ready`. AWS KMS calls time out after 10s per attempt and 30s in total; each L1 transaction attempt (fill, sign, broadcast) and every L1 read made while sending is bounded, so a stalled signer or RPC fails the attempt instead of blocking every later transaction. A transaction is only reported as sent once it has 3 confirmations — including when it is found mined after a failed or replaced attempt.
+
+`NETWORK_PRIVATE_KEY` / `USE_KMS_REQUESTER` are separate: they sign Succinct Prover Network requests, not L1 transactions.
 
 ## Build the Proposer Service
 

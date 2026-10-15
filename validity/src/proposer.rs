@@ -609,9 +609,11 @@ where
         // then fight over nonces and double-submit.
         //
         // An iteration can broadcast twice (aggregation submission and a checkpoint), each now
-        // waiting up to `(1 + L1_TX_MAX_BUMPS) * TX_CONFIRMATION_TIMEOUT` because of fee
-        // escalation. The imbalance predates escalation — two 60s sends already exceeded a 60s
-        // lease — but escalation widens it by the bump factor, so it is worth surfacing.
+        // taking up to `(1 + L1_TX_MAX_BUMPS) * (TX_CONFIRMATION_TIMEOUT + send timeout)` because
+        // of fee escalation and the per-attempt bound on fill/sign/broadcast — see
+        // `GasPolicy::worst_case_send_secs`. The imbalance predates escalation — two 60s sends
+        // already exceeded a 60s lease — but escalation widens it by the bump factor, so it is
+        // worth surfacing.
         //
         // Warned rather than enforced: the right setting depends on how the deployment supervises
         // restarts, and refusing to start would be worse than the risk being warned about.
