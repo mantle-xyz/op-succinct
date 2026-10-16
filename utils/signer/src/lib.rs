@@ -75,6 +75,28 @@ const CONFIRMATION_POLL_INTERVAL: Duration = Duration::from_secs(4);
 /// [MANTLE] Bound on the startup signing self-check.
 const SELF_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// [MANTLE] A permission check the caller supplies, run immediately before every broadcast of a
+/// send (see [`Signer::send_transaction_request_guarded`]). The proposer passes its chain lock
+/// check. The signer itself knows nothing about locks.
+pub type BroadcastGuard<'a> = &'a (dyn Fn() -> Result<()> + Send + Sync);
+
+/// [MANTLE] A send stopped because its [`BroadcastGuard`] refused a broadcast. Nothing was
+/// broadcast for the refused attempt, and the send does not escalate further.
+#[derive(Debug)]
+pub struct BroadcastRefused(pub String);
+
+impl std::fmt::Display for BroadcastRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "broadcast refused: {}", self.0)
+    }
+}
+
+impl std::error::Error for BroadcastRefused {}
+
+fn check_broadcast_guard(guard: BroadcastGuard<'_>) -> Result<()> {
+    guard().map_err(|e| anyhow::Error::new(BroadcastRefused(format!("{e:#}"))))
+}
+
 /// Reads and parses an env var, warning loudly if it is set but unparseable.
 ///
 /// A silent fallback to the default is the wrong behaviour for an operational knob: a typo in a
@@ -458,6 +480,26 @@ impl Signer {
         transaction_request: TransactionRequest,
         timeout_secs: u64,
     ) -> Result<TransactionReceipt> {
+        self.send_transaction_request_guarded(l1_rpc, transaction_request, timeout_secs, &|| Ok(()))
+            .await
+    }
+
+    /// [`Self::send_transaction_request_with_timeout`], with `guard` called immediately before
+    /// **every** broadcast — the first attempt and each fee-escalation replacement — and once
+    /// up front. If it fails, nothing more is broadcast: the send stops at once with a
+    /// [`BroadcastRefused`] error instead of escalating. The proposer passes its chain lock
+    /// check here, so a process that lost the lock mid-send (lease lapsed, or resumed from a
+    /// pause) cannot broadcast a replacement.
+    pub async fn send_transaction_request_guarded(
+        &self,
+        l1_rpc: Url,
+        transaction_request: TransactionRequest,
+        timeout_secs: u64,
+        guard: BroadcastGuard<'_>,
+    ) -> Result<TransactionReceipt> {
+        // Up front too: refuses before any L1 read or signing when the guard already fails.
+        check_broadcast_guard(guard)?;
+
         let policy = GasPolicy::from_env();
         let provider = ProviderBuilder::new().network::<Ethereum>().connect_http(l1_rpc.clone());
 
@@ -529,7 +571,13 @@ impl Signer {
             let attempt_budget = Duration::from_secs(attempt_budget_secs(timeout_secs));
             let outcome = match tokio::time::timeout(
                 attempt_budget,
-                self.dispatch_transaction(l1_rpc.clone(), candidate, timeout_secs, &mut this_hash),
+                self.dispatch_transaction(
+                    l1_rpc.clone(),
+                    candidate,
+                    timeout_secs,
+                    &mut this_hash,
+                    guard,
+                ),
             )
             .await
             {
@@ -542,6 +590,17 @@ impl Signer {
             };
             match outcome {
                 Ok(receipt) => return Ok(receipt),
+                // The guard refused this attempt's broadcast: stop here — no escalation, no
+                // further broadcast. Earlier attempts' hashes are named for the operator; the
+                // caller (whose permission to send just ended) decides what that means.
+                Err(e) if e.downcast_ref::<BroadcastRefused>().is_some() => {
+                    return Err(e.context(format!(
+                        "L1 send stopped before broadcasting attempt {} (nonce {:?}); earlier \
+                         attempts already broadcast: {sent_hashes:?}",
+                        attempt + 1,
+                        request.nonce
+                    )));
+                }
                 Err(e) => {
                     // Record this attempt BEFORE deciding anything. The invariant that keeps a
                     // successful transaction from being reported as failed is: every `Err` return
@@ -627,6 +686,7 @@ impl Signer {
         mut transaction_request: TransactionRequest,
         timeout_secs: u64,
         sent_hash: &mut Option<TxHash>,
+        guard: BroadcastGuard<'_>,
     ) -> Result<TransactionReceipt> {
         match self {
             Signer::Web3Signer(signer_url, signer_address) => {
@@ -654,6 +714,8 @@ impl Signer {
                 let tx_envelope = TxEnvelope::decode_2718(&mut raw.as_ref())
                     .context("Web3Signer returned an undecodable eth_signTransaction payload")?;
 
+                // Last moment before the transaction leaves this process.
+                check_broadcast_guard(guard)?;
                 // Record before broadcasting — see `send_with_wallet` for why the order matters.
                 *sent_hash = Some(*tx_envelope.tx_hash());
                 let pending = provider
@@ -677,6 +739,7 @@ impl Signer {
                     timeout_secs,
                     sent_hash,
                     "Failed to send transaction",
+                    guard,
                 )
                 .await
             }
@@ -689,6 +752,7 @@ impl Signer {
                     timeout_secs,
                     sent_hash,
                     "Failed to send GCP KMS-signed transaction",
+                    guard,
                 )
                 .await
             }
@@ -701,6 +765,7 @@ impl Signer {
                     timeout_secs,
                     sent_hash,
                     "Failed to send AWS KMS-signed transaction",
+                    guard,
                 )
                 .await
             }
@@ -713,6 +778,8 @@ impl Signer {
 ///
 /// [MANTLE] Shared by every signer that signs locally through an [`EthereumWallet`] — a private
 /// key, GCP KMS or AWS KMS. Their bodies were identical apart from the error message.
+// The broadcast guard is the eighth; bundling these into a struct would only move the list.
+#[allow(clippy::too_many_arguments)]
 async fn send_with_wallet(
     l1_rpc: Url,
     wallet: EthereumWallet,
@@ -721,6 +788,7 @@ async fn send_with_wallet(
     timeout_secs: u64,
     sent_hash: &mut Option<TxHash>,
     send_error: &'static str,
+    guard: BroadcastGuard<'_>,
 ) -> Result<TransactionReceipt> {
     // Ensure the request has a `from` address so the wallet filler can sign it.
     transaction_request.set_from(from);
@@ -742,6 +810,9 @@ async fn send_with_wallet(
         provider.fill(transaction_request).await.context(send_error)?.try_into_envelope().map_err(
             |_| anyhow::anyhow!("{send_error}: the wallet filler did not sign the request"),
         )?;
+    // Last moment before the transaction leaves this process: filling and (KMS) signing above
+    // can take a while, and a guard that held at the start of the send may not hold now.
+    check_broadcast_guard(guard)?;
     *sent_hash = Some(*envelope.tx_hash());
 
     let pending = provider.send_tx_envelope(envelope).await.context(send_error)?;
@@ -1126,6 +1197,21 @@ impl SignerLock {
         let signer = self.inner.lock().await;
         signer
             .send_transaction_request_with_timeout(l1_rpc, transaction_request, timeout_secs)
+            .await
+    }
+
+    /// [`Signer::send_transaction_request_guarded`] under the lock: `guard` runs before every
+    /// broadcast of this send.
+    pub async fn send_transaction_request_guarded(
+        &self,
+        l1_rpc: Url,
+        transaction_request: TransactionRequest,
+        timeout_secs: u64,
+        guard: BroadcastGuard<'_>,
+    ) -> Result<TransactionReceipt> {
+        let signer = self.inner.lock().await;
+        signer
+            .send_transaction_request_guarded(l1_rpc, transaction_request, timeout_secs, guard)
             .await
     }
 }
@@ -1535,6 +1621,62 @@ mod signer_selection_tests {
             .unwrap_err();
         assert!(err.to_string().contains("pre-send"), "{err}");
         assert!(started.elapsed() < L1_RPC_TIMEOUT + Duration::from_secs(10));
+    }
+
+    /// A guard that already fails refuses the send before any L1 read or signing.
+    #[tokio::test]
+    async fn guard_refusing_up_front_sends_nothing() {
+        let signer = Signer::new_local_signer(ANVIL_KEY).unwrap();
+        let err = signer
+            .send_transaction_request_guarded(
+                // Unroutable: any network access would fail differently (or hang).
+                "http://127.0.0.1:9".parse().unwrap(),
+                TransactionRequest::default().to(Address::ZERO),
+                60,
+                &|| anyhow::bail!("chain lock not held"),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.downcast_ref::<BroadcastRefused>().is_some(), "{err:#}");
+    }
+
+    /// The guard is checked again at the last moment before broadcasting, after the transaction
+    /// is filled and signed: a guard that held at the start but fails by then must leave nothing
+    /// on chain. Needs `anvil --port 8545` (`no_proxy=127.0.0.1,localhost` behind a proxy).
+    #[tokio::test]
+    #[ignore]
+    async fn guard_refusing_at_broadcast_leaves_nothing_on_chain() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let url: Url = "http://127.0.0.1:8545".parse().unwrap();
+        let signer = Signer::new_local_signer(ANVIL_KEY).unwrap();
+        let provider = ProviderBuilder::new().network::<Ethereum>().connect_http(url.clone());
+        let nonce_before = provider.get_transaction_count(signer.address()).await.unwrap();
+
+        // Allow the up-front check, refuse every later (pre-broadcast) one.
+        let calls = AtomicUsize::new(0);
+        let guard = move || {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(())
+            } else {
+                anyhow::bail!("lease lost while signing")
+            }
+        };
+        let err = signer
+            .send_transaction_request_guarded(
+                url,
+                TransactionRequest::default()
+                    .to(Address::repeat_byte(0x22))
+                    .value(alloy_primitives::U256::from(1u64)),
+                60,
+                &guard,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.downcast_ref::<BroadcastRefused>().is_some(), "{err:#}");
+
+        let nonce_after = provider.get_transaction_count(signer.address()).await.unwrap();
+        assert_eq!(nonce_after, nonce_before, "nothing may reach the chain after a refusal");
     }
 }
 

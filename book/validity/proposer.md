@@ -55,6 +55,7 @@ Before starting the proposer, ensure you have deployed the relevant contracts an
 | `OP_SUCCINCT_MOCK` | Default: `false`. Set to `true` to run in mock proof mode. The `OPSuccinctL2OutputOracle` contract must be configured to use an `SP1MockVerifier`. |
 | `METRICS_PORT` | Default: `8080`. The port to run the metrics server on. |
 | `LOOP_INTERVAL` | Default: `60`. The interval (in seconds) between each iteration of the OP Succinct service. |
+| `PROGRESS_WATCHDOG_SECS` | Default: derived (`LOOP_INTERVAL` + 2 × worst-case L1 send + 600; 2940 with defaults). If the main loop completes no iteration for this long while no L1 transaction is being sent, the proposer releases its chain lock and exits so the supervisor restarts it. `0` disables the watchdog. See [Single proposer per chain](#single-proposer-per-chain). |
 | `SAFE_DB_FALLBACK` | Default: `false`. Whether to fallback to timestamp-based L1 head estimation even though SafeDB is not activated for op-node.  When `false`, proposer will panic if SafeDB is not available. It is by default `false` since using the fallback mechanism will result in higher proving cost. |
 | `L1_BLOCK_TAG` | Default: `finalized`. Which L1 block to anchor proof generation against. One of `finalized` (Casper FFG finalized, ~13 min), `safe` (FFG justified checkpoint, ~6.4 min), `latest` (chain tip). Non-default values trade cryptoeconomic finality for latency and must only be used by operators who understand the L1-reorg implications for validity-mode chains. See the [L1 block selection](#l1-block-selection) section below. |
 | `L1_CONFIRMATIONS` | Default: `0`. Number of additional L1 block confirmations to wait behind the block returned by `L1_BLOCK_TAG` (e.g. `L1_BLOCK_TAG=latest` with `L1_CONFIRMATIONS=4` proves against `latest - 4`). Saturates at 0 if the offset would underflow. |
@@ -99,6 +100,21 @@ Selection rules:
 At startup a KMS signer signs one fixed probe digest and checks that the signature recovers to its address, so a missing `kms:Sign` (or GCP signing) permission fails immediately rather than at the first L1 transaction. The selected backend and address are logged as `L1 transaction signer ready`. AWS KMS calls time out after 10s per attempt and 30s in total; each L1 transaction attempt (fill, sign, broadcast) and every L1 read made while sending is bounded, so a stalled signer or RPC fails the attempt instead of blocking every later transaction. A transaction is only reported as sent once it has 3 confirmations — including when it is found mined after a failed or replaced attempt.
 
 `NETWORK_PRIVATE_KEY` / `USE_KMS_REQUESTER` are separate: they sign Succinct Prover Network requests, not L1 transactions.
+
+### Single proposer per chain
+
+Only one proposer may send L1 transactions for a chain at a time. Proposers sharing a database coordinate through a lease in the `chain_locks` table:
+
+- At startup the proposer takes the lease atomically, retrying every 10 seconds while another proposer holds it. A holder that is still running keeps it; one that has stopped is replaced within about two minutes.
+- A background heartbeat renews the 120-second lease every 30 seconds. Immediately before every broadcast — including fee-bump replacements of a stuck transaction — the proposer checks it still holds the lease; if not, nothing more is broadcast.
+- If the lease is lost — taken by another proposer, or not renewed in time — the proposer exits and the supervisor restarts it.
+- If the main loop stops making progress for `PROGRESS_WATCHDOG_SECS` while no transaction is being sent, the proposer gives up the lease and exits.
+
+Operational notes:
+
+- **Never run two proposer versions side by side.** When upgrading or rolling back, stop the running proposer before starting the other version. Older versions do not honour the lease owner.
+- Monitor `succinct_loop_last_progress_timestamp` (alert when it falls well behind) and `succinct_chain_lock_held`. A renewing lease does not mean the main loop is healthy.
+- `clear-stuck-txs` uses the same account but takes no lease. Stop the proposer before running it.
 
 ## Build the Proposer Service
 

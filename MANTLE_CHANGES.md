@@ -828,6 +828,81 @@ which covers only 256 blocks, so a checkpoint transaction stuck beyond ~51 minut
 to revert. Escalation makes long stalls unlikely rather than impossible; recognising and
 re-issuing an expired checkpoint is still unimplemented.
 
+### 3.10d Chain lock: owner-scoped lease, heartbeat, and progress watchdog
+
+**The defect (pre-existing on `main`).** The chain lock — the only thing stopping two proposers
+from sending from one account and fighting over nonces — did not hold while a proposer worked:
+
+- Its lease was `LOOP_INTERVAL`, renewed only at the *end* of an iteration, after which `run`
+  sleeps for exactly `LOOP_INTERVAL`. The lease therefore lapsed at the start of **every**
+  iteration and stayed lapsed until that iteration finished; any iteration that returned early
+  skipped the renewal altogether. Raising `LOOP_INTERVAL` cannot fix a sleep equal to the lease.
+- Acquisition was check-then-insert — two statements — so two proposers could both pass.
+- Renewal was an unconditional `UPDATE … WHERE chain id`, so either process could keep the other's
+  lease alive; nothing recorded who held it.
+
+The send path in §3.5a (bounded attempts, confirmation waits) lengthens iterations and so widened
+the window, which is how this was found.
+
+**What replaces it** (`validity/src/chain_lock.rs`, `validity/migrations/07_chain_lock_owner.sql`):
+
+| Piece | Behaviour |
+|---|---|
+| Schema | `chain_locks` gains `owner_id TEXT` and `lease_expires_at TIMESTAMPTZ` (additive, nullable). All expiry is judged by the database clock. |
+| Acquire | One `INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING` — takes the row only if it is new, its lease has lapsed, or (legacy row, `owner_id IS NULL`) its `locked_at` is older than one lease. Atomic: of two racing proposers exactly one wins (tested over 20 rounds). |
+| Startup | `main` acquires **before** constructing the proposer, retrying every 10s. A holder that keeps renewing keeps this process waiting indefinitely; one that has exited is replaced as soon as its lease lapses. (Previously a held lock made startup fail and the supervisor crash-loop.) |
+| Lease / renew | 120s lease, renewed every 30s by a background heartbeat independent of the loop, each statement bounded by 10s. Renew is `UPDATE … WHERE owner_id = me AND lease_expires_at > NOW()`: a lapsed lease is **not** revived. |
+| Lost lease | "Not the holder" on renew marks the lease lost **immediately**; so does reaching the local deadline without a renewal. Losing it ends the process: `main` selects on it, and returning drops every task. The supervisor restarts the process, which waits to re-acquire. |
+| Send guard | `ChainLease::ensure_held()` is passed to the signer as a `BroadcastGuard` (`SignerLock::send_transaction_request_guarded`) and runs **immediately before every broadcast** of a send — the first attempt and each fee-escalation replacement, after filling and (KMS) signing — plus once up front. A refusal stops the send at once with `BroadcastRefused`: no further broadcast, no escalation. Not just a flag kept by the heartbeat: it compares a conservative local deadline — the instant *before* the last successful renew statement + lease − 15s — on **both** the monotonic and the wall clock. A paused process that resumes before the heartbeat runs is refused; the wall clock covers a suspended VM, during which Linux's monotonic clock (what Rust's `Instant` uses) does not advance. |
+| Progress watchdog | The heartbeat keeps renewing as long as the process lives, so a wedged loop would hold the lock forever (the 2026-09-20 8-core-pod stall ran 7.5h with probes green). The watchdog fires when no iteration has completed for `PROGRESS_WATCHDOG_SECS` **and no L1 send is in flight**, then marks the lease lost — stopping renewal and exiting for a restart. "Start a send" (`LoopProgress::begin_send`) and "declare the loop stalled" take the **same mutex**, so they cannot interleave: either the send registers first and the watchdog stands down, or the watchdog decides first and the send is refused before anything is signed — and no send starts after that. It never cuts a send short (a broadcast may already have reached the node); sends are bounded on their own (§3.5a). Default threshold: `LOOP_INTERVAL + 2 × worst-case send + 600s` (2940s with defaults); `0` disables it. |
+| Metrics | `succinct_chain_lock_held`, `succinct_chain_lock_lease_remaining_secs`, `succinct_chain_lock_renew_failures`, `succinct_loop_last_progress_timestamp`. The old startup warning comparing `LOOP_INTERVAL` with the worst-case send is gone — the lease no longer depends on `LOOP_INTERVAL`. |
+
+**Operational rules — read before deploying or rolling back:**
+
+- **Old and new versions must never run as active proposers at the same time.** An older binary
+  neither checks `owner_id` nor maintains `lease_expires_at`; its renewal is still the
+  unconditional `UPDATE`. The legacy-row rule (a row with no owner is held for one lease after
+  `locked_at`) covers a *normal* startup next to an old holder, not a paused-and-resumed old
+  process or a rollback. The migration may be deployed first (it is additive and an old binary
+  ignores both columns), but when switching or rolling back the process: **stop the running
+  version, then start the other**, and let it acquire the lock.
+- Alert on `time() - succinct_loop_last_progress_timestamp` well below the watchdog threshold
+  (e.g. 15 min): a renewing heartbeat says nothing about the main loop. Also alert on
+  `succinct_chain_lock_held == 0` for a running proposer, and on `succinct_chain_lock_renew_failures`
+  rising.
+- `clear-stuck-txs` sends from the same account and takes no lock. Stop the proposer before
+  running it.
+
+**What the lock guarantees — and what it does not.** It guarantees that two proposers never keep
+running side by side contending for the account's nonces, and that a superseded holder broadcasts
+**at most one more transaction**: the one whose guard check had already passed. It does **not**
+give strict mutual exclusion at the instant of broadcast. No client-side check can: there is always
+an `.await` between "the check passed" and "the bytes left the process", and a process paused there
+resumes straight into the send. Closing that gap needs fencing at the receiver — e.g. an owner
+epoch the L2OO contract checks on every `proposeL2Output` / `checkpointBlockHash` — which is a
+contract upgrade and out of scope here (decided 2026-10-19; revisit only if broadcast-time
+exclusivity becomes a hard requirement).
+
+**Accepted behaviours — deliberate, not defects.** Every way a send can meet a lost lease or a
+stall was walked through; these three remain by design. Re-raise them only with a scenario that
+breaks the stated reason.
+
+| Behaviour | Why it is accepted |
+|---|---|
+| The guard passes, and then — before `eth_sendRawTransaction` reaches the node — the lease lapses and a successor takes over: the process is **paused after the check** (scheduling, GC, VM suspend) past the lease, or the request is delayed in transit past the 15s safety margin. The old process then broadcasts that one transaction. | Bounded to that single transaction: on resuming, the next guard check (any fee-escalation replacement) refuses, and the heartbeat finds the local deadline passed or the lease taken, marks it lost and ends the process. The transaction is at nonce N, which the successor either also uses (so at most one of the two is mined) or builds on (N+1 after N) — never a conflicting branch. Its content is a legitimate proposer action: a `checkpointBlockHash` is harmless, and a `proposeL2Output` carries a proof the contract verifies (a duplicate is rejected on chain). Cost: some gas, and the successor may see one "nonce consumed by a transaction other than ours" failure, which the existing retry path handles next iteration. |
+| A lease lost while a send is already broadcast and waiting for confirmations ends the process mid-wait. | Equivalent to a crash at that point. Continuing to hold work after losing the lock is exactly what the lock forbids; the broadcast transaction either lands or is replaced, and the next holder reads the chain and the database as after any crash. The watchdog, unlike lease loss, never ends a send (above). |
+| `clear-stuck-txs` uses the unguarded send path and takes no lock. | It is a manual recovery tool, run while the proposer is stopped (operational rule above). Making it take the lock would block it in exactly the situation it exists for — a proposer that is wedged but alive. |
+
+**Tests.** Embedded-Postgres tests cover exclusivity, the concurrent race, renew-by-holder-only,
+lapse-then-takeover (and the old holder failing to renew), the legacy row at 119s (held) and 121s
+(taken), and end to end: after a takeover the very next renewal marks the lease lost and sends are
+refused. Unit tests cover the dual-clock deadline, the safety margin, sticky loss, the watchdog
+never firing during a send, no send starting after a stall is declared, and a 2000-round
+real-thread race in which a starting send and the stall declaration never both succeed. Signer
+tests: a guard refusing up front sends nothing (no network), and against anvil a guard that
+passes up front but refuses at broadcast time leaves the account nonce unchanged — the
+transaction was signed but never broadcast.
+
 ### 3.11 Upstream sync v3.8.1 → v3.12.0
 
 22 upstream commits. What we took, what we held, and the three things that are easy to get wrong.

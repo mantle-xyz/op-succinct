@@ -126,6 +126,30 @@ pub enum ValidityGauge {
         message = "Number of aggregation proofs failed and rebuilt because the chain rejected the previous one"
     )]
     AggProofRebuiltAfterRejection,
+
+    // [MANTLE] Chain lock lease and main-loop progress. See chain_lock.rs / MANTLE_CHANGES.md
+    // §3.10d. A healthy heartbeat does not mean a healthy proposer: alert on
+    // `time() - succinct_loop_last_progress_timestamp` as well.
+    #[strum(
+        serialize = "succinct_chain_lock_held",
+        message = "1 while this process holds the chain lock lease and may send L1 transactions"
+    )]
+    ChainLockHeld,
+    #[strum(
+        serialize = "succinct_chain_lock_lease_remaining_secs",
+        message = "Seconds left before this process's local chain lock deadline (lease minus safety margin), as of the last renewal"
+    )]
+    ChainLockLeaseRemainingSecs,
+    #[strum(
+        serialize = "succinct_chain_lock_renew_failures",
+        message = "Number of chain lock renewals that errored or timed out (a lost lease is logged and ends the process)"
+    )]
+    ChainLockRenewFailures,
+    #[strum(
+        serialize = "succinct_loop_last_progress_timestamp",
+        message = "Unix time at which the main loop last completed an iteration (or started)"
+    )]
+    LoopLastProgressTimestamp,
 }
 
 impl MetricsGauge for ValidityGauge {}
