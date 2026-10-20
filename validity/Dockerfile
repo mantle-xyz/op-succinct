@@ -29,6 +29,16 @@ RUN curl -LO https://go.dev/dl/go1.24.0.linux-amd64.tar.gz && \
     rm go1.24.0.linux-amd64.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
+# [MANTLE] sp1-recursion-gnark-ffi's build script fetches Go modules, and one of
+# them — github.com/consensys/gnark-ignition-verifier, pinned in its go.sum —
+# now 404s on GitHub and is no longer served by proxy.golang.org (checked
+# 2026-10-13; every SP1 version from 6.4.0 to 6.8.1 needs it). goproxy.cn still
+# serves that exact version. Try the default proxy first and fall back; go
+# verifies whatever it downloads against go.sum, so the fallback cannot swap
+# content. Without this, any cold cook layer (i.e. every Cargo.lock change)
+# fails. Same fix as mantle-xyz/sp1-cluster 7a825cd.
+ENV GOPROXY="https://proxy.golang.org,https://goproxy.cn,direct"
+
 # Install SP1
 RUN curl -L https://sp1.succinct.xyz | bash && \
     ~/.sp1/bin/sp1up -v 6.4.0 && \
