@@ -247,3 +247,12 @@ impl OPSuccinctRequest {
 pub struct DriverDBClient {
     pub pool: PgPool,
 }
+
+/// [MANTLE] Current holder of a chain lock, as stored. `owner_id` / `lease_expires_at` are `None`
+/// on a row last written by an older binary, which only maintained `locked_at`.
+#[derive(Debug, Clone)]
+pub struct ChainLockHolder {
+    pub owner_id: Option<String>,
+    pub lease_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub locked_at: Option<NaiveDateTime>,
+}

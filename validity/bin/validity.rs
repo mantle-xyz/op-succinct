@@ -11,7 +11,9 @@ use op_succinct_host_utils::{
 };
 use op_succinct_proof_utils::initialize_host;
 use op_succinct_validity::{
-    read_proposer_env, DriverDBClient, Proposer, RequesterConfig, ValidityGauge,
+    acquire_chain_lease, default_watchdog_threshold, read_proposer_env,
+    spawn_chain_lease_heartbeat, spawn_progress_watchdog, DriverDBClient, LoopProgress, Proposer,
+    RequesterConfig, ValidityGauge,
 };
 use std::sync::Arc;
 use tikv_jemallocator::Jemalloc;
@@ -111,6 +113,40 @@ async fn main() -> Result<()> {
 
     enforce_l1_selection_supported(host.as_ref(), &fetcher, l1_selection).await?;
 
+    // Initialize the metrics exporter before taking the chain lock, so a proposer waiting for
+    // another one's lease is observable (`succinct_chain_lock_held` = 0).
+    info!("Initializing metrics on port {}", env_config.metrics_port);
+    ValidityGauge::register_all();
+    init_metrics(&env_config.metrics_port);
+
+    // [MANTLE] Take the chain lock lease (waits while another live proposer holds it), keep it
+    // renewed from a background heartbeat, and arm the main-loop progress watchdog. See
+    // chain_lock.rs / MANTLE_CHANGES.md §3.10d.
+    let chain_lease = acquire_chain_lease(
+        db_client.as_ref(),
+        proposer_config.l1_chain_id,
+        proposer_config.l2_chain_id,
+    )
+    .await;
+    spawn_chain_lease_heartbeat(db_client.clone(), chain_lease.clone());
+
+    let progress = LoopProgress::new();
+    let watchdog_threshold = match env_config.progress_watchdog_secs {
+        Some(0) => None,
+        Some(secs) => Some(std::time::Duration::from_secs(secs)),
+        None => Some(default_watchdog_threshold(
+            env_config.loop_interval,
+            op_succinct_signer_utils::GasPolicy::from_env()
+                .worst_case_send_secs(proposer_config.tx_confirmation_timeout),
+        )),
+    };
+    match watchdog_threshold {
+        Some(threshold) => {
+            spawn_progress_watchdog(progress.clone(), chain_lease.clone(), threshold);
+        }
+        None => tracing::warn!("PROGRESS_WATCHDOG_SECS=0: main-loop progress watchdog disabled"),
+    }
+
     let proposer = Proposer::new(
         l1_provider,
         db_client.clone(),
@@ -119,6 +155,8 @@ async fn main() -> Result<()> {
         env_config.signer,
         env_config.loop_interval,
         host,
+        chain_lease.clone(),
+        progress,
     )
     .await?;
 
@@ -132,16 +170,21 @@ async fn main() -> Result<()> {
         Ok(())
     });
 
-    // Initialize metrics exporter.
-    info!("Initializing metrics on port {}", env_config.metrics_port);
-    ValidityGauge::register_all();
-    init_metrics(&env_config.metrics_port);
-
-    // Wait for all tasks to complete.
-    let proposer_res = proposer_handle.await?;
-    if let Err(e) = proposer_res {
-        tracing::error!("Proposer task failed: {}", e);
-        return Err(e);
+    // Run until the proposer task ends or the chain lock is lost. Losing the lock (lease lapsed,
+    // taken over, or the progress watchdog fired) ends the process: returning from `main` drops
+    // the runtime and with it every task, so no further L1 transaction is sent. The supervisor
+    // restarts the process, which then waits to re-acquire the lock.
+    tokio::select! {
+        joined = proposer_handle => {
+            if let Err(e) = joined? {
+                tracing::error!("Proposer task failed: {}", e);
+                return Err(e);
+            }
+        }
+        reason = chain_lease.lost() => {
+            tracing::error!(%reason, "Chain lock lost; exiting");
+            return Err(anyhow::anyhow!("chain lock lost: {reason}"));
+        }
     }
 
     Ok(())

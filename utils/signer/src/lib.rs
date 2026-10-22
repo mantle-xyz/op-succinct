@@ -3,10 +3,11 @@ use std::{str::FromStr, sync::Arc};
 use alloy_consensus::TxEnvelope;
 use alloy_eips::Decodable2718;
 use alloy_network::{Ethereum, EthereumWallet, TransactionBuilder};
-use alloy_primitives::{Address, Bytes, TxHash, TxKind};
+use alloy_primitives::{keccak256, Address, Bytes, TxHash, TxKind};
 use alloy_provider::{Provider, ProviderBuilder, Web3Signer};
 use alloy_rpc_types_eth::{TransactionReceipt, TransactionRequest};
 use alloy_signer::Signer as AlloySigner;
+use alloy_signer_aws::AwsSigner;
 use alloy_signer_gcp::{
     // [MANTLE] Use the gcloud_sdk version re-exported by alloy_signer_gcp 2.x so the
     // GoogleApiClient type used to construct GcpSigner matches what GcpSigner::new expects.
@@ -51,6 +52,50 @@ pub const DEFAULT_MAX_BUMPS: u32 = 3;
 /// Floor on `maxPriorityFeePerGas`. A zero tip gives block builders no reason to include the
 /// transaction, and makes the +10% replacement threshold awkward to clear.
 const PRIORITY_FEE_FLOOR_WEI: u128 = 10_000_000; // 0.01 gwei
+
+/// [MANTLE] Per-attempt and total time limits for AWS KMS calls (`GetPublicKey`, `Sign`).
+/// A KMS sign normally takes tens of milliseconds; the SDK retries within the operation budget.
+const AWS_KMS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
+const AWS_KMS_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// [MANTLE] Upper bound on filling, signing and broadcasting one transaction attempt (the wait
+/// for confirmations is bounded separately by the caller's timeout). Covers every signer kind —
+/// a remote signer or an L1 RPC that stops answering mid-call would otherwise hold the
+/// `SignerLock` indefinitely. On expiry the attempt fails into the normal same-nonce escalation.
+const SEND_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// [MANTLE] Bound on each group of L1 reads made while `SignerLock` is held (pre-send nonce/fee
+/// reads, the post-failure receipt lookup, the final nonce read). The default HTTP client has no
+/// request timeout.
+const L1_RPC_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// [MANTLE] How often the post-failure path re-checks a mined receipt's confirmation depth.
+const CONFIRMATION_POLL_INTERVAL: Duration = Duration::from_secs(4);
+
+/// [MANTLE] Bound on the startup signing self-check.
+const SELF_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// [MANTLE] A permission check the caller supplies, run immediately before every broadcast of a
+/// send (see [`Signer::send_transaction_request_guarded`]). The proposer passes its chain lock
+/// check. The signer itself knows nothing about locks.
+pub type BroadcastGuard<'a> = &'a (dyn Fn() -> Result<()> + Send + Sync);
+
+/// [MANTLE] A send stopped because its [`BroadcastGuard`] refused a broadcast. Nothing was
+/// broadcast for the refused attempt, and the send does not escalate further.
+#[derive(Debug)]
+pub struct BroadcastRefused(pub String);
+
+impl std::fmt::Display for BroadcastRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "broadcast refused: {}", self.0)
+    }
+}
+
+impl std::error::Error for BroadcastRefused {}
+
+fn check_broadcast_guard(guard: BroadcastGuard<'_>) -> Result<()> {
+    guard().map_err(|e| anyhow::Error::new(BroadcastRefused(format!("{e:#}"))))
+}
 
 /// Reads and parses an env var, warning loudly if it is set but unparseable.
 ///
@@ -140,9 +185,27 @@ impl GasPolicy {
     /// `max_bumps` and did that arithmetic itself, which meant the lease check silently depended
     /// on this module's retry shape.
     pub fn worst_case_send_secs(&self, per_attempt_timeout_secs: u64) -> u64 {
+        let rpc = L1_RPC_TIMEOUT.as_secs();
+        // Per attempt: the attempt itself, the post-failure receipt lookup, and — if that finds a
+        // mined transaction — the wait for its confirmations (bounded by the same timeout).
+        let per_attempt = attempt_budget_secs(per_attempt_timeout_secs)
+            .saturating_add(rpc)
+            .saturating_add(per_attempt_timeout_secs);
         // Widen before adding: `1 + max_bumps` in u32 overflows at u32::MAX, which a test caught.
-        u64::from(self.max_bumps).saturating_add(1).saturating_mul(per_attempt_timeout_secs)
+        u64::from(self.max_bumps)
+            .saturating_add(1)
+            .saturating_mul(per_attempt)
+            // Plus the pre-send nonce/fee reads and the final nonce read.
+            .saturating_add(rpc.saturating_mul(2))
     }
+}
+
+/// [MANTLE] Wall-time budget of one send attempt: the confirmation wait plus [`SEND_TIMEOUT`] for
+/// filling, signing and broadcasting. The send loop enforces exactly this, and
+/// [`GasPolicy::worst_case_send_secs`] is built from it, so the proposer's lease check and the
+/// real bound cannot drift apart.
+fn attempt_budget_secs(confirmation_timeout_secs: u64) -> u64 {
+    confirmation_timeout_secs.saturating_add(SEND_TIMEOUT.as_secs())
 }
 
 /// `maxFeePerGas` for a new transaction: the current price with headroom, never below the floor.
@@ -183,6 +246,10 @@ pub enum Signer {
     LocalSigner(PrivateKeySigner),
     /// Cloud HSM signer using Google.
     CloudHsmSigner(GcpSigner),
+    /// [MANTLE] AWS KMS signer (`L1_SIGNER_AWS_KMS_KEY_ID`, + `AWS_REGION` unless the key id is an
+    /// ARN; credentials from the default AWS chain — IRSA on EKS). Not `CRYPTO_KEY_ID`, which
+    /// is Mantle's secret-decryption key; see [`Signer::aws_kms_from_env`].
+    AwsKmsSigner(AwsSigner),
 }
 
 impl Signer {
@@ -191,6 +258,7 @@ impl Signer {
             Signer::Web3Signer(_, address) => *address,
             Signer::LocalSigner(signer) => signer.address(),
             Signer::CloudHsmSigner(signer) => signer.address(),
+            Signer::AwsKmsSigner(signer) => signer.address(),
         }
     }
 
@@ -206,82 +274,183 @@ impl Signer {
         Ok(Signer::LocalSigner(private_key))
     }
 
+    /// Builds the L1 transaction signer selected by the environment.
+    ///
+    /// [MANTLE] Exactly one backend is chosen, by [`select_signer_backend`] — see there for the
+    /// rules. Configuring two remote signers, or half of one, is an error rather than a silent
+    /// fallthrough to the next backend. Remote (KMS) signers sign one probe digest before this
+    /// returns, and the chosen backend and address are logged, so a mis-wired signer fails at
+    /// startup instead of at the first L1 transaction.
     pub async fn from_env() -> Result<Self> {
-        // [MANTLE compat] Existing Mantle deployments configure GCP KMS via two env vars:
-        //   HSM_API_NAME      — full GCP resource path
-        //
-        // projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>[/cryptoKeyVersions/<V>]
-        //   HSM_CREDENTIALS   — hex-encoded JSON service account key
-        // Production posture forbids writing service-account JSON to disk, so this path
-        // pipes the decoded JSON straight into gcloud-sdk's TokenSourceType::Json — the
-        // credential never touches the filesystem.
-        if let Ok(hsm_api_name) = std::env::var("HSM_API_NAME") {
-            let creds_json_hex = std::env::var("HSM_CREDENTIALS")
-                .context("HSM_CREDENTIALS required when HSM_API_NAME is set")?;
-            let creds_json_bytes = alloy_primitives::hex::decode(&creds_json_hex)
-                .context("HSM_CREDENTIALS is not valid hex")?;
-            let creds_json = String::from_utf8(creds_json_bytes)
-                .context("HSM_CREDENTIALS hex did not decode to UTF-8 JSON")?;
+        let backend = select_signer_backend(&raw_env_var)?;
+        let signer = match backend {
+            SignerBackend::GcpKmsResourcePath => Self::gcp_kms_from_resource_path().await?,
+            SignerBackend::GcpKmsKeyring => Self::gcp_kms_from_keyring().await?,
+            SignerBackend::AwsKms => Self::aws_kms_from_env().await?,
+            SignerBackend::Web3Signer => {
+                let url = env_var("SIGNER_URL").context("SIGNER_URL")?;
+                let address = env_var("SIGNER_ADDRESS").context("SIGNER_ADDRESS")?;
+                let signer_url = Url::parse(&url).context("Failed to parse SIGNER_URL")?;
+                let signer_address =
+                    Address::from_str(&address).context("Failed to parse SIGNER_ADDRESS")?;
+                Signer::new_web3_signer(signer_url, signer_address)
+            }
+            SignerBackend::Local => {
+                Signer::new_local_signer(&env_var("PRIVATE_KEY").context("PRIVATE_KEY")?)?
+            }
+        };
 
-            let GcpKeyPath { project_id, location, keyring, key_name, key_version } =
-                parse_gcp_key_resource_path(&hsm_api_name)?;
-
-            let keyring_ref = GcpKeyRingRef::new(&project_id, &location, &keyring);
-            let key_specifier = KeySpecifier::new(keyring_ref, &key_name, key_version);
-
-            let client = GoogleApi::from_function_with_token_source(
-                KeyManagementServiceClient::new,
-                "https://cloudkms.googleapis.com",
-                None,
-                GCP_DEFAULT_SCOPES.clone(),
-                TokenSourceType::Json(creds_json),
-            )
-            .await?;
-            let signer = GcpSigner::new(client, key_specifier, None).await?;
-
-            return Ok(Signer::CloudHsmSigner(signer));
+        match &signer {
+            Signer::CloudHsmSigner(s) => verify_remote_signer(s, backend).await?,
+            Signer::AwsKmsSigner(s) => verify_remote_signer(s, backend).await?,
+            Signer::Web3Signer(..) | Signer::LocalSigner(_) => {}
         }
 
-        if let (Ok(project_id), Ok(location), Ok(keyring_name)) = (
-            std::env::var("GOOGLE_PROJECT_ID"),
-            std::env::var("GOOGLE_LOCATION"),
-            std::env::var("GOOGLE_KEYRING"),
-        ) {
-            let key_name = std::env::var("HSM_KEY_NAME").expect("HSM_KEY_NAME");
-            let key_version =
-                std::env::var("HSM_KEY_VERSION").unwrap_or("1".to_string()).parse()?;
-
-            let keyring = GcpKeyRingRef::new(&project_id, &location, &keyring_name);
-
-            let key_specifier = KeySpecifier::new(keyring, &key_name, key_version);
-
-            let client = GoogleApi::from_function(
-                KeyManagementServiceClient::new,
-                "https://cloudkms.googleapis.com",
-                None,
-            )
-            .await?;
-            let signer = GcpSigner::new(client, key_specifier, None).await?;
-
-            Ok(Signer::CloudHsmSigner(signer))
-        } else if let (Ok(signer_url_str), Ok(signer_address_str)) =
-            (std::env::var("SIGNER_URL"), std::env::var("SIGNER_ADDRESS"))
-        {
-            let signer_url = Url::parse(&signer_url_str).context("Failed to parse SIGNER_URL")?;
-            let signer_address =
-                Address::from_str(&signer_address_str).context("Failed to parse SIGNER_ADDRESS")?;
-            Ok(Signer::new_web3_signer(signer_url, signer_address))
-        } else if let Ok(private_key_str) = std::env::var("PRIVATE_KEY") {
-            Signer::new_local_signer(&private_key_str)
+        if backend == SignerBackend::Local {
+            tracing::warn!(
+                backend = %backend,
+                address = %signer.address(),
+                "L1 transaction signer ready — using a plaintext PRIVATE_KEY"
+            );
         } else {
-            anyhow::bail!(
-                "None of the required signer configurations are set in environment:\n\
-                - For Cloud HSM (Mantle compat): HSM_API_NAME + HSM_CREDENTIALS (hex JSON)\n\
-                - For Cloud HSM (upstream): GOOGLE_PROJECT_ID, GOOGLE_LOCATION, GOOGLE_KEYRING\n\
-                - For Web3Signer: SIGNER_URL and SIGNER_ADDRESS\n\
-                - For Local: PRIVATE_KEY"
-            )
+            tracing::info!(
+                backend = %backend,
+                address = %signer.address(),
+                "L1 transaction signer ready"
+            );
         }
+        Ok(signer)
+    }
+
+    /// GCP KMS via a full key resource path.
+    ///
+    /// [MANTLE compat] Existing Mantle deployments configure GCP KMS via two env vars:
+    ///   HSM_API_NAME      — full GCP resource path
+    ///     projects/<P>/locations/<L>/keyRings/<KR>/cryptoKeys/<K>[/cryptoKeyVersions/<V>]
+    ///   HSM_CREDENTIALS   — hex-encoded JSON service account key
+    /// Production posture forbids writing service-account JSON to disk, so this path pipes the
+    /// decoded JSON straight into gcloud-sdk's TokenSourceType::Json — the credential never
+    /// touches the filesystem.
+    async fn gcp_kms_from_resource_path() -> Result<Self> {
+        let hsm_api_name = env_var("HSM_API_NAME").context("HSM_API_NAME")?;
+        let creds_json_hex = env_var("HSM_CREDENTIALS")
+            .context("HSM_CREDENTIALS required when HSM_API_NAME is set")?;
+        let creds_json_bytes = alloy_primitives::hex::decode(&creds_json_hex)
+            .context("HSM_CREDENTIALS is not valid hex")?;
+        let creds_json = String::from_utf8(creds_json_bytes)
+            .context("HSM_CREDENTIALS hex did not decode to UTF-8 JSON")?;
+
+        let GcpKeyPath { project_id, location, keyring, key_name, key_version } =
+            parse_gcp_key_resource_path(&hsm_api_name)?;
+
+        let keyring_ref = GcpKeyRingRef::new(&project_id, &location, &keyring);
+        let key_specifier = KeySpecifier::new(keyring_ref, &key_name, key_version);
+
+        let client = GoogleApi::from_function_with_token_source(
+            KeyManagementServiceClient::new,
+            "https://cloudkms.googleapis.com",
+            None,
+            GCP_DEFAULT_SCOPES.clone(),
+            TokenSourceType::Json(creds_json),
+        )
+        .await?;
+        let signer = GcpSigner::new(client, key_specifier, None).await?;
+
+        Ok(Signer::CloudHsmSigner(signer))
+    }
+
+    /// GCP KMS via `GOOGLE_PROJECT_ID` / `GOOGLE_LOCATION` / `GOOGLE_KEYRING` + `HSM_KEY_NAME`
+    /// (upstream's shape), with ambient Google credentials.
+    async fn gcp_kms_from_keyring() -> Result<Self> {
+        let project_id = env_var("GOOGLE_PROJECT_ID").context("GOOGLE_PROJECT_ID")?;
+        let location = env_var("GOOGLE_LOCATION").context("GOOGLE_LOCATION")?;
+        let keyring_name = env_var("GOOGLE_KEYRING").context("GOOGLE_KEYRING")?;
+        let key_name = env_var("HSM_KEY_NAME").context("HSM_KEY_NAME")?;
+        let key_version = match env_var("HSM_KEY_VERSION") {
+            Some(v) => v.parse().context("HSM_KEY_VERSION is not a u64")?,
+            None => 1,
+        };
+
+        let keyring = GcpKeyRingRef::new(&project_id, &location, &keyring_name);
+        let key_specifier = KeySpecifier::new(keyring, &key_name, key_version);
+
+        let client = GoogleApi::from_function(
+            KeyManagementServiceClient::new,
+            "https://cloudkms.googleapis.com",
+            None,
+        )
+        .await?;
+        let signer = GcpSigner::new(client, key_specifier, None).await?;
+
+        Ok(Signer::CloudHsmSigner(signer))
+    }
+
+    /// [MANTLE] AWS KMS via `L1_SIGNER_AWS_KMS_KEY_ID` (key id, key ARN, alias name or alias ARN).
+    ///
+    /// Credentials come from the default AWS provider chain — IRSA on EKS, i.e. the pod's
+    /// service-account role, which must be granted `kms:Sign` and `kms:GetPublicKey` on the key.
+    /// The region is the key ARN's when the key id is an ARN (overriding `AWS_REGION`, see
+    /// [`resolve_aws_region`]), otherwise `AWS_REGION`, otherwise whatever the default chain
+    /// resolves (`AWS_DEFAULT_REGION`, profile).
+    ///
+    /// Deliberately not `CRYPTO_KEY_ID`: in Mantle deployments that name is the AWS KMS key
+    /// `/usr/lib/crypto` uses to *decrypt* secrets at startup (with `CRYPTO_SECRET_NAMES`), and
+    /// mainnet sets it today. Reusing it would read a decryption key as a signing key.
+    ///
+    /// Deliberately not plain `AWS_KMS_KEY_ID` either: that is Foundry's `--aws` wallet variable,
+    /// and this repo's deploy scripts (`contracts/lib/func.sh`) use it for the *deployer* key. An
+    /// operator who ran a deploy and then `clear-stuck-txs` from the same shell would sign as the
+    /// deployer — a different account — with only a warning that `PRIVATE_KEY` was ignored.
+    ///
+    /// KMS calls are bounded by [`AWS_KMS_ATTEMPT_TIMEOUT`] / [`AWS_KMS_OPERATION_TIMEOUT`]. The
+    /// SDK sets none by default, and a hung call here would hold the `SignerLock` and stall every
+    /// later L1 send behind it while liveness probes stay green.
+    async fn aws_kms_from_env() -> Result<Self> {
+        let key_id = env_var("L1_SIGNER_AWS_KMS_KEY_ID").context("L1_SIGNER_AWS_KMS_KEY_ID")?;
+        let key_region =
+            kms_arn_region(&key_id).map(|region| aws_config::Region::new(region.to_string()));
+
+        // The *home* region — what credential resolution (IRSA → STS) uses — comes from the
+        // default chain (AWS_REGION, AWS_DEFAULT_REGION, profile). The key's region is only a
+        // fallback for it, so a local run with nothing but an ARN still works. Overriding the
+        // whole SdkConfig with the key's region would also send the IRSA STS call there, which
+        // fails on a pod whose egress / VPC endpoints only cover its own region.
+        let mut home_region = aws_config::meta::region::RegionProviderChain::default_provider();
+        if let Some(region) = key_region {
+            home_region = home_region.or_else(region);
+        }
+        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .timeout_config(
+                aws_config::timeout::TimeoutConfig::builder()
+                    .operation_attempt_timeout(AWS_KMS_ATTEMPT_TIMEOUT)
+                    .operation_timeout(AWS_KMS_OPERATION_TIMEOUT)
+                    .build(),
+            )
+            .region(home_region)
+            .load()
+            .await;
+
+        // Only the KMS client is pointed at the key's region.
+        let region = resolve_aws_region(config.region().map(ToString::to_string), &key_id)
+            .context(
+                "AWS region is unknown: set AWS_REGION, or use a key ARN for \
+                 L1_SIGNER_AWS_KMS_KEY_ID",
+            )?;
+        let kms_config = aws_sdk_kms::config::Builder::from(&config)
+            .region(aws_config::Region::new(region.clone()))
+            .build();
+        let client = aws_sdk_kms::Client::from_conf(kms_config);
+        let signer = AwsSigner::new(client, key_id.clone(), None).await.with_context(|| {
+            // Name the region: a bare key id or alias looked up in the wrong one (e.g. a stale
+            // AWS_DEFAULT_REGION) surfaces from KMS only as "not found".
+            format!(
+                "Failed to load AWS KMS key {key_id} in region {region}. The key must be an \
+                 asymmetric ECC_SECG_P256K1 SIGN_VERIFY key in that region, and the role needs \
+                 kms:GetPublicKey on it."
+            )
+        })?;
+
+        Ok(Signer::AwsKmsSigner(signer))
     }
 
     /// Sends a transaction request, signed by the configured `signer`, using the default
@@ -311,42 +480,81 @@ impl Signer {
         transaction_request: TransactionRequest,
         timeout_secs: u64,
     ) -> Result<TransactionReceipt> {
+        self.send_transaction_request_guarded(l1_rpc, transaction_request, timeout_secs, &|| Ok(()))
+            .await
+    }
+
+    /// [`Self::send_transaction_request_with_timeout`], with `guard` called immediately before
+    /// **every** broadcast — the first attempt and each fee-escalation replacement — and once
+    /// up front. If it fails, nothing more is broadcast: the send stops at once with a
+    /// [`BroadcastRefused`] error instead of escalating. The proposer passes its chain lock
+    /// check here, so a process that lost the lock mid-send (lease lapsed, or resumed from a
+    /// pause) cannot broadcast a replacement.
+    pub async fn send_transaction_request_guarded(
+        &self,
+        l1_rpc: Url,
+        transaction_request: TransactionRequest,
+        timeout_secs: u64,
+        guard: BroadcastGuard<'_>,
+    ) -> Result<TransactionReceipt> {
+        // Up front too: refuses before any L1 read or signing when the guard already fails.
+        check_broadcast_guard(guard)?;
+
         let policy = GasPolicy::from_env();
         let provider = ProviderBuilder::new().network::<Ethereum>().connect_http(l1_rpc.clone());
 
-        // Pin the nonce so every escalation replaces the same transaction rather than queueing a
-        // new one behind it. `SignerLock` serialises sends, so nothing else claims it meanwhile.
-        let mut request = transaction_request;
-        if request.nonce.is_none() {
-            let nonce = provider
-                .get_transaction_count(self.address())
-                .pending()
-                .await
-                .context("Failed to read pending nonce")?;
-            request.set_nonce(nonce);
-        }
+        // [MANTLE] Every L1 read below runs while `SignerLock` is held, and the default HTTP
+        // client has no request timeout, so each one is bounded by `L1_RPC_TIMEOUT`: an RPC that
+        // accepts the connection and never answers would otherwise block every later send.
+        //
+        // Pre-send reads, bounded together. Nothing has been broadcast yet, so failing here is
+        // safe.
+        let (request, mut max_fee, mut priority_fee) =
+            tokio::time::timeout(L1_RPC_TIMEOUT, async {
+                // Pin the nonce so every escalation replaces the same transaction rather than
+                // queueing a new one behind it. `SignerLock` serialises sends, so nothing else
+                // claims it meanwhile.
+                let mut request = transaction_request;
+                if request.nonce.is_none() {
+                    let nonce = provider
+                        .get_transaction_count(self.address())
+                        .pending()
+                        .await
+                        .context("Failed to read pending nonce")?;
+                    request.set_nonce(nonce);
+                }
 
-        let (mut max_fee, mut priority_fee) = if has_caller_fees(&request) {
-            // Respect explicit pricing (clear-stuck-txs relies on this) but still escalate it if
-            // the transaction stalls.
-            (
-                request.max_fee_per_gas.unwrap_or_default(),
-                request.max_priority_fee_per_gas.unwrap_or_default(),
+                let (max_fee, priority_fee) = if has_caller_fees(&request) {
+                    // Respect explicit pricing (clear-stuck-txs relies on this) but still escalate
+                    // it if the transaction stalls.
+                    (
+                        request.max_fee_per_gas.unwrap_or_default(),
+                        request.max_priority_fee_per_gas.unwrap_or_default(),
+                    )
+                } else {
+                    // `eth_gasPrice`, not the block's `baseFeePerGas`: on an EIP-1559 chain nodes
+                    // return roughly base fee plus a tip estimate, so feeding it to the multiplier
+                    // slightly *over*-estimates. That is the safe direction, and it avoids a second
+                    // round trip to read the latest block header. Renamed accordingly so nobody
+                    // reads this as a true base fee.
+                    let gas_price =
+                        provider.get_gas_price().await.context("Failed to read gas price")?;
+                    let priority = provider
+                        .get_max_priority_fee_per_gas()
+                        .await
+                        .unwrap_or(PRIORITY_FEE_FLOOR_WEI)
+                        .max(PRIORITY_FEE_FLOOR_WEI);
+                    (compute_max_fee(gas_price, priority, &policy), priority)
+                };
+                anyhow::Ok((request, max_fee, priority_fee))
+            })
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                "L1 RPC did not answer the pre-send nonce / fee reads within {}s; nothing was sent",
+                L1_RPC_TIMEOUT.as_secs()
             )
-        } else {
-            // `eth_gasPrice`, not the block's `baseFeePerGas`: on an EIP-1559 chain nodes
-            // return roughly base fee plus a tip estimate, so feeding it to the multiplier
-            // slightly *over*-estimates. That is the safe direction, and it avoids a second
-            // round trip to read the latest block header. Renamed accordingly so nobody reads
-            // this as a true base fee.
-            let gas_price = provider.get_gas_price().await.context("Failed to read gas price")?;
-            let priority = provider
-                .get_max_priority_fee_per_gas()
-                .await
-                .unwrap_or(PRIORITY_FEE_FLOOR_WEI)
-                .max(PRIORITY_FEE_FLOOR_WEI);
-            (compute_max_fee(gas_price, priority, &policy), priority)
-        };
+            })??;
 
         let mut sent_hashes = Vec::new();
         let mut attempt = 0;
@@ -356,11 +564,43 @@ impl Signer {
             candidate.set_max_priority_fee_per_gas(priority_fee);
 
             let mut this_hash = None;
-            match self
-                .dispatch_transaction(l1_rpc.clone(), candidate, timeout_secs, &mut this_hash)
-                .await
+            // Bound the whole attempt: the confirmation wait is already limited to
+            // `timeout_secs`, and `SEND_TIMEOUT` covers filling, signing (KMS / Web3Signer) and
+            // broadcasting. A timeout is an ordinary failed attempt; `this_hash` still records
+            // anything that was broadcast before it fired.
+            let attempt_budget = Duration::from_secs(attempt_budget_secs(timeout_secs));
+            let outcome = match tokio::time::timeout(
+                attempt_budget,
+                self.dispatch_transaction(
+                    l1_rpc.clone(),
+                    candidate,
+                    timeout_secs,
+                    &mut this_hash,
+                    guard,
+                ),
+            )
+            .await
             {
+                Ok(outcome) => outcome,
+                Err(_) => Err(anyhow::anyhow!(
+                    "L1 transaction attempt did not finish within {}s (signing, broadcast or \
+                     confirmation stalled)",
+                    attempt_budget.as_secs()
+                )),
+            };
+            match outcome {
                 Ok(receipt) => return Ok(receipt),
+                // The guard refused this attempt's broadcast: stop here — no escalation, no
+                // further broadcast. Earlier attempts' hashes are named for the operator; the
+                // caller (whose permission to send just ended) decides what that means.
+                Err(e) if e.downcast_ref::<BroadcastRefused>().is_some() => {
+                    return Err(e.context(format!(
+                        "L1 send stopped before broadcasting attempt {} (nonce {:?}); earlier \
+                         attempts already broadcast: {sent_hashes:?}",
+                        attempt + 1,
+                        request.nonce
+                    )));
+                }
                 Err(e) => {
                     // Record this attempt BEFORE deciding anything. The invariant that keeps a
                     // successful transaction from being reported as failed is: every `Err` return
@@ -374,23 +614,28 @@ impl Signer {
                     }
 
                     // An escalation can lose the race: the transaction it replaces may have just
-                    // been mined, in which case the node rejects the replacement. That is success.
-                    for hash in &sent_hashes {
-                        if let Ok(Some(receipt)) = provider.get_transaction_receipt(*hash).await {
-                            return Ok(receipt);
-                        }
+                    // been mined, in which case the node rejects the replacement. That is success
+                    // — but only once it has the same `NUM_CONFIRMATIONS` the normal path waits
+                    // for, so a caller never treats a one-block-deep checkpoint as done.
+                    if let Some(receipt) =
+                        confirmed_receipt_among(&provider, &sent_hashes, timeout_secs).await?
+                    {
+                        return Ok(receipt);
                     }
 
                     if attempt >= policy.max_bumps {
                         // Distinguish "still sitting in the mempool" from "the nonce was consumed
                         // by a transaction we cannot identify" — the operator's next move differs.
                         // Decided from the on-chain nonce rather than by matching error text,
-                        // which varies between clients.
-                        let nonce_consumed = match (
-                            request.nonce,
-                            provider.get_transaction_count(self.address()).await,
-                        ) {
-                            (Some(nonce), Ok(latest)) => latest > nonce,
+                        // which varies between clients. A read that times out counts as "not
+                        // consumed": the message then says "still pending", the safer reading.
+                        let latest_nonce = tokio::time::timeout(
+                            L1_RPC_TIMEOUT,
+                            provider.get_transaction_count(self.address()),
+                        )
+                        .await;
+                        let nonce_consumed = match (request.nonce, latest_nonce) {
+                            (Some(nonce), Ok(Ok(latest))) => latest > nonce,
                             _ => false,
                         };
 
@@ -434,13 +679,14 @@ impl Signer {
     /// Signs and broadcasts one attempt, waiting up to `timeout_secs` for confirmation.
     ///
     /// [MANTLE] Extracted from `send_transaction_request_with_timeout` so the escalation loop
-    /// above is shared by all three signer kinds; the per-signer bodies are unchanged.
+    /// above is shared by every signer kind; the wallet-based kinds share [`send_with_wallet`].
     async fn dispatch_transaction(
         &self,
         l1_rpc: Url,
         mut transaction_request: TransactionRequest,
         timeout_secs: u64,
         sent_hash: &mut Option<TxHash>,
+        guard: BroadcastGuard<'_>,
     ) -> Result<TransactionReceipt> {
         match self {
             Signer::Web3Signer(signer_url, signer_address) => {
@@ -456,21 +702,26 @@ impl Signer {
                     ProviderBuilder::new().network::<Ethereum>().connect_http(signer_url.clone());
                 let signer = Web3Signer::new(web3_provider.clone(), *signer_address);
 
-                let mut tx = filled_tx.as_builder().unwrap().clone();
+                let mut tx = filled_tx
+                    .as_builder()
+                    .context("Web3Signer path: filled request is unexpectedly already signed")?
+                    .clone();
                 tx.normalize_data();
 
                 let raw: Bytes =
                     signer.provider().client().request("eth_signTransaction", (tx,)).await?;
 
-                let tx_envelope = TxEnvelope::decode_2718(&mut raw.as_ref()).unwrap();
+                let tx_envelope = TxEnvelope::decode_2718(&mut raw.as_ref())
+                    .context("Web3Signer returned an undecodable eth_signTransaction payload")?;
 
+                // Last moment before the transaction leaves this process.
+                check_broadcast_guard(guard)?;
+                // Record before broadcasting — see `send_with_wallet` for why the order matters.
+                *sent_hash = Some(*tx_envelope.tx_hash());
                 let pending = provider
                     .send_tx_envelope(tx_envelope)
                     .await
                     .context("Failed to send transaction")?;
-                // Record before waiting: on timeout the loop needs this to tell "still pending"
-                // from "confirmed while we were escalating".
-                *sent_hash = Some(*pending.tx_hash());
                 let receipt = pending
                     .with_required_confirmations(NUM_CONFIRMATIONS)
                     .with_timeout(Some(Duration::from_secs(timeout_secs)))
@@ -480,62 +731,374 @@ impl Signer {
                 Ok(receipt)
             }
             Signer::LocalSigner(private_key) => {
-                let provider = ProviderBuilder::new()
-                    .network::<Ethereum>()
-                    .wallet(EthereumWallet::new(private_key.clone()))
-                    .connect_http(l1_rpc);
-
-                // Ensure the request has a `from` address so the wallet filler can sign it.
-                transaction_request.set_from(private_key.address());
-                if transaction_request.to.is_none() {
-                    // NOTE(fakedev9999): Anvil's wallet filler insists on a `to` field even for
-                    // deployments. Mark the request as contract creation so it can be signed.
-                    transaction_request.to = Some(TxKind::Create);
-                }
-
-                let pending = provider
-                    .send_transaction(transaction_request)
-                    .await
-                    .context("Failed to send transaction")?;
-                *sent_hash = Some(*pending.tx_hash());
-                let receipt = pending
-                    .with_required_confirmations(NUM_CONFIRMATIONS)
-                    .with_timeout(Some(Duration::from_secs(timeout_secs)))
-                    .get_receipt()
-                    .await?;
-
-                Ok(receipt)
+                send_with_wallet(
+                    l1_rpc,
+                    EthereumWallet::new(private_key.clone()),
+                    private_key.address(),
+                    transaction_request,
+                    timeout_secs,
+                    sent_hash,
+                    "Failed to send transaction",
+                    guard,
+                )
+                .await
             }
             Signer::CloudHsmSigner(signer) => {
-                // Set the from address to HSM address
-                transaction_request.set_from(signer.address());
-                if transaction_request.to.is_none() {
-                    // NOTE(fakedev9999): Anvil's wallet filler insists on a `to` field even for
-                    // deployments. Mark the request as contract creation so it can be signed.
-                    transaction_request.to = Some(TxKind::Create);
-                }
-
-                let wallet = EthereumWallet::new(signer.clone());
-                let provider = ProviderBuilder::new()
-                    .network::<Ethereum>()
-                    .wallet(wallet)
-                    .connect_http(l1_rpc);
-
-                let pending = provider
-                    .send_transaction(transaction_request)
-                    .await
-                    .context("Failed to send KMS-signed transaction")?;
-                *sent_hash = Some(*pending.tx_hash());
-                let receipt = pending
-                    .with_required_confirmations(NUM_CONFIRMATIONS)
-                    .with_timeout(Some(Duration::from_secs(timeout_secs)))
-                    .get_receipt()
-                    .await?;
-
-                Ok(receipt)
+                send_with_wallet(
+                    l1_rpc,
+                    EthereumWallet::new(signer.clone()),
+                    signer.address(),
+                    transaction_request,
+                    timeout_secs,
+                    sent_hash,
+                    "Failed to send GCP KMS-signed transaction",
+                    guard,
+                )
+                .await
+            }
+            Signer::AwsKmsSigner(signer) => {
+                send_with_wallet(
+                    l1_rpc,
+                    EthereumWallet::new(signer.clone()),
+                    signer.address(),
+                    transaction_request,
+                    timeout_secs,
+                    sent_hash,
+                    "Failed to send AWS KMS-signed transaction",
+                    guard,
+                )
+                .await
             }
         }
     }
+}
+
+/// Signs `transaction_request` with `wallet` (whose signer is `from`), broadcasts it, and waits
+/// up to `timeout_secs` for [`NUM_CONFIRMATIONS`].
+///
+/// [MANTLE] Shared by every signer that signs locally through an [`EthereumWallet`] — a private
+/// key, GCP KMS or AWS KMS. Their bodies were identical apart from the error message.
+// The broadcast guard is the eighth; bundling these into a struct would only move the list.
+#[allow(clippy::too_many_arguments)]
+async fn send_with_wallet(
+    l1_rpc: Url,
+    wallet: EthereumWallet,
+    from: Address,
+    mut transaction_request: TransactionRequest,
+    timeout_secs: u64,
+    sent_hash: &mut Option<TxHash>,
+    send_error: &'static str,
+    guard: BroadcastGuard<'_>,
+) -> Result<TransactionReceipt> {
+    // Ensure the request has a `from` address so the wallet filler can sign it.
+    transaction_request.set_from(from);
+    if transaction_request.to.is_none() {
+        // NOTE(fakedev9999): Anvil's wallet filler insists on a `to` field even for
+        // deployments. Mark the request as contract creation so it can be signed.
+        transaction_request.to = Some(TxKind::Create);
+    }
+
+    let provider = ProviderBuilder::new().network::<Ethereum>().wallet(wallet).connect_http(l1_rpc);
+
+    // Sign first and record the hash *before* broadcasting. The caller bounds the whole attempt
+    // with a timeout; if that fires while `eth_sendRawTransaction` is in flight, the node may
+    // already have the transaction. With the hash recorded, the escalation loop can still find
+    // its receipt — without it a transaction that was mined would be reported as failed, and the
+    // proposer could send a duplicate checkpoint. (`send_transaction` only yields the hash after
+    // the broadcast returns.)
+    let envelope =
+        provider.fill(transaction_request).await.context(send_error)?.try_into_envelope().map_err(
+            |_| anyhow::anyhow!("{send_error}: the wallet filler did not sign the request"),
+        )?;
+    // Last moment before the transaction leaves this process: filling and (KMS) signing above
+    // can take a while, and a guard that held at the start of the send may not hold now.
+    check_broadcast_guard(guard)?;
+    *sent_hash = Some(*envelope.tx_hash());
+
+    let pending = provider.send_tx_envelope(envelope).await.context(send_error)?;
+    let receipt = pending
+        .with_required_confirmations(NUM_CONFIRMATIONS)
+        .with_timeout(Some(Duration::from_secs(timeout_secs)))
+        .get_receipt()
+        .await?;
+
+    Ok(receipt)
+}
+
+/// [MANTLE] After a failed attempt: finds a mined receipt among `hashes` and, if there is one,
+/// waits until it has [`NUM_CONFIRMATIONS`] — the same depth the normal path requires.
+///
+/// - `Ok(Some(receipt))` — one of our transactions is mined and confirmed.
+/// - `Ok(None)` — none is mined, the lookup timed out, or the mined one was reorged out while we
+///   waited. The caller keeps escalating at the same nonce.
+/// - `Err` — one is mined but did not reach the confirmation depth within `timeout_secs`.
+///   Escalating is pointless (its nonce is consumed) and reporting success would skip the
+///   confirmation requirement, so this fails, naming the transaction for the operator.
+///
+/// Previously the first receipt found was returned as success immediately, so a transaction one
+/// block deep — and still reorg-able — was reported to the proposer as a completed checkpoint.
+async fn confirmed_receipt_among<P: Provider>(
+    provider: &P,
+    hashes: &[TxHash],
+    timeout_secs: u64,
+) -> Result<Option<TransactionReceipt>> {
+    // Bounded as a whole: this runs under `SignerLock`.
+    let mined = tokio::time::timeout(L1_RPC_TIMEOUT, async {
+        for hash in hashes {
+            if let Ok(Some(receipt)) = provider.get_transaction_receipt(*hash).await {
+                return Some(receipt);
+            }
+        }
+        None
+    })
+    .await
+    .unwrap_or_else(|_| {
+        tracing::warn!(
+            timeout_secs = L1_RPC_TIMEOUT.as_secs(),
+            "Receipt lookup timed out; treating our transactions as not yet mined"
+        );
+        None
+    });
+    let Some(receipt) = mined else { return Ok(None) };
+    let hash = receipt.transaction_hash;
+
+    let wait_for_depth = async {
+        loop {
+            // Re-read the receipt each round: if it disappears, its block was reorged out.
+            match provider.get_transaction_receipt(hash).await {
+                Ok(None) => {
+                    tracing::warn!(%hash, "Mined L1 transaction was reorged out; resuming escalation");
+                    return Ok::<_, anyhow::Error>(None);
+                }
+                Ok(Some(current)) => {
+                    if let (Some(block), Ok(latest)) =
+                        (current.block_number, provider.get_block_number().await)
+                    {
+                        // confirmations = latest - block + 1, as the normal path counts them.
+                        if latest.saturating_add(1) >= block.saturating_add(NUM_CONFIRMATIONS) {
+                            return Ok(Some(current));
+                        }
+                    }
+                }
+                // A failed read is transient here; the overall timeout bounds the loop.
+                Err(_) => {}
+            }
+            tokio::time::sleep(CONFIRMATION_POLL_INTERVAL).await;
+        }
+    };
+
+    match tokio::time::timeout(Duration::from_secs(timeout_secs), wait_for_depth).await {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!(
+            "L1 transaction {hash} is mined (block {:?}) but did not reach {NUM_CONFIRMATIONS} \
+             confirmations within {timeout_secs}s; not reporting it as complete",
+            receipt.block_number
+        )),
+    }
+}
+
+/// [MANTLE] A signer backend [`Signer::from_env`] can select.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignerBackend {
+    /// `HSM_API_NAME` + `HSM_CREDENTIALS` — Mantle's GCP KMS deployment shape.
+    GcpKmsResourcePath,
+    /// `GOOGLE_PROJECT_ID` + `GOOGLE_LOCATION` + `GOOGLE_KEYRING` + `HSM_KEY_NAME` — upstream's.
+    GcpKmsKeyring,
+    /// `L1_SIGNER_AWS_KMS_KEY_ID`.
+    AwsKms,
+    /// `SIGNER_URL` + `SIGNER_ADDRESS`.
+    Web3Signer,
+    /// `PRIVATE_KEY`.
+    Local,
+}
+
+impl std::fmt::Display for SignerBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SignerBackend::GcpKmsResourcePath => "gcp-kms (HSM_API_NAME)",
+            SignerBackend::GcpKmsKeyring => "gcp-kms (GOOGLE_KEYRING)",
+            SignerBackend::AwsKms => "aws-kms",
+            SignerBackend::Web3Signer => "web3signer",
+            SignerBackend::Local => "local-private-key",
+        })
+    }
+}
+
+/// Remote backends: (backend, variables whose presence selects it, variables it then requires).
+///
+/// Selectors are only variables that mean "sign with this backend" and nothing else. Generic
+/// names other components also read — `GOOGLE_PROJECT_ID` / `GOOGLE_LOCATION` (logging,
+/// monitoring, ADC) or a leftover `SIGNER_ADDRESS` — must not select a backend, or an unrelated
+/// setting turns into a "partially configured signer" startup failure.
+const REMOTE_SIGNER_BACKENDS: [(SignerBackend, &[&str], &[&str]); 4] = [
+    (SignerBackend::GcpKmsResourcePath, &["HSM_API_NAME"], &["HSM_API_NAME", "HSM_CREDENTIALS"]),
+    (
+        SignerBackend::GcpKmsKeyring,
+        &["GOOGLE_KEYRING"],
+        &["GOOGLE_PROJECT_ID", "GOOGLE_LOCATION", "GOOGLE_KEYRING", "HSM_KEY_NAME"],
+    ),
+    (SignerBackend::AwsKms, &["L1_SIGNER_AWS_KMS_KEY_ID"], &["L1_SIGNER_AWS_KMS_KEY_ID"]),
+    (SignerBackend::Web3Signer, &["SIGNER_URL"], &["SIGNER_URL", "SIGNER_ADDRESS"]),
+];
+
+/// Reads an env var for use, trimmed; empty or whitespace-only reads as `None`.
+///
+/// Trimmed because a value mounted from a secret file often carries a trailing newline, which a
+/// KMS key id or an address parser would otherwise receive verbatim.
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok().and_then(trimmed_non_empty)
+}
+
+fn trimmed_non_empty(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Reads an env var exactly as set — `Some("")` for a variable that is present but empty.
+/// [`select_signer_backend`] needs that distinction; see there.
+///
+/// Presence is decided by `var_os`, not `var`: `var` reports a non-UTF-8 value as absent, which
+/// would let a mangled selector fall through to `PRIVATE_KEY`. Such a value reads as empty, so it
+/// selects its backend and then fails as unset.
+fn raw_env_var(name: &str) -> Option<String> {
+    std::env::var_os(name).map(|value| value.into_string().unwrap_or_default())
+}
+
+/// [MANTLE] Chooses exactly one signer backend from the environment.
+///
+/// - A remote backend (GCP KMS, AWS KMS, Web3Signer) is *configured* as soon as one of its
+///   selecting variables is **present — even if empty** — and must then have all of its required
+///   variables set to non-empty values, or this fails. Previously a half-configured remote signer
+///   fell through to the next backend — and ultimately to `PRIVATE_KEY`, which mainnet's secret
+///   also carries — without a word. "Present but empty" counts as configured for the same reason: a
+///   template whose value failed to render (`HSM_API_NAME: ""`) must fail loudly, not quietly start
+///   on the plaintext key.
+/// - More than one configured remote backend is an error, not a precedence order.
+/// - `PRIVATE_KEY` is used only when no remote backend is configured; alongside one it is ignored
+///   with a warning.
+fn select_signer_backend(env: &impl Fn(&str) -> Option<String>) -> Result<SignerBackend> {
+    let present = |name: &str| env(name).is_some();
+    let set = |name: &str| env(name).is_some_and(|v| !v.trim().is_empty());
+
+    let mut configured = Vec::new();
+    for (backend, selectors, required) in REMOTE_SIGNER_BACKENDS {
+        if !selectors.iter().any(|name| present(name)) {
+            continue;
+        }
+        let missing: Vec<&str> = required.iter().copied().filter(|name| !set(name)).collect();
+        anyhow::ensure!(
+            missing.is_empty(),
+            "L1 signer `{backend}` is partially configured: {missing:?} unset or empty. Refusing to \
+             fall back to another signer."
+        );
+        configured.push(backend);
+    }
+
+    match configured.as_slice() {
+        [] => {
+            anyhow::ensure!(
+                set("PRIVATE_KEY"),
+                "No L1 signer is configured. Set exactly one of:\n\
+                 - AWS KMS: L1_SIGNER_AWS_KMS_KEY_ID (+ AWS_REGION unless the key id is an ARN)\n\
+                 - GCP KMS (Mantle): HSM_API_NAME + HSM_CREDENTIALS (hex JSON)\n\
+                 - GCP KMS (upstream): GOOGLE_PROJECT_ID + GOOGLE_LOCATION + GOOGLE_KEYRING + \
+                 HSM_KEY_NAME\n\
+                 - Web3Signer: SIGNER_URL + SIGNER_ADDRESS\n\
+                 - Local: PRIVATE_KEY"
+            );
+            Ok(SignerBackend::Local)
+        }
+        [backend] => {
+            if set("PRIVATE_KEY") {
+                tracing::warn!(
+                    backend = %backend,
+                    "PRIVATE_KEY is set but ignored because a remote L1 signer is configured"
+                );
+            }
+            Ok(*backend)
+        }
+        many => {
+            let names: Vec<String> = many.iter().map(ToString::to_string).collect();
+            anyhow::bail!(
+                "More than one L1 signer is configured ({}). Set exactly one.",
+                names.join(", ")
+            )
+        }
+    }
+}
+
+/// Returns the region embedded in a KMS key or alias ARN
+/// (`arn:<partition>:kms:<region>:<account>:key/<id>` or `...:alias/<name>`).
+fn kms_arn_region(key_id: &str) -> Option<&str> {
+    let parts: Vec<&str> = key_id.splitn(6, ':').collect();
+    match parts.as_slice() {
+        ["arn", _, "kms", region, _, _] if !region.is_empty() => Some(region),
+        _ => None,
+    }
+}
+
+/// The region the KMS client must use, given the home region the default chain resolved.
+///
+/// A key ARN names its region, and a KMS call to any other region fails with a confusing "key
+/// not found" — so the ARN wins. It must beat the home region rather than conflict with it: on
+/// EKS the IRSA pod-identity webhook injects `AWS_REGION` (the cluster's region) into every pod,
+/// so operators cannot leave it unset, and a key in another region (e.g. a multi-region `mrk-`
+/// key) is legitimate. A disagreement is logged, not fatal. Credentials keep using the home
+/// region either way; see [`Signer::aws_kms_from_env`].
+///
+/// Without an ARN the home region is used; `None` if there is none.
+fn resolve_aws_region(home_region: Option<String>, key_id: &str) -> Option<String> {
+    match (home_region, kms_arn_region(key_id)) {
+        (home, Some(arn)) => {
+            if let Some(home) = home.filter(|home| home != arn) {
+                tracing::warn!(
+                    home_region = %home,
+                    key_region = %arn,
+                    "L1_SIGNER_AWS_KMS_KEY_ID is in another region than this process; KMS calls \
+                     go to the key's region, credentials keep using the home region"
+                );
+            }
+            Some(arn.to_string())
+        }
+        (home, None) => home,
+    }
+}
+
+/// Signs one fixed digest and checks the signature recovers to the signer's address.
+///
+/// Building a KMS signer only exercises `GetPublicKey`. A role that lacks the *sign* permission,
+/// or a key that cannot sign, would otherwise surface only at the first L1 transaction — for the
+/// proposer, after a proof has already been paid for.
+async fn verify_remote_signer<S>(signer: &S, backend: SignerBackend) -> Result<()>
+where
+    S: AlloySigner + Sync,
+{
+    let probe = keccak256(b"op-succinct: L1 signer startup self-check");
+    let signature = tokio::time::timeout(SELF_CHECK_TIMEOUT, signer.sign_hash(&probe))
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "L1 signer `{backend}` ({}) did not answer the startup self-check within {}s",
+                signer.address(),
+                SELF_CHECK_TIMEOUT.as_secs()
+            )
+        })?
+        .with_context(|| {
+            format!(
+                "L1 signer `{backend}` ({}) could not sign at startup — check that the role may \
+                 sign with this key",
+                signer.address()
+            )
+        })?;
+    let recovered = signature
+        .recover_address_from_prehash(&probe)
+        .context("L1 signer startup self-check produced an unrecoverable signature")?;
+    anyhow::ensure!(
+        recovered == signer.address(),
+        "L1 signer `{backend}` self-check recovered {recovered}, expected {}",
+        signer.address()
+    );
+    Ok(())
 }
 
 /// Parsed components of a GCP KMS crypto key resource path.
@@ -634,6 +1197,21 @@ impl SignerLock {
         let signer = self.inner.lock().await;
         signer
             .send_transaction_request_with_timeout(l1_rpc, transaction_request, timeout_secs)
+            .await
+    }
+
+    /// [`Signer::send_transaction_request_guarded`] under the lock: `guard` runs before every
+    /// broadcast of this send.
+    pub async fn send_transaction_request_guarded(
+        &self,
+        l1_rpc: Url,
+        transaction_request: TransactionRequest,
+        timeout_secs: u64,
+        guard: BroadcastGuard<'_>,
+    ) -> Result<TransactionReceipt> {
+        let signer = self.inner.lock().await;
+        signer
+            .send_transaction_request_guarded(l1_rpc, transaction_request, timeout_secs, guard)
             .await
     }
 }
@@ -749,11 +1327,18 @@ mod gas_policy_tests {
     #[test]
     fn worst_case_send_covers_every_attempt() {
         let p = policy(); // max_bumps = 3
-        assert_eq!(p.worst_case_send_secs(60), 4 * 60, "1 initial attempt + 3 escalations");
+        let rpc = L1_RPC_TIMEOUT.as_secs();
+        // attempt (60 + send budget) + receipt lookup + confirmation wait (60)
+        let per_attempt = 60 + SEND_TIMEOUT.as_secs() + rpc + 60;
+        assert_eq!(
+            p.worst_case_send_secs(60),
+            4 * per_attempt + 2 * rpc,
+            "1 initial attempt + 3 escalations, plus the pre-send and final reads"
+        );
 
-        // No escalation still costs one full timeout.
+        // No escalation still costs one full attempt.
         let no_bumps = GasPolicy { max_bumps: 0, ..policy() };
-        assert_eq!(no_bumps.worst_case_send_secs(60), 60);
+        assert_eq!(no_bumps.worst_case_send_secs(60), per_attempt + 2 * rpc);
 
         // Must not overflow into a nonsensical small number on absurd input.
         assert_eq!(
@@ -768,6 +1353,330 @@ mod gas_policy_tests {
         assert_eq!(p.fee_floor_wei, DEFAULT_FEE_FLOOR_GWEI * GWEI);
         assert_eq!(p.base_fee_multiplier, DEFAULT_BASE_FEE_MULTIPLIER);
         assert_eq!(p.max_bumps, DEFAULT_MAX_BUMPS);
+    }
+}
+
+/// [MANTLE] Signer backend selection and AWS region resolution.
+#[cfg(test)]
+mod signer_selection_tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    /// Mirrors `raw_env_var`: a listed variable is present with exactly the given value.
+    fn select(vars: &[(&str, &str)]) -> Result<SignerBackend> {
+        let env: HashMap<String, String> =
+            vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        select_signer_backend(&|name: &str| env.get(name).cloned())
+    }
+
+    const KEY_ARN: &str =
+        "arn:aws:kms:ap-southeast-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab";
+
+    #[test]
+    fn each_backend_is_selected_on_its_own() {
+        assert_eq!(
+            select(&[("HSM_API_NAME", "p"), ("HSM_CREDENTIALS", "c")]).unwrap(),
+            SignerBackend::GcpKmsResourcePath
+        );
+        assert_eq!(
+            select(&[
+                ("GOOGLE_PROJECT_ID", "p"),
+                ("GOOGLE_LOCATION", "l"),
+                ("GOOGLE_KEYRING", "k"),
+                ("HSM_KEY_NAME", "n"),
+            ])
+            .unwrap(),
+            SignerBackend::GcpKmsKeyring
+        );
+        assert_eq!(
+            select(&[("L1_SIGNER_AWS_KMS_KEY_ID", KEY_ARN)]).unwrap(),
+            SignerBackend::AwsKms
+        );
+        assert_eq!(
+            select(&[("SIGNER_URL", "http://x"), ("SIGNER_ADDRESS", "0x00")]).unwrap(),
+            SignerBackend::Web3Signer
+        );
+        assert_eq!(select(&[("PRIVATE_KEY", "0x01")]).unwrap(), SignerBackend::Local);
+    }
+
+    #[test]
+    fn two_remote_backends_are_rejected_not_ranked() {
+        let err = select(&[
+            ("HSM_API_NAME", "p"),
+            ("HSM_CREDENTIALS", "c"),
+            ("L1_SIGNER_AWS_KMS_KEY_ID", KEY_ARN),
+        ])
+        .unwrap_err();
+        assert!(err.to_string().contains("More than one L1 signer"), "{err}");
+    }
+
+    #[test]
+    fn half_configured_remote_backend_does_not_fall_back_to_private_key() {
+        // The trap this guards: a remote signer missing one variable used to fall through
+        // silently to PRIVATE_KEY.
+        let err = select(&[("HSM_API_NAME", "p"), ("PRIVATE_KEY", "0x01")]).unwrap_err();
+        assert!(err.to_string().contains("HSM_CREDENTIALS"), "{err}");
+
+        let err =
+            select(&[("GOOGLE_KEYRING", "k"), ("HSM_KEY_NAME", "n"), ("PRIVATE_KEY", "0x01")])
+                .unwrap_err();
+        assert!(err.to_string().contains("GOOGLE_PROJECT_ID"), "{err}");
+
+        let err = select(&[("SIGNER_URL", "http://x"), ("PRIVATE_KEY", "0x01")]).unwrap_err();
+        assert!(err.to_string().contains("SIGNER_ADDRESS"), "{err}");
+    }
+
+    #[test]
+    fn generic_variables_do_not_select_a_backend() {
+        // GOOGLE_PROJECT_ID / GOOGLE_LOCATION are read by logging, monitoring and ADC too, and a
+        // leftover SIGNER_ADDRESS is common in shared .env files. None of them alone means "sign
+        // with this backend".
+        assert_eq!(
+            select(&[
+                ("GOOGLE_PROJECT_ID", "p"),
+                ("GOOGLE_LOCATION", "l"),
+                ("SIGNER_ADDRESS", "0x00"),
+                ("PRIVATE_KEY", "0x01"),
+            ])
+            .unwrap(),
+            SignerBackend::Local
+        );
+        assert_eq!(
+            select(&[("GOOGLE_PROJECT_ID", "p"), ("L1_SIGNER_AWS_KMS_KEY_ID", KEY_ARN),]).unwrap(),
+            SignerBackend::AwsKms
+        );
+    }
+
+    #[test]
+    fn private_key_alongside_a_remote_backend_is_ignored() {
+        assert_eq!(
+            select(&[("L1_SIGNER_AWS_KMS_KEY_ID", KEY_ARN), ("PRIVATE_KEY", "0x01")]).unwrap(),
+            SignerBackend::AwsKms
+        );
+    }
+
+    #[test]
+    fn mantle_crypto_key_id_is_not_a_signer() {
+        // mainnet sets CRYPTO_KEY_ID for /usr/lib/crypto secret decryption next to HSM_API_NAME.
+        assert_eq!(
+            select(&[
+                ("HSM_API_NAME", "p"),
+                ("HSM_CREDENTIALS", "c"),
+                ("CRYPTO_KEY_ID", KEY_ARN),
+                ("CRYPTO_SECRET_NAMES", "KMS_ACCOUNT_JSON_0"),
+            ])
+            .unwrap(),
+            SignerBackend::GcpKmsResourcePath
+        );
+    }
+
+    #[test]
+    fn empty_remote_selector_fails_instead_of_falling_back_to_private_key() {
+        // A template whose value failed to render must not quietly start on the plaintext key.
+        for selector in ["L1_SIGNER_AWS_KMS_KEY_ID", "HSM_API_NAME", "GOOGLE_KEYRING", "SIGNER_URL"]
+        {
+            let err = select(&[(selector, ""), ("PRIVATE_KEY", "0x01")]).unwrap_err();
+            assert!(err.to_string().contains("partially configured"), "{selector}: {err}");
+            let err = select(&[(selector, "  "), ("PRIVATE_KEY", "0x01")]).unwrap_err();
+            assert!(err.to_string().contains("partially configured"), "{selector}: {err}");
+        }
+        // An empty PRIVATE_KEY on its own is not a signer either.
+        assert!(select(&[("PRIVATE_KEY", "")]).is_err());
+    }
+
+    #[test]
+    fn foundry_and_stray_gcp_variables_do_not_select_a_backend() {
+        // AWS_KMS_KEY_ID is Foundry's `--aws` deployer variable (contracts/lib/func.sh), and a
+        // leftover HSM_KEY_NAME is common next to the HSM_API_NAME shape.
+        assert_eq!(
+            select(&[("AWS_KMS_KEY_ID", KEY_ARN), ("PRIVATE_KEY", "0x01")]).unwrap(),
+            SignerBackend::Local
+        );
+        assert_eq!(
+            select(&[("HSM_API_NAME", "p"), ("HSM_CREDENTIALS", "c"), ("HSM_KEY_NAME", "n")])
+                .unwrap(),
+            SignerBackend::GcpKmsResourcePath
+        );
+    }
+
+    #[test]
+    fn env_values_are_trimmed_for_use() {
+        assert_eq!(trimmed_non_empty(" arn:aws:kms:x \n".into()).as_deref(), Some("arn:aws:kms:x"));
+        assert_eq!(trimmed_non_empty(" \n".into()), None);
+    }
+
+    #[test]
+    fn nothing_configured_is_an_error() {
+        assert!(select(&[]).is_err());
+    }
+
+    #[test]
+    fn key_arn_region_wins_over_aws_region() {
+        assert_eq!(kms_arn_region(KEY_ARN), Some("ap-southeast-1"));
+        assert_eq!(
+            kms_arn_region("arn:aws:kms:us-east-1:123456789012:alias/proposer"),
+            Some("us-east-1")
+        );
+        assert_eq!(kms_arn_region("1234abcd-12ab-34cd-56ef-1234567890ab"), None);
+        assert_eq!(kms_arn_region("alias/proposer"), None);
+
+        assert_eq!(resolve_aws_region(None, KEY_ARN).as_deref(), Some("ap-southeast-1"));
+        assert_eq!(
+            resolve_aws_region(Some("ap-southeast-1".into()), KEY_ARN).as_deref(),
+            Some("ap-southeast-1")
+        );
+        // EKS injects AWS_REGION = the cluster's region into every IRSA pod. A key in another
+        // region must still work, so the ARN wins instead of conflicting.
+        assert_eq!(
+            resolve_aws_region(Some("us-east-1".into()), KEY_ARN).as_deref(),
+            Some("ap-southeast-1")
+        );
+        // No ARN: AWS_REGION, else defer to the default provider chain.
+        assert_eq!(
+            resolve_aws_region(Some("eu-west-1".into()), "alias/proposer").as_deref(),
+            Some("eu-west-1")
+        );
+        assert_eq!(resolve_aws_region(None, "alias/proposer"), None);
+    }
+
+    #[tokio::test]
+    async fn self_check_accepts_a_signer_that_signs_for_its_own_address() {
+        let signer = PrivateKeySigner::random();
+        verify_remote_signer(&signer, SignerBackend::Local).await.unwrap();
+    }
+
+    /// Live check against a real AWS KMS key. Run with
+    /// `L1_SIGNER_AWS_KMS_KEY_ID=<arn> cargo test -p op-succinct-signer-utils aws_kms_live --
+    /// --ignored` using credentials that may call kms:GetPublicKey and kms:Sign on the key.
+    #[tokio::test]
+    #[ignore]
+    async fn aws_kms_live_signer_builds_and_self_checks() {
+        let signer = Signer::aws_kms_from_env().await.unwrap();
+        let Signer::AwsKmsSigner(aws) = &signer else { panic!("expected an AWS KMS signer") };
+        verify_remote_signer(aws, SignerBackend::AwsKms).await.unwrap();
+        println!("AWS KMS signer address: {}", signer.address());
+    }
+
+    /// anvil's first default account.
+    const ANVIL_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+    /// The post-failure path must not report a transaction one block deep as done.
+    /// Needs `anvil --port 8545` (automine; set `no_proxy=127.0.0.1,localhost` behind a proxy).
+    #[tokio::test]
+    #[ignore]
+    async fn shallow_receipt_is_not_reported_until_confirmed() {
+        let url: Url = "http://127.0.0.1:8545".parse().unwrap();
+        let key: PrivateKeySigner = ANVIL_KEY.parse().unwrap();
+        let sender = ProviderBuilder::new()
+            .network::<Ethereum>()
+            .wallet(EthereumWallet::new(key))
+            .connect_http(url.clone());
+        let tx = TransactionRequest::default()
+            .to(Address::repeat_byte(0x11))
+            .value(alloy_primitives::U256::from(1u64));
+        let hash = *sender.send_transaction(tx).await.unwrap().tx_hash();
+        let provider = ProviderBuilder::new().network::<Ethereum>().connect_http(url);
+
+        // Automine put it in its own block and nothing else is coming: 1 confirmation.
+        let err = confirmed_receipt_among(&provider, &[hash], 6).await.unwrap_err();
+        assert!(err.to_string().contains("did not reach"), "{err}");
+
+        // Two more blocks make 3 confirmations.
+        provider
+            .client()
+            .request::<_, ()>("anvil_mine", (alloy_primitives::U256::from(2u64),))
+            .await
+            .unwrap();
+        let receipt = confirmed_receipt_among(&provider, &[hash], 10).await.unwrap();
+        assert_eq!(receipt.map(|r| r.transaction_hash), Some(hash));
+
+        // A hash that was never mined is "not found", not an error.
+        let missing = TxHash::repeat_byte(0x77);
+        assert!(confirmed_receipt_among(&provider, &[missing], 5).await.unwrap().is_none());
+    }
+
+    /// An L1 RPC that accepts the connection and never answers must fail the send within
+    /// `L1_RPC_TIMEOUT` instead of holding the signer forever. Takes ~30s, hence `#[ignore]`.
+    #[tokio::test]
+    #[ignore]
+    async fn hung_l1_rpc_fails_the_send_instead_of_blocking() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket); // accept, never reply
+            }
+        });
+
+        let signer = Signer::new_local_signer(ANVIL_KEY).unwrap();
+        let started = std::time::Instant::now();
+        let err = signer
+            .send_transaction_request(
+                format!("http://{addr}").parse().unwrap(),
+                TransactionRequest::default().to(Address::ZERO),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("pre-send"), "{err}");
+        assert!(started.elapsed() < L1_RPC_TIMEOUT + Duration::from_secs(10));
+    }
+
+    /// A guard that already fails refuses the send before any L1 read or signing.
+    #[tokio::test]
+    async fn guard_refusing_up_front_sends_nothing() {
+        let signer = Signer::new_local_signer(ANVIL_KEY).unwrap();
+        let err = signer
+            .send_transaction_request_guarded(
+                // Unroutable: any network access would fail differently (or hang).
+                "http://127.0.0.1:9".parse().unwrap(),
+                TransactionRequest::default().to(Address::ZERO),
+                60,
+                &|| anyhow::bail!("chain lock not held"),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.downcast_ref::<BroadcastRefused>().is_some(), "{err:#}");
+    }
+
+    /// The guard is checked again at the last moment before broadcasting, after the transaction
+    /// is filled and signed: a guard that held at the start but fails by then must leave nothing
+    /// on chain. Needs `anvil --port 8545` (`no_proxy=127.0.0.1,localhost` behind a proxy).
+    #[tokio::test]
+    #[ignore]
+    async fn guard_refusing_at_broadcast_leaves_nothing_on_chain() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let url: Url = "http://127.0.0.1:8545".parse().unwrap();
+        let signer = Signer::new_local_signer(ANVIL_KEY).unwrap();
+        let provider = ProviderBuilder::new().network::<Ethereum>().connect_http(url.clone());
+        let nonce_before = provider.get_transaction_count(signer.address()).await.unwrap();
+
+        // Allow the up-front check, refuse every later (pre-broadcast) one.
+        let calls = AtomicUsize::new(0);
+        let guard = move || {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(())
+            } else {
+                anyhow::bail!("lease lost while signing")
+            }
+        };
+        let err = signer
+            .send_transaction_request_guarded(
+                url,
+                TransactionRequest::default()
+                    .to(Address::repeat_byte(0x22))
+                    .value(alloy_primitives::U256::from(1u64)),
+                60,
+                &guard,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.downcast_ref::<BroadcastRefused>().is_some(), "{err:#}");
+
+        let nonce_after = provider.get_transaction_count(signer.address()).await.unwrap();
+        assert_eq!(nonce_after, nonce_before, "nothing may reach the chain after a refusal");
     }
 }
 
