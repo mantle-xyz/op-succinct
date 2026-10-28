@@ -24,6 +24,10 @@ use alloy_signer_gcp::{
 use alloy_signer_local::PrivateKeySigner;
 use alloy_transport_http::reqwest::Url;
 use anyhow::{Context, Result};
+use aws_credential_types::{
+    credential_feature::AwsCredentialFeature,
+    provider::{future as credentials_future, ProvideCredentials, SharedCredentialsProvider},
+};
 use tokio::{sync::Mutex, time::Duration};
 
 pub const NUM_CONFIRMATIONS: u64 = 3;
@@ -61,7 +65,8 @@ const AWS_KMS_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 /// [MANTLE] Upper bound on filling, signing and broadcasting one transaction attempt (the wait
 /// for confirmations is bounded separately by the caller's timeout). Covers every signer kind —
 /// a remote signer or an L1 RPC that stops answering mid-call would otherwise hold the
-/// `SignerLock` indefinitely. On expiry the attempt fails into the normal same-nonce escalation.
+/// `SignerLock` indefinitely. On expiry the attempt fails like any other: into the same-nonce
+/// escalation once something has been broadcast; if nothing has been yet, the send stops.
 const SEND_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// [MANTLE] Bound on each group of L1 reads made while `SignerLock` is held (pre-send nonce/fee
@@ -74,6 +79,12 @@ const CONFIRMATION_POLL_INTERVAL: Duration = Duration::from_secs(4);
 
 /// [MANTLE] Bound on the startup signing self-check.
 const SELF_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// [MANTLE] Bound on building a KMS signer (credentials, then `GetPublicKey`), before the
+/// self-check. The GCP client sets no timeout of its own: with Google unreachable — or a token
+/// endpoint that accepts the connection and never answers — startup hung silently, and since the
+/// signer is built before the metrics server, only the startup probe would eventually notice.
+const REMOTE_SIGNER_INIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// [MANTLE] A permission check the caller supplies, run immediately before every broadcast of a
 /// send (see [`Signer::send_transaction_request_guarded`]). The proposer passes its chain lock
@@ -284,9 +295,22 @@ impl Signer {
     pub async fn from_env() -> Result<Self> {
         let backend = select_signer_backend(&raw_env_var)?;
         let signer = match backend {
-            SignerBackend::GcpKmsResourcePath => Self::gcp_kms_from_resource_path().await?,
-            SignerBackend::GcpKmsKeyring => Self::gcp_kms_from_keyring().await?,
-            SignerBackend::AwsKms => Self::aws_kms_from_env().await?,
+            SignerBackend::GcpKmsResourcePath => {
+                with_init_timeout(
+                    backend,
+                    REMOTE_SIGNER_INIT_TIMEOUT,
+                    Self::gcp_kms_from_resource_path(),
+                )
+                .await?
+            }
+            SignerBackend::GcpKmsKeyring => {
+                with_init_timeout(backend, REMOTE_SIGNER_INIT_TIMEOUT, Self::gcp_kms_from_keyring())
+                    .await?
+            }
+            SignerBackend::AwsKms => {
+                with_init_timeout(backend, REMOTE_SIGNER_INIT_TIMEOUT, Self::aws_kms_from_env())
+                    .await?
+            }
             SignerBackend::Web3Signer => {
                 let url = env_var("SIGNER_URL").context("SIGNER_URL")?;
                 let address = env_var("SIGNER_ADDRESS").context("SIGNER_ADDRESS")?;
@@ -407,18 +431,46 @@ impl Signer {
     /// later L1 send behind it while liveness probes stay green.
     async fn aws_kms_from_env() -> Result<Self> {
         let key_id = env_var("L1_SIGNER_AWS_KMS_KEY_ID").context("L1_SIGNER_AWS_KMS_KEY_ID")?;
+        check_aws_endpoint_overrides(&raw_env_var)?;
         let key_region =
             kms_arn_region(&key_id).map(|region| aws_config::Region::new(region.to_string()));
+
+        if let Some(endpoint) = env_var("AWS_ENDPOINT_URL_KMS") {
+            // Not checked: `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true` would make the SDK ignore
+            // it (see MANTLE_CHANGES §3.5a).
+            tracing::info!(%endpoint, "AWS KMS requests go to AWS_ENDPOINT_URL_KMS");
+        }
 
         // The *home* region — what credential resolution (IRSA → STS) uses — comes from the
         // default chain (AWS_REGION, AWS_DEFAULT_REGION, profile). The key's region is only a
         // fallback for it, so a local run with nothing but an ARN still works. Overriding the
         // whole SdkConfig with the key's region would also send the IRSA STS call there, which
         // fails on a pod whose egress / VPC endpoints only cover its own region.
-        let mut home_region = aws_config::meta::region::RegionProviderChain::default_provider();
-        if let Some(region) = key_region {
-            home_region = home_region.or_else(region);
+        //
+        // Blank region variables count as unset across the whole chain, as the SDK itself treats
+        // blank credential variables. The SDK's environment step does not: `AWS_REGION=""` comes
+        // back as `Some("")` and ends its chain there, so `AWS_DEFAULT_REGION`, the profile and
+        // IMDS were never consulted. Hence the environment step is done here, and only the rest of
+        // the default chain (profile file, then IMDS — its order) is left to the SDK.
+        let blank = blank_region_vars(&raw_env_var);
+        if !blank.is_empty() {
+            tracing::warn!(
+                ?blank,
+                "AWS region variable set but empty — treated as unset (a template that did not \
+                 render?)"
+            );
         }
+        let home_region = match env_region(&raw_env_var) {
+            Some(region) => Some(aws_config::Region::new(region)),
+            None => aws_config::meta::region::RegionProviderChain::first_try(
+                aws_config::profile::ProfileFileRegionProvider::new(),
+            )
+            .or_else(aws_config::imds::region::ImdsRegionProvider::builder().build())
+            .region()
+            .await
+            .filter(|region| !region.as_ref().trim().is_empty()),
+        }
+        .or(key_region);
         let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .timeout_config(
                 aws_config::timeout::TimeoutConfig::builder()
@@ -436,11 +488,25 @@ impl Signer {
                 "AWS region is unknown: set AWS_REGION, or use a key ARN for \
                  L1_SIGNER_AWS_KMS_KEY_ID",
             )?;
+        // The KMS client's credentials go through a recorder, so the identity KMS calls actually
+        // use is logged from the SDK's own source tags — not inferred from the environment, and
+        // without resolving credentials an extra time. See `CredentialSourceRecorder`.
+        let recorder = CredentialSourceRecorder::new(
+            config
+                .credentials_provider()
+                .context("the AWS SDK configured no credentials provider")?,
+        );
         let kms_config = aws_sdk_kms::config::Builder::from(&config)
             .region(aws_config::Region::new(region.clone()))
+            .credentials_provider(recorder.clone())
             .build();
         let client = aws_sdk_kms::Client::from_conf(kms_config);
-        let signer = AwsSigner::new(client, key_id.clone(), None).await.with_context(|| {
+        // `GetPublicKey` here is the first KMS call, so credentials have been resolved once it
+        // returns. Logged before the result is checked: an AccessDenied is far easier to read next
+        // to the identity that received it.
+        let built = AwsSigner::new(client, key_id.clone(), None).await;
+        recorder.log_resolved(workload_identity_configured(&raw_env_var));
+        let signer = built.with_context(|| {
             // Name the region: a bare key id or alias looked up in the wrong one (e.g. a stale
             // AWS_DEFAULT_REGION) surfaces from KMS only as "not found".
             format!(
@@ -623,6 +689,28 @@ impl Signer {
                         return Ok(receipt);
                     }
 
+                    // Stop when nothing can be pending: `sent_hashes` already includes this
+                    // attempt's hash (pushed above), so empty means no attempt so far produced a
+                    // transaction that may be in a mempool. Every attempt failed while filling
+                    // (gas estimation, e.g. the contract would revert), signing (a KMS error or
+                    // timeout), or was refused by the node (see `forget_if_rejected`). A higher fee
+                    // fixes none of these and there is nothing to replace, so escalating would only
+                    // end in a false "still pending" — what this reported before. The cause stays
+                    // in the error chain (the proposer classifies revert data from it).
+                    //
+                    // Once something *may* have been broadcast, a later attempt failing before
+                    // broadcast keeps escalating as before: "still pending" is then accurate, and
+                    // stopping early would let the next send queue behind it at a new nonce.
+                    if sent_hashes.is_empty() {
+                        return Err(e.context(format!(
+                            "L1 transaction not sent: attempt {} (nonce {:?}) failed before any \
+                             transaction reached a node (fill, sign, or refused by the node); \
+                             nothing was broadcast",
+                            attempt + 1,
+                            request.nonce
+                        )));
+                    }
+
                     if attempt >= policy.max_bumps {
                         // Distinguish "still sitting in the mempool" from "the nonce was consumed
                         // by a transaction we cannot identify" — the operator's next move differs.
@@ -721,6 +809,7 @@ impl Signer {
                 let pending = provider
                     .send_tx_envelope(tx_envelope)
                     .await
+                    .map_err(|e| forget_if_rejected(e, sent_hash))
                     .context("Failed to send transaction")?;
                 let receipt = pending
                     .with_required_confirmations(NUM_CONFIRMATIONS)
@@ -815,7 +904,11 @@ async fn send_with_wallet(
     check_broadcast_guard(guard)?;
     *sent_hash = Some(*envelope.tx_hash());
 
-    let pending = provider.send_tx_envelope(envelope).await.context(send_error)?;
+    let pending = provider
+        .send_tx_envelope(envelope)
+        .await
+        .map_err(|e| forget_if_rejected(e, sent_hash))
+        .context(send_error)?;
     let receipt = pending
         .with_required_confirmations(NUM_CONFIRMATIONS)
         .with_timeout(Some(Duration::from_secs(timeout_secs)))
@@ -823,6 +916,51 @@ async fn send_with_wallet(
         .await?;
 
     Ok(receipt)
+}
+
+/// [MANTLE] Node error messages that mean this transaction was **not** taken into the pool *and*
+/// that a higher fee cannot fix — matched case-, space- and underscore-insensitively
+/// (geth/erigon/anvil "insufficient funds for gas * price + value"; nethermind
+/// "InsufficientFunds").
+///
+/// Deliberately an allowlist, and deliberately short:
+/// - An error response does not always come from the node that handled the transaction: an RPC
+///   gateway may report its own upstream timeout as a JSON-RPC error after the transaction already
+///   reached a node, so an unrecognised error must keep the hash.
+/// - "nonce too low" is left out: a gateway that retries a broadcast which has meanwhile been mined
+///   gets exactly that for our own transaction; keeping the hash lets the receipt lookup find it,
+///   and otherwise the final nonce check reports the nonce as consumed.
+/// - "(replacement) transaction underpriced" is left out: the transaction is not in the pool, but a
+///   higher fee *is* the fix, and with nothing else pending forgetting it would stop the send
+///   instead of escalating. `clear-stuck-txs` meets exactly that when its chosen fee does not clear
+///   the stuck transaction's by the replacement threshold.
+const DEFINITIVE_BROADCAST_REJECTIONS: &[&str] = &["insufficientfunds"];
+
+/// [MANTLE] The hash of a signed transaction is recorded *before* `eth_sendRawTransaction`
+/// (see [`send_with_wallet`]), because a broadcast cut off mid-call may still have reached the
+/// node. When the node instead *refused* it in a way listed in [`DEFINITIVE_BROADCAST_REJECTIONS`]
+/// the transaction is not in any pool, so the hash is forgotten again: otherwise a send whose
+/// broadcasts were all refused would be escalated and reported as "still pending" (QA finding 5).
+///
+/// Everything else keeps the hash — transport errors, timeouts, "already known", gateway errors:
+/// wrongly keeping one only makes the final message less precise, while wrongly forgetting one
+/// could report a mined transaction as failed and make the caller send it again.
+fn forget_if_rejected(
+    err: alloy_provider::transport::TransportError,
+    sent_hash: &mut Option<TxHash>,
+) -> alloy_provider::transport::TransportError {
+    if let Some(payload) = err.as_error_resp() {
+        let normalized: String = payload
+            .message
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != '_')
+            .flat_map(char::to_lowercase)
+            .collect();
+        if DEFINITIVE_BROADCAST_REJECTIONS.iter().any(|reason| normalized.contains(reason)) {
+            *sent_hash = None;
+        }
+    }
+    err
 }
 
 /// [MANTLE] After a failed attempt: finds a mined receipt among `hashes` and, if there is one,
@@ -964,6 +1102,202 @@ fn raw_env_var(name: &str) -> Option<String> {
     std::env::var_os(name).map(|value| value.into_string().unwrap_or_default())
 }
 
+/// [MANTLE] Builds a KMS signer within [`REMOTE_SIGNER_INIT_TIMEOUT`], failing with a message
+/// that names the backend instead of hanging.
+async fn with_init_timeout(
+    backend: SignerBackend,
+    limit: Duration,
+    build: impl std::future::Future<Output = Result<Signer>>,
+) -> Result<Signer> {
+    tokio::time::timeout(limit, build).await.unwrap_or_else(|_| {
+        Err(anyhow::anyhow!(
+            "L1 signer `{backend}` could not be initialised within {}s (credentials or public-key \
+             request did not answer); check network access to the KMS and its credentials \
+             endpoint",
+            limit.as_secs()
+        ))
+    })
+}
+
+/// [MANTLE] Endpoint overrides the AWS KMS signer refuses.
+///
+/// The SDK applies `AWS_ENDPOINT_URL` (every service) and `AWS_ENDPOINT_URL_STS` to the STS client
+/// that exchanges the IRSA web-identity token for credentials, so either one sends that token to
+/// whatever address it names — and the token is enough to assume the role until it expires. The
+/// SDK offers no public way to keep these away from the credential provider, so their presence
+/// is a startup error. Only `AWS_ENDPOINT_URL_KMS` is supported: it reaches the KMS client alone
+/// (needed for a KMS VPC endpoint with private DNS off). KMS requests are SigV4-signed: they carry
+/// the access key id and session token but not the secret key, so a request cannot be forged
+/// from what an endpoint receives. An STS VPC endpoint must use private DNS.
+///
+/// Only the environment is checked. The STS client also reads `endpoint_url` from the selected
+/// profile and a `[services]` section of a shared config file (`AWS_CONFIG_FILE` /
+/// `~/.aws/config`), which would send the token the same way; the image ships no such file — keep
+/// it that way (MANTLE_CHANGES §3.5a, QA follow-up 1).
+const REFUSED_AWS_ENDPOINT_OVERRIDES: &[&str] = &["AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_STS"];
+
+fn check_aws_endpoint_overrides(lookup: &dyn Fn(&str) -> Option<String>) -> Result<()> {
+    let set: Vec<&str> = REFUSED_AWS_ENDPOINT_OVERRIDES
+        .iter()
+        .copied()
+        .filter(|name| lookup(name).and_then(trimmed_non_empty).is_some())
+        .collect();
+    anyhow::ensure!(
+        set.is_empty(),
+        "{set:?} set: the AWS SDK would send the IRSA web-identity token to that address when \
+         fetching credentials. Unset it; to route KMS through a VPC endpoint use \
+         AWS_ENDPOINT_URL_KMS, and give an STS VPC endpoint private DNS."
+    );
+    Ok(())
+}
+
+/// [MANTLE] What the AWS SDK reports as the source of a set of credentials. Every provider in its
+/// default chain tags the credentials it returns with `AwsCredentialFeature`s; this reads them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AwsCredentialKind {
+    EnvironmentKeys,
+    SharedConfigProfile,
+    WebIdentity,
+    Container,
+    InstanceMetadata,
+    Unrecognised,
+}
+
+impl AwsCredentialKind {
+    fn from_features(features: &[AwsCredentialFeature]) -> Self {
+        use AwsCredentialFeature as F;
+        let has = |f: F| features.contains(&f);
+        if has(F::CredentialsEnvVars) {
+            Self::EnvironmentKeys
+        } else if has(F::CredentialsProfile) {
+            // Checked before web identity: a profile that assumes a role via a token file is
+            // tagged with both, and it is the profile that was chosen.
+            Self::SharedConfigProfile
+        } else if has(F::CredentialsProfileStsWebIdToken) ||
+            has(F::CredentialsEnvVarsStsWebIdToken) ||
+            has(F::CredentialsStsAssumeRoleWebId)
+        {
+            // IRSA configured through AWS_ROLE_ARN / AWS_WEB_IDENTITY_TOKEN_FILE is tagged
+            // `CredentialsProfileStsWebIdToken` by aws-config, despite the name.
+            Self::WebIdentity
+        } else if has(F::CredentialsHttp) {
+            Self::Container
+        } else if has(F::CredentialsImds) {
+            Self::InstanceMetadata
+        } else {
+            Self::Unrecognised
+        }
+    }
+
+    fn describe(self) -> &'static str {
+        match self {
+            Self::EnvironmentKeys => "static keys from the environment",
+            Self::SharedConfigProfile => "shared config profile",
+            Self::WebIdentity => "web identity (IRSA)",
+            Self::Container => "container credentials (EKS Pod Identity / ECS)",
+            Self::InstanceMetadata => "instance metadata (EC2 instance role)",
+            Self::Unrecognised => "unrecognised source",
+        }
+    }
+
+    fn is_workload_identity(self) -> bool {
+        matches!(self, Self::WebIdentity | Self::Container)
+    }
+}
+
+/// Whether the environment configures a workload identity (IRSA or EKS Pod Identity / ECS), i.e.
+/// whether credentials from anything else mean that identity was overridden.
+fn workload_identity_configured(lookup: &dyn Fn(&str) -> Option<String>) -> bool {
+    let get = |name: &str| lookup(name).and_then(trimmed_non_empty);
+    (get("AWS_ROLE_ARN").is_some() && get("AWS_WEB_IDENTITY_TOKEN_FILE").is_some()) ||
+        get("AWS_CONTAINER_CREDENTIALS_FULL_URI").is_some() ||
+        get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI").is_some()
+}
+
+/// Masks an access key id for logs: not a secret, but needs no full disclosure.
+fn mask_key_id(key_id: &str) -> String {
+    let chars: Vec<char> = key_id.chars().collect();
+    if chars.len() > 8 {
+        let head: String = chars[..4].iter().collect();
+        let tail: String = chars[chars.len() - 4..].iter().collect();
+        format!("{head}…{tail}")
+    } else {
+        "…".to_string()
+    }
+}
+
+/// [MANTLE] Wraps the SDK's default credentials chain for the KMS client and records where the
+/// credentials it hands out actually came from (QA finding 2: static keys in the environment —
+/// or a shared config profile — silently take precedence over IRSA).
+///
+/// Earlier revisions inferred the source from the environment, mirroring the chain's rules; each
+/// review found another rule they missed (`SECRET_ACCESS_KEY`, `~` in file paths, …). Observing
+/// the resolution the KMS client really makes has no such gap and costs no extra call: the
+/// client's identity cache calls this once at startup and again on each refresh (hourly for
+/// IRSA). A refresh whose source differs from the first is logged as a warning.
+#[derive(Debug, Clone)]
+struct CredentialSourceRecorder {
+    inner: SharedCredentialsProvider,
+    seen: Arc<std::sync::Mutex<Option<(AwsCredentialKind, String)>>>,
+}
+
+impl CredentialSourceRecorder {
+    fn new(inner: SharedCredentialsProvider) -> Self {
+        Self { inner, seen: Arc::default() }
+    }
+
+    fn seen(&self) -> Option<(AwsCredentialKind, String)> {
+        self.seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+    }
+
+    /// Logs the source of the credentials resolved so far; nothing if none were (the caller's
+    /// error then says why).
+    fn log_resolved(&self, workload_identity_configured: bool) {
+        let Some((kind, key_id)) = self.seen() else { return };
+        if workload_identity_configured && !kind.is_workload_identity() {
+            tracing::warn!(
+                source = kind.describe(),
+                access_key_id = %key_id,
+                "AWS credentials did not come from the configured workload identity (IRSA / Pod \
+                 Identity): an earlier source in the SDK chain took precedence, and KMS calls are \
+                 made as its identity"
+            );
+        } else {
+            tracing::info!(source = kind.describe(), access_key_id = %key_id, "AWS credentials source");
+        }
+    }
+}
+
+impl ProvideCredentials for CredentialSourceRecorder {
+    fn provide_credentials<'a>(&'a self) -> credentials_future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        credentials_future::ProvideCredentials::new(async move {
+            let credentials = self.inner.provide_credentials().await?;
+            let kind = AwsCredentialKind::from_features(
+                credentials
+                    .get_property::<Vec<AwsCredentialFeature>>()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            );
+            let key_id = mask_key_id(credentials.access_key_id());
+            let mut seen = self.seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            match seen.as_ref() {
+                None => *seen = Some((kind, key_id)),
+                Some((first, _)) if *first != kind => tracing::warn!(
+                    from = first.describe(),
+                    to = kind.describe(),
+                    access_key_id = %key_id,
+                    "AWS credentials source changed on refresh"
+                ),
+                Some(_) => {}
+            }
+            Ok(credentials)
+        })
+    }
+}
+
 /// [MANTLE] Chooses exactly one signer backend from the environment.
 ///
 /// - A remote backend (GCP KMS, AWS KMS, Web3Signer) is *configured* as soon as one of its
@@ -1037,6 +1371,23 @@ fn kms_arn_region(key_id: &str) -> Option<&str> {
     }
 }
 
+/// [MANTLE] The environment step of the SDK's default region chain (`AWS_REGION`, then
+/// `AWS_DEFAULT_REGION`), with blank values skipped instead of ending the chain.
+const AWS_REGION_VARS: [&str; 2] = ["AWS_REGION", "AWS_DEFAULT_REGION"];
+
+fn env_region(lookup: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    AWS_REGION_VARS.iter().find_map(|name| lookup(name).and_then(trimmed_non_empty))
+}
+
+/// Region variables that are present but blank — skipped, and warned about.
+fn blank_region_vars(lookup: &dyn Fn(&str) -> Option<String>) -> Vec<&'static str> {
+    AWS_REGION_VARS
+        .iter()
+        .copied()
+        .filter(|name| lookup(name).is_some_and(|value| value.trim().is_empty()))
+        .collect()
+}
+
 /// The region the KMS client must use, given the home region the default chain resolved.
 ///
 /// A key ARN names its region, and a KMS call to any other region fails with a confusing "key
@@ -1048,6 +1399,9 @@ fn kms_arn_region(key_id: &str) -> Option<&str> {
 ///
 /// Without an ARN the home region is used; `None` if there is none.
 fn resolve_aws_region(home_region: Option<String>, key_id: &str) -> Option<String> {
+    // Empty reads as unset, so a bare key id with `AWS_REGION=""` gets the "region is unknown"
+    // error rather than an SDK endpoint failure.
+    let home_region = home_region.filter(|home| !home.trim().is_empty());
     match (home_region, kms_arn_region(key_id)) {
         (home, Some(arn)) => {
             if let Some(home) = home.filter(|home| home != arn) {
@@ -1540,6 +1894,183 @@ mod signer_selection_tests {
         assert_eq!(resolve_aws_region(None, "alias/proposer"), None);
     }
 
+    /// QA finding 3: `AWS_REGION=""` must read as unset, so a bare key id gets our "region is
+    /// unknown" error instead of an opaque SDK endpoint failure, and an ARN still wins.
+    #[test]
+    fn empty_aws_region_reads_as_unset() {
+        // Across the whole environment step, not just at the end: a blank AWS_REGION must fall
+        // through to AWS_DEFAULT_REGION (the SDK's own env provider stops at the blank value).
+        let both = env_of(&[("AWS_REGION", ""), ("AWS_DEFAULT_REGION", "ap-southeast-1")]);
+        assert_eq!(env_region(&both).as_deref(), Some("ap-southeast-1"));
+        assert_eq!(blank_region_vars(&both), vec!["AWS_REGION"]);
+        let padded = env_of(&[("AWS_REGION", " us-east-1\n"), ("AWS_DEFAULT_REGION", "eu-west-1")]);
+        assert_eq!(env_region(&padded).as_deref(), Some("us-east-1"));
+        assert!(blank_region_vars(&padded).is_empty());
+        let blank = env_of(&[("AWS_REGION", " "), ("AWS_DEFAULT_REGION", "")]);
+        assert_eq!(env_region(&blank), None);
+        assert_eq!(blank_region_vars(&blank), vec!["AWS_REGION", "AWS_DEFAULT_REGION"]);
+        assert_eq!(env_region(&env_of(&[])), None);
+        assert!(blank_region_vars(&env_of(&[])).is_empty());
+
+        assert_eq!(resolve_aws_region(Some(String::new()), "alias/proposer"), None);
+        assert_eq!(resolve_aws_region(Some("  ".into()), "alias/proposer"), None);
+        assert_eq!(
+            resolve_aws_region(Some(String::new()), KEY_ARN).as_deref(),
+            Some("ap-southeast-1")
+        );
+    }
+
+    fn env_of(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let env: HashMap<String, String> =
+            vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        move |name: &str| env.get(name).cloned()
+    }
+
+    /// QA finding 1: a global or STS endpoint override would receive the IRSA web-identity token.
+    #[test]
+    fn endpoint_overrides_that_reach_sts_are_refused() {
+        for name in ["AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_STS"] {
+            let err = check_aws_endpoint_overrides(&env_of(&[(name, "http://elsewhere")]))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(name) && err.contains("web-identity token"), "{err}");
+        }
+        // The KMS-only override is the supported way to reach a KMS VPC endpoint.
+        check_aws_endpoint_overrides(&env_of(&[(
+            "AWS_ENDPOINT_URL_KMS",
+            "https://vpce-1.kms.ap-southeast-1.vpce.amazonaws.com",
+        )]))
+        .unwrap();
+        check_aws_endpoint_overrides(&env_of(&[("AWS_ENDPOINT_URL", "  ")])).unwrap();
+        check_aws_endpoint_overrides(&env_of(&[])).unwrap();
+    }
+
+    /// QA finding 2: the source is read from the SDK's own tags on the credentials, not inferred.
+    #[test]
+    fn credential_kind_follows_the_sdk_tags() {
+        use AwsCredentialFeature as F;
+        let kind = |features: &[F]| AwsCredentialKind::from_features(features);
+        assert_eq!(kind(&[F::CredentialsEnvVars]), AwsCredentialKind::EnvironmentKeys);
+        // How aws-config tags IRSA configured through AWS_ROLE_ARN / AWS_WEB_IDENTITY_TOKEN_FILE.
+        assert_eq!(kind(&[F::CredentialsProfileStsWebIdToken]), AwsCredentialKind::WebIdentity);
+        // A profile that assumes a role with a token file: the profile was the chosen source.
+        assert_eq!(
+            kind(&[F::CredentialsProfileStsWebIdToken, F::CredentialsProfile]),
+            AwsCredentialKind::SharedConfigProfile
+        );
+        assert_eq!(kind(&[F::CredentialsProfile]), AwsCredentialKind::SharedConfigProfile);
+        assert_eq!(kind(&[F::CredentialsHttp]), AwsCredentialKind::Container);
+        assert_eq!(kind(&[F::CredentialsImds]), AwsCredentialKind::InstanceMetadata);
+        assert_eq!(kind(&[]), AwsCredentialKind::Unrecognised);
+        assert!(AwsCredentialKind::WebIdentity.is_workload_identity());
+        assert!(AwsCredentialKind::Container.is_workload_identity());
+        assert!(!AwsCredentialKind::EnvironmentKeys.is_workload_identity());
+        assert!(!AwsCredentialKind::SharedConfigProfile.is_workload_identity());
+    }
+
+    #[test]
+    fn workload_identity_is_configured_by_irsa_or_pod_identity() {
+        let irsa = env_of(&[
+            ("AWS_ROLE_ARN", "arn:aws:iam::123456789012:role/proposer"),
+            ("AWS_WEB_IDENTITY_TOKEN_FILE", "/var/run/secrets/token"),
+        ]);
+        assert!(workload_identity_configured(&irsa));
+        assert!(!workload_identity_configured(&env_of(&[(
+            "AWS_ROLE_ARN",
+            "arn:aws:iam::123456789012:role/proposer"
+        )])));
+        assert!(workload_identity_configured(&env_of(&[(
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+            "http://169.254.170.23/v1/credentials"
+        )])));
+        assert!(!workload_identity_configured(&env_of(&[])));
+    }
+
+    /// The recorder reports the credentials the wrapped chain actually returned, masked.
+    #[tokio::test]
+    async fn recorder_reports_the_source_of_the_credentials_it_handed_out() {
+        let mut credentials = aws_sdk_kms::config::Credentials::new(
+            "AKIAIOSFODNN7EXAMPLE",
+            "secret",
+            None,
+            None,
+            "test",
+        );
+        credentials
+            .get_property_mut_or_default::<Vec<AwsCredentialFeature>>()
+            .push(AwsCredentialFeature::CredentialsEnvVars);
+        let recorder = CredentialSourceRecorder::new(SharedCredentialsProvider::new(credentials));
+        assert_eq!(recorder.seen(), None, "nothing is recorded before a resolution");
+
+        let handed_out = recorder.provide_credentials().await.unwrap();
+        assert_eq!(handed_out.access_key_id(), "AKIAIOSFODNN7EXAMPLE", "passed through unchanged");
+        assert_eq!(
+            recorder.seen(),
+            Some((AwsCredentialKind::EnvironmentKeys, "AKIA…MPLE".to_string()))
+        );
+        // A refresh from the same source keeps the first record.
+        recorder.provide_credentials().await.unwrap();
+        assert_eq!(recorder.seen().map(|(kind, _)| kind), Some(AwsCredentialKind::EnvironmentKeys));
+    }
+
+    /// QA finding 5 (review follow-up): only a refusal that proves the transaction is not in any
+    /// pool *and* that no fee bump can fix forgets its hash; anything else — "underpriced" (bumping
+    /// is the fix), "nonce too low", "already known", a gateway's own error, a transport error —
+    /// keeps it, so the send escalates as before.
+    #[test]
+    fn only_a_definitive_refusal_forgets_the_hash() {
+        use alloy_json_rpc::ErrorPayload;
+        use alloy_provider::transport::TransportError;
+        let refused = |message: &'static str| {
+            TransportError::err_resp(ErrorPayload {
+                code: -32000,
+                message: message.into(),
+                data: None,
+            })
+        };
+        let hash = Some(TxHash::repeat_byte(1));
+
+        for message in [
+            "insufficient funds for gas * price + value",
+            "Insufficient funds for gas * price + value", // anvil
+            "InsufficientFunds",                          // nethermind
+        ] {
+            let mut sent = hash;
+            forget_if_rejected(refused(message), &mut sent);
+            assert_eq!(sent, None, "{message}");
+        }
+        for message in [
+            "replacement transaction underpriced", // a fee bump is the fix: keep escalating
+            "transaction underpriced",
+            "REPLACEMENT_UNDERPRICED",                 // besu
+            "nonce too low: next nonce 5, tx nonce 4", // may be our own, already mined
+            "already known",
+            "Known transaction: 0xabc",
+            "upstream request timed out", // a gateway's own error
+        ] {
+            let mut sent = hash;
+            forget_if_rejected(refused(message), &mut sent);
+            assert_eq!(sent, hash, "{message} must keep the hash");
+        }
+        let mut sent = hash;
+        forget_if_rejected(TransportError::local_usage_str("connection reset"), &mut sent);
+        assert_eq!(sent, hash, "a transport error leaves the outcome unknown");
+    }
+
+    /// QA finding 4: building a KMS signer that never answers must fail, naming the backend.
+    #[tokio::test]
+    async fn signer_init_that_never_answers_times_out() {
+        let err = with_init_timeout(
+            SignerBackend::GcpKmsResourcePath,
+            Duration::from_millis(50),
+            std::future::pending(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("gcp-kms") && err.contains("could not be initialised"), "{err}");
+    }
+
     #[tokio::test]
     async fn self_check_accepts_a_signer_that_signs_for_its_own_address() {
         let signer = PrivateKeySigner::random();
@@ -1638,6 +2169,61 @@ mod signer_selection_tests {
             .await
             .unwrap_err();
         assert!(err.downcast_ref::<BroadcastRefused>().is_some(), "{err:#}");
+    }
+
+    /// QA finding 5: a send whose every attempt fails before broadcast (here the signer is
+    /// unreachable) must stop at once and say nothing was sent — not escalate fees and end with
+    /// "still pending". Needs `anvil --port 8545` (`no_proxy=127.0.0.1,localhost` behind a proxy).
+    #[tokio::test]
+    #[ignore]
+    async fn failure_before_broadcast_is_not_reported_as_pending() {
+        let url: Url = "http://127.0.0.1:8545".parse().unwrap();
+        let from: Address = PrivateKeySigner::from_str(ANVIL_KEY).unwrap().address();
+        let signer = Signer::new_web3_signer("http://127.0.0.1:9".parse().unwrap(), from);
+        let provider = ProviderBuilder::new().network::<Ethereum>().connect_http(url.clone());
+        let nonce_before = provider.get_transaction_count(from).await.unwrap();
+
+        let err = signer
+            .send_transaction_request(
+                url,
+                TransactionRequest::default()
+                    .to(Address::repeat_byte(0x33))
+                    .value(alloy_primitives::U256::from(1u64)),
+            )
+            .await
+            .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("nothing was broadcast"), "{msg}");
+        assert!(msg.contains("attempt 1 "), "must stop at the first attempt: {msg}");
+        assert!(!msg.contains("still pending"), "{msg}");
+        assert_eq!(provider.get_transaction_count(from).await.unwrap(), nonce_before);
+    }
+
+    /// QA finding 5 (review follow-up): every broadcast refused by the node (an unfunded account,
+    /// with fees and gas preset so no estimate catches it first) is "not sent", not "pending".
+    /// Needs `anvil --port 8545` (`no_proxy=127.0.0.1,localhost` behind a proxy).
+    #[tokio::test]
+    #[ignore]
+    async fn refused_broadcast_is_not_reported_as_pending() {
+        let url: Url = "http://127.0.0.1:8545".parse().unwrap();
+        let signer = Signer::LocalSigner(PrivateKeySigner::random());
+
+        let err = signer
+            .send_transaction_request(
+                url,
+                TransactionRequest::default()
+                    .to(Address::repeat_byte(0x44))
+                    .value(alloy_primitives::U256::from(1u64))
+                    .gas_limit(21_000)
+                    .max_fee_per_gas(2 * WEI_PER_GWEI)
+                    .max_priority_fee_per_gas(WEI_PER_GWEI),
+            )
+            .await
+            .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("nothing was broadcast"), "{msg}");
+        assert!(msg.contains("attempt 1 "), "must stop at the first attempt: {msg}");
+        assert!(!msg.contains("still pending"), "{msg}");
     }
 
     /// The guard is checked again at the last moment before broadcasting, after the transaction

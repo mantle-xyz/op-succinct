@@ -217,6 +217,7 @@ gcloud-sdk = "0.27"
 # [MANTLE] AWS KMS L1 signer. Caret requirements on purpose: sp1-sdk's network signer already
 # pulls both, and these resolve to the same versions rather than adding a second copy.
 aws-config = "1"
+aws-credential-types = "1"
 aws-sdk-kms = "1"
 
 [profile.release-client-lto]
