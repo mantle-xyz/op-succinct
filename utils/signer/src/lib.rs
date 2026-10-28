@@ -15,7 +15,7 @@ use alloy_signer_gcp::{
     // types.
     gcloud_sdk::{
         google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient,
-        GoogleApi, TokenSourceType, GCP_DEFAULT_SCOPES,
+        GoogleApi, GoogleAuthTokenGenerator, TokenSourceType, GCP_DEFAULT_SCOPES,
     },
     GcpKeyRingRef,
     GcpSigner,
@@ -363,6 +363,11 @@ impl Signer {
             .context("HSM_CREDENTIALS is not valid hex")?;
         let creds_json = String::from_utf8(creds_json_bytes)
             .context("HSM_CREDENTIALS hex did not decode to UTF-8 JSON")?;
+        check_gcp_credentials(
+            TokenSourceType::Json(creds_json.clone()),
+            "HSM_CREDENTIALS (hex-decoded)",
+        )
+        .await?;
 
         let GcpKeyPath { project_id, location, keyring, key_name, key_version } =
             parse_gcp_key_resource_path(&hsm_api_name)?;
@@ -386,6 +391,14 @@ impl Signer {
     /// GCP KMS via `GOOGLE_PROJECT_ID` / `GOOGLE_LOCATION` / `GOOGLE_KEYRING` + `HSM_KEY_NAME`
     /// (upstream's shape), with ambient Google credentials.
     async fn gcp_kms_from_keyring() -> Result<Self> {
+        // Ambient credentials. Only a key file named by GOOGLE_APPLICATION_CREDENTIALS can be
+        // checked up front; without it the SDK falls back to gcloud / the metadata server. Read
+        // exactly as the SDK does (raw value, present-but-empty included), so this check cannot
+        // disagree with what it would load.
+        if let Some(path) = std::env::var_os("GOOGLE_APPLICATION_CREDENTIALS") {
+            let what = format!("GOOGLE_APPLICATION_CREDENTIALS ({})", path.to_string_lossy());
+            check_gcp_credentials(TokenSourceType::File(path.into()), &what).await?;
+        }
         let project_id = env_var("GOOGLE_PROJECT_ID").context("GOOGLE_PROJECT_ID")?;
         let location = env_var("GOOGLE_LOCATION").context("GOOGLE_LOCATION")?;
         let keyring_name = env_var("GOOGLE_KEYRING").context("GOOGLE_KEYRING")?;
@@ -1100,6 +1113,27 @@ fn trimmed_non_empty(value: String) -> Option<String> {
 /// selects its backend and then fails as unset.
 fn raw_env_var(name: &str) -> Option<String> {
     std::env::var_os(name).map(|value| value.into_string().unwrap_or_default())
+}
+
+/// [MANTLE] Parses Google credentials with gcloud-sdk itself, before any network call (QA
+/// finding 6).
+///
+/// `GoogleApi::with_token_source` opens its channel to Google *before* parsing the credentials
+/// (`init_google_services_channel`, then `GoogleAuthTokenGenerator::new`), so malformed
+/// credentials surfaced as a transport error when Google was unreachable. Building the same
+/// `GoogleAuthTokenGenerator` first applies the SDK's own rules — no network: for `Json` / `File`
+/// it only parses (credentials are matched by structure, `#[serde(untagged)]`, not by their
+/// `type` field), and tokens are fetched on first use. A hand-written check drifted from those
+/// rules in review (it ignored `private_key_id` / `token_uri` and required `type`), hence this.
+/// Not covered: a private key that parses as a string but is not a valid PEM, which the SDK
+/// reads only when it first signs a token request.
+///
+/// The SDK's errors name a JSON position or an I/O cause, never the credential contents.
+async fn check_gcp_credentials(source: TokenSourceType, what: &str) -> Result<()> {
+    GoogleAuthTokenGenerator::new(source, GCP_DEFAULT_SCOPES.clone())
+        .await
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("{what} is not usable Google credentials: {e}"))
 }
 
 /// [MANTLE] Builds a KMS signer within [`REMOTE_SIGNER_INIT_TIMEOUT`], failing with a message
@@ -2055,6 +2089,47 @@ mod signer_selection_tests {
         let mut sent = hash;
         forget_if_rejected(TransportError::local_usage_str("connection reset"), &mut sent);
         assert_eq!(sent, hash, "a transport error leaves the outcome unknown");
+    }
+
+    /// QA finding 6: credentials are parsed with the SDK's own rules before any network call, and
+    /// the error never echoes their contents.
+    #[tokio::test]
+    async fn gcp_credentials_are_checked_with_the_sdk_rules_before_connecting() {
+        let what = "HSM_CREDENTIALS (hex-decoded)";
+        let check = |json: String| check_gcp_credentials(TokenSourceType::Json(json), what);
+        let secret = "-----BEGIN PRIVATE KEY-----SECRETMATERIAL";
+        let service_account = |extra: &str| {
+            format!(
+                r#"{{"client_email":"p@x.iam.gserviceaccount.com","private_key_id":"k1",
+                    "private_key":"{secret}","token_uri":"https://oauth2.googleapis.com/token"{extra}}}"#
+            )
+        };
+
+        // A complete service account, with or without `type` (the SDK matches by structure).
+        check(service_account(r#","type":"service_account""#)).await.unwrap();
+        check(service_account("")).await.unwrap();
+        check(r#"{"client_id":"a","client_secret":"b","refresh_token":"c"}"#.into()).await.unwrap();
+
+        for json in [
+            "not json at all".to_string(),
+            r#"{"client_email":"#.to_string(),
+            r#"["service_account"]"#.to_string(),
+            // What the earlier hand-written check let through: a service account without
+            // token_uri / private_key_id, which the SDK rejects.
+            format!(r#"{{"client_email":"p@x","private_key":"{secret}"}}"#),
+        ] {
+            let err = check(json.clone()).await.unwrap_err().to_string();
+            assert!(err.contains(what) && err.contains("not usable Google credentials"), "{err}");
+            assert!(!err.contains("SECRETMATERIAL"), "contents must not be echoed: {err}");
+        }
+
+        let missing = std::env::temp_dir().join("op-succinct-no-such-credentials.json");
+        let err =
+            check_gcp_credentials(TokenSourceType::File(missing), "GOOGLE_APPLICATION_CREDENTIALS")
+                .await
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains("GOOGLE_APPLICATION_CREDENTIALS"), "{err}");
     }
 
     /// QA finding 4: building a KMS signer that never answers must fail, naming the backend.

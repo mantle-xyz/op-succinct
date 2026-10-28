@@ -113,6 +113,7 @@ Only one proposer may send L1 transactions for a chain at a time. Proposers shar
 Operational notes:
 
 - **Never run two proposer versions side by side.** When upgrading or rolling back, stop the running proposer before starting the other version. Older versions do not honour the lease owner.
+- **Rolling back to a release without migration 7** (e.g. `mantle-v1.6.x`): after stopping this version, run `validity/migrations-rollback/07_chain_lock_owner.sql` against the database before starting the older one (`psql "$DATABASE_URL" -f validity/migrations-rollback/07_chain_lock_owner.sql`). Otherwise the older release exits at startup with `migration 7 was previously applied but is missing`.
 - Monitor `succinct_loop_last_progress_timestamp` (alert when it falls well behind) and `succinct_chain_lock_held`. A renewing lease does not mean the main loop is healthy.
 - `clear-stuck-txs` uses the same account but takes no lease. Stop the proposer before running it.
 

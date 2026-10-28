@@ -371,8 +371,8 @@ compromise). Host-only — no guest code, **no vkey change**.
   `PRIVATE_KEY` was ignored. Pinned by `foundry_and_stray_gcp_variables_do_not_select_a_backend`.
   (An earlier revision of this branch used this name; a second review caught it.)
 
-**QA follow-ups (2026-10-28).** Five findings from QA on the first revision, all reproduced in the
-distroless image and fixed:
+**QA follow-ups (2026-10-28).** Seven findings from QA (1–5 on the first revision, 6–7 a second
+round), reproduced and fixed:
 
 | # | Finding | Fix |
 |---|---|---|
@@ -381,6 +381,8 @@ distroless image and fixed:
 | 3 | `AWS_REGION=""` with a bare key id gave an opaque SDK endpoint error. Underneath: the SDK's environment region provider returns `Some("")` for a blank `AWS_REGION` and ends the region chain there, so `AWS_DEFAULT_REGION`, the profile and IMDS were never consulted. | Blank region variables are unset for the whole chain, as the SDK treats blank credential variables: the environment step is done here (`AWS_REGION`, then `AWS_DEFAULT_REGION`, blanks skipped), the rest of the default chain (profile file, then IMDS) is left to the SDK, and a WARN names the blank variable. A bare key id with no region anywhere gets "AWS region is unknown"; an ARN still sets the KMS region, while STS keeps the pod's own region. |
 | 4 | GCP signer construction had no timeout: with the token endpoint or KMS unreachable, startup hung silently (the signer is built before the metrics server, so only the startup probe would notice). | Building any KMS signer is bounded by `REMOTE_SIGNER_INIT_TIMEOUT` (60s) with an error naming the backend. |
 | 5 | A send whose attempts all failed *before broadcast* (signing error, gas-estimation revert) was escalated at higher fees and finally reported as "still pending" although nothing had been broadcast. Pre-existing on `main`, for every signer kind. The same held when the node *refused* the broadcast (insufficient funds, nonce too low): the hash is recorded before `eth_sendRawTransaction`, so a refused transaction counted as sent. | A broadcast the node refused for **insufficient funds** forgets its hash (`forget_if_rejected`, an allowlist: `DEFINITIVE_BROADCAST_REJECTIONS`) — not in any pool, and a higher fee cannot help. Everything else keeps it — transport errors and timeouts (outcome unknown), "already known" (the transaction is in the pool), an RPC gateway's own JSON-RPC error after the transaction may already have reached a node, "nonce too low" (a gateway retrying a broadcast that has meanwhile been mined gets exactly that for our own transaction), and "underpriced" (a fee bump *is* the fix; `clear-stuck-txs` hits it when its fee does not clear a stuck transaction's, and must keep escalating as on `main`). Wrongly keeping a hash only makes the final message less precise; wrongly forgetting one could report a mined transaction as failed and make the proposer send it again. If no attempt has a transaction that may be in a mempool, the send stops at once: `L1 transaction not sent: … nothing was broadcast`, cause kept in the chain (the proposer's revert-data classification is unchanged and now sees an estimate revert immediately instead of after three fee bumps (four attempts)). Once something has been broadcast, a replacement that fails before broadcast keeps escalating as before: "still pending" is then true, and stopping would let the next send queue at a new nonce. |
+| 6 | GCP credentials (`HSM_CREDENTIALS`) that are not valid JSON were not checked before connecting to Google: with Google unreachable only a transport error surfaced, nothing pointed at the credentials. gcloud-sdk opens its channel *before* parsing them (`with_token_source`: `init_google_services_channel`, then `GoogleAuthTokenGenerator::new`). | `check_gcp_credentials` builds the same `GoogleAuthTokenGenerator` first — the SDK's own parsing, no network (tokens are fetched on first use) — for `HSM_CREDENTIALS` and for the key file named by `GOOGLE_APPLICATION_CREDENTIALS` on the keyring path (read raw, as the SDK does). A hand-written structural check was tried first and dropped in review: the SDK matches credentials by structure (`#[serde(untagged)]`), ignores `type`, and needs `private_key_id` / `token_uri` — a copy of its rules drifts. Errors name the variable and never echo the contents. Not covered: a private key that is a string but not a valid PEM — the SDK reads it only when it first signs a token request. |
+| 7 | After this release has run once, rolling back to `mantle-v1.6.1` failed: the older binary exits at startup with "migration 7 was previously applied but is missing", so the documented rollback ("stop the new version, start the old one") did not work. | `validity/migrations-rollback/07_chain_lock_owner.sql` — run once, proposers stopped, before starting the older release; see §3.10d "Rolling back". Tested end to end against the real migrators. The earlier claim here that the migration "may be deployed first … an old binary ignores both columns" was wrong and is removed. |
 
 **Deployment checklist (mantle-config, not this repo):**
 - The mantle-succinct IRSA role (`cicd/services/mantle-succinct/aws-<env>.yaml`) has only
@@ -874,9 +876,18 @@ the window, which is how this was found.
   neither checks `owner_id` nor maintains `lease_expires_at`; its renewal is still the
   unconditional `UPDATE`. The legacy-row rule (a row with no owner is held for one lease after
   `locked_at`) covers a *normal* startup next to an old holder, not a paused-and-resumed old
-  process or a rollback. The migration may be deployed first (it is additive and an old binary
-  ignores both columns), but when switching or rolling back the process: **stop the running
+  process or a rollback. When switching or rolling back the process: **stop the running
   version, then start the other**, and let it acquire the lock.
+- **Rolling back to a release without migration 7 (e.g. `mantle-v1.6.x`) needs one SQL step.**
+  The older binary ignores the two new columns, but sqlx refuses to start on a database that
+  records a migration the binary does not ship ("migration 7 was previously applied but is
+  missing"), so the older release exits at startup (QA finding 7). With every proposer for the
+  database stopped, run `validity/migrations-rollback/07_chain_lock_owner.sql`
+  (`psql "$DATABASE_URL" -f …`) before starting the older release. It forgets migration 7 and
+  resets `owner_id` / `lease_expires_at` to NULL, so the row is a legacy row again; the columns
+  stay, and re-upgrading re-applies migration 7 (it is idempotent). Covered end to end by
+  `rollback_sql_lets_a_release_without_migration_7_start`. The same holds for any later
+  migration: a release that adds one needs its own rollback SQL.
 - Alert on `time() - succinct_loop_last_progress_timestamp` well below the watchdog threshold
   (e.g. 15 min): a renewing heartbeat says nothing about the main loop. Also alert on
   `succinct_chain_lock_held == 0` for a running proposer, and on `succinct_chain_lock_renew_failures`

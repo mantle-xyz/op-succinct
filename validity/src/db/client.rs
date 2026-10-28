@@ -1303,6 +1303,79 @@ mod tests {
         assert!(c.renew_chain_lock(L1ID, L2ID, "b", short).await.unwrap());
     }
 
+    /// QA finding 7: once this release has migrated a database, the previous release (which ships
+    /// migrations 1–6 only) exits at startup — sqlx refuses a database that records a migration the
+    /// binary does not have. `validity/migrations-rollback/07_chain_lock_owner.sql` is the
+    /// documented rollback step; this walks the whole round trip with the real migrators.
+    #[tokio::test]
+    async fn rollback_sql_lets_a_release_without_migration_7_start() {
+        let db = TestDb::new().await; // the current release has migrated (1–7)
+        let c = db.client();
+        assert!(c.try_acquire_chain_lock(L1ID, L2ID, "current", LEASE).await.unwrap());
+        // ...and was stopped a while ago, so its lease has long lapsed.
+        sqlx::query(
+            "UPDATE chain_locks SET lease_expires_at = NOW() - INTERVAL '1 hour' \
+             WHERE l1_chain_id = $1 AND l2_chain_id = $2",
+        )
+        .bind(L1ID)
+        .bind(L2ID)
+        .execute(&c.pool)
+        .await
+        .unwrap();
+
+        let current = sqlx::migrate!("./migrations");
+        // Without the advisory lock: sqlx's `run` returns VersionMissing *after* taking it and
+        // never unlocks on that path, so the pooled connection would keep holding it and the later
+        // `run` calls here would block until the pool recycles it (~20 min). A real older release
+        // exits on that error, which closes the connection and frees the lock.
+        let previous = sqlx::migrate::Migrator {
+            migrations: std::borrow::Cow::Owned(
+                current.migrations.iter().filter(|m| m.version < 7).cloned().collect(),
+            ),
+            locking: false,
+            ..sqlx::migrate!("./migrations")
+        };
+
+        // Without the rollback step the previous release cannot start — the reported failure.
+        let err = previous.run(&c.pool).await.unwrap_err();
+        assert!(matches!(err, sqlx::migrate::MigrateError::VersionMissing(7)), "{err:?}");
+
+        sqlx::raw_sql(include_str!("../../migrations-rollback/07_chain_lock_owner.sql"))
+            .execute(&c.pool)
+            .await
+            .unwrap();
+        previous.run(&c.pool).await.expect("the previous release starts after the rollback SQL");
+
+        // The row is a legacy row again, which the previous release keeps refreshing.
+        let (owner, lease): (Option<String>, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+            "SELECT owner_id, lease_expires_at FROM chain_locks \
+             WHERE l1_chain_id = $1 AND l2_chain_id = $2",
+        )
+        .bind(L1ID)
+        .bind(L2ID)
+        .fetch_one(&c.pool)
+        .await
+        .unwrap();
+        assert_eq!((owner, lease), (None, None));
+        sqlx::query(
+            "UPDATE chain_locks SET locked_at = NOW() WHERE l1_chain_id = $1 AND l2_chain_id = $2",
+        )
+        .bind(L1ID)
+        .bind(L2ID)
+        .execute(&c.pool)
+        .await
+        .unwrap();
+
+        // Re-upgrade: migration 7 re-applies (it is idempotent), and a lock the previous release
+        // just refreshed is still respected — the legacy rule decides, not the long-lapsed lease
+        // the current release left behind (which is why the rollback SQL clears it).
+        current.run(&c.pool).await.expect("re-upgrading re-applies migration 7");
+        assert!(
+            !c.try_acquire_chain_lock(L1ID, L2ID, "current-again", LEASE).await.unwrap(),
+            "a lock the previous release refreshed just now must still be held"
+        );
+    }
+
     #[tokio::test]
     async fn test_chain_lock_legacy_row_is_held_for_one_lease_after_locked_at() {
         // A row last written by an older binary: no owner, no lease_expires_at, just locked_at.
