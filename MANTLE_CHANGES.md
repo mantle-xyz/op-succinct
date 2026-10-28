@@ -18,7 +18,7 @@ synchronizing future upstream changes.
 | Dependency source: alloy-evm | **upstream `alloy-rs/evm` v0.34.0 from crates.io — NOT patched.** The former `mantle-xyz/evm @ mantle-v0.34.0` fork only added a dead-code `token_ratio` trait method; mantle-v2/rust dropped it at `d2e4ebea` (commit `75d90fc71`), so the `[patch.crates-io]` redirect was removed here to stay in lockstep. |
 | Dependency source: alloy core/network | crates.io `2.0.4` — deliberately **behind** upstream v3.12.0's `2.0.5`. See §3.11. |
 | Dependency source: alloy-primitives | crates.io `1.5.x` (resolves 1.5.7) — deliberately behind upstream's 1.6.0, which belongs to the kona version lockstep. This is what fixes the `sha3` patch tag; see §3.11. |
-| SP1 | `=6.4.0` + sp1-cluster tag `v2.7.2` |
+| SP1 | `=6.10.0` + sp1-cluster tag `v2.9.0` — bumped ahead of the kona v1.8.0 line, see §3.11a |
 | Contracts baseline | `mantle-xyz/op-succinct` tag `v1.1.7-2` (a.k.a. "v117"); ported into `contracts/` |
 
 ### 1.0 Release versioning
@@ -893,6 +893,104 @@ cargo-git checkout path, which is derived from the dependency URL and commit.
    re-verify that downcast — a silent mismatch sends transient transport faults back into range
    bisection (§3.9).
 
+### 3.11a SP1 6.4.0 → 6.10.0 on the v3.12.0 baseline (ahead of the kona v1.8.0 line)
+
+The kona v1.8.0 / revm line (PR #52, upstream v3.14.x) cannot ship before mantle-v2 and revm release
+in December, but the SP1 version has to move now. This bumps **only** the SP1 family on `main`;
+kona, revm, alloy and alloy-evm stay exactly as in §1.
+
+**Why now — prover-network lockstep, not the advisory itself.** The self-hosted prover network
+moved to SP1 6.10.0 (sp1-cluster `mantle-v2.9.0-rc.1`, upstream sp1-cluster v2.9.0); op-succinct
+has always moved with it (6.1.0 → 6.4.0 was the same pairing). The latest SP1 advisory,
+GHSA-p7v2-jjv3-8p8f ("Native Rust Verifier: Mismatched Tensor Lengths", fixed in 6.8.1), affects
+native Rust verifiers that accept Core/Compressed proofs from untrusted provers — the prover
+network's side. op-succinct's production path is unaffected per the advisory: range proofs are
+verified in-circuit by the aggregation program (`verify_sp1_proof`) and the result is a Plonk
+proof verified on chain. The only native verify call is the dev script `scripts/prove/bin/agg.rs`.
+
+| What | Change |
+|---|---|
+| `Cargo.toml` | 9 SP1 crates `=6.4.0` → `=6.10.0`; sp1-cluster `v2.7.2` → `v2.9.0` (3 crates). Lockfile: all 49 `sp1-*`/`slop-*` crates resolve to 6.10.0, no drift. |
+| `[patch.crates-io]` | sha2 `0.10.9`, sha3 `0.10.8`, substrate-bn, p256, k256, tiny-keccak → their `sp1-6.10.0` tags. **Not** taken from upstream v3.14.3: `sha2-v11` (sha2 0.11 is only in the host tree, via `aws-sigv4`; the guests use 0.10 because revm here is 38, not 42) and sha3 `0.11.0` (main's alloy-primitives 1.5.x uses sha3 0.10.8 — the 0.11 patch would be unused and keccak acceleration silently lost, see §3.11). Rule: the patch tag follows the *patched crate's* version in our tree; `[[patch.unused]]` must stay empty. |
+| `validity/Cargo.toml` + `validity/src/proposer.rs` | **tonic `0.12` → `0.14`.** SP1 6.10.0 moved sp1-sdk (and sp1-prover, sp1-cluster) to tonic 0.14; validity pinned 0.12 so that `downcast_ref::<tonic::Status>()` sees the SDK's type (§3.10a). With the pin left at 0.12 everything compiled and every test passed — they build `Status` from *our* tonic — but every production downcast returned None, and the string fallback missed too because tonic 0.13+ renders `code: '<description>'` instead of `status: <Code>`: UNAVAILABLE and FAILED_PRECONDITION (the latter is exactly what the vkey switch produces) would have bisected ranges. Fixed by moving the pin, teaching the fallback both renderings, and adding `tonic_matches_the_sdk`, which reads `Cargo.lock` and fails whenever validity's tonic differs from sp1-sdk's. Found in review; the comment above the pin had warned about exactly this. Related: tonic 0.13+ no longer renders `Status` metadata in `Display`, so the admission-shed marker (`x-sp1-admission-shed`, sent both as trailer and message prefix by the prove-network gateway/router) is now read from the downcast `Status`'s metadata **and** message, with the rendered-text match kept for errors that are not a downcastable `Status` (e.g. the cluster-direct path, which stringifies its eyre errors). |
+| `utils/proof/src/lib.rs` | sp1-cluster v2.9.0's `ClusterServiceClient::new` takes an access token: plumbed through `ClusterProofConfig` exactly as upstream v3.14.3 (#1038). The token is read by sp1-cluster from `CLI_CLUSTER_ACCESS_TOKEN`, else `CLUSTER_ACCESS_TOKEN` (empty = unset); auth is off by default. Only the cluster-direct mode uses it — Mantle proves through the prove-network router. |
+| `justfile`, `utils/build`, `validity/Dockerfile`, 4 CI workflows, `book/advanced/verify-binaries.md` | SP1 toolchain / docker tag `6.4.0` → `6.10.0`. |
+| `elf/` | Rebuilt with `just build-elfs` (docker `v6.10.0`). **Both vkeys change** — see below. |
+
+**Known gap, cluster-direct mode only.** sp1-cluster v2.9.0 adds bearer-token auth. A cluster that requires it, reached without `CLUSTER_ACCESS_TOKEN`, answers `UNAUTHENTICATED`, which the proposer treats as a range failure and bisects. Not reachable in Mantle's deployment (proofs go through the prove-network router with `SP1_PROVER=network`); set the token if cluster-direct mode is ever used against an authenticated cluster.
+
+**On-chain verifier: no change.** The Plonk circuit — and with it the verifier selector a proof
+carries — is set by `SP1_CIRCUIT_VERSION`, which is `v6.1.0` in both 6.4.0 and 6.10.0 (`sp1-prover`
+and `sp1-recursion-gnark-ffi` crates). The existing SP1VerifierGateway route keeps verifying (sp1-contracts
+ships `v6.0.0` and `v6.1.0` verifiers for the v6 line). Only the vkeys move.
+
+**vkeys (this build):**
+
+| | Before (`mantle-v1.6.x`, SP1 6.4.0) | After (SP1 6.10.0) |
+|---|---|---|
+| range vkey commitment | `0x1e2b863405480e5509bcae955f9e23e1170419ba26af2f271cd0199f1e228fdb` | `0x477a0bf8430d434109eb0d054931ea240f4c87147079de9b43096cf674047cd1` |
+| aggregation vkey | `0x00fa36417110bce994f3054a68baef78ca51dee1a38659c70e108da7eb3d6bbf` | `0x0076cf345898ec11c4fd78f6839f2c4fe2cdffd53e967ea6d6d2ab5de0edafe8` |
+
+**Deployment:**
+1. Ship together with the prover network's SP1 6.10.0 upgrade (same window); a 6.4.0 proposer and a
+   6.10.0 cluster are not a supported pairing.
+2. Before starting the new proposer, the L2OO owner calls `updateRangeVkeyCommitment` and
+   `updateAggregationVkey` on every network (mainnet: owner Safe). `rollupConfigHash` is unchanged
+   (no kona change). In-flight requests with the old commitments are cancelled by the proposer on
+   startup and re-proven.
+
+**Merging with the kona v1.8.0 line later (PR #52, `mantle/kona-v1.8.0`).** That branch was cut
+before this change and is on SP1 **6.8.1** / sp1-cluster **v2.8.4**. Whichever way the two meet —
+the branch syncing upstream v3.14.3 (which itself moves to SP1 6.10.0 / sp1-cluster v2.9.0), the
+branch merging `main`, or `main` finally merging the branch — handle these explicitly:
+
+1. **SP1 version lines** (`Cargo.toml` SP1 block, `justfile` docker tag, `utils/build`,
+   `validity/Dockerfile`, the 4 CI workflows, `book/advanced/verify-binaries.md`). The branch's
+   6.8.1 and this 6.10.0 conflict line-by-line; resolve to **6.10.0** (and sp1-cluster `v2.9.0`).
+   Never go back below the prover network's version. If the branch syncs v3.14.3 first, these
+   lines come out identical on both sides and merge cleanly.
+2. **`[patch.crates-io]` — do not resolve by picking a side.** The right tags follow the crate
+   versions in the *merged* tree, not either branch:
+   - sha3: the v1.8.0 tree (alloy-primitives 1.7.x) has only sha3 **0.11.0** → `patch-sha3-0.11.0-sp1-6.0.0`
+     (there is **no** `0.11.0-sp1-6.10.0` tag; upstream v3.14.3 uses the 6.0.0 one too). `main`'s
+     `patch-sha3-0.10.8-sp1-6.10.0` must go once sha3 0.10.8 has left the tree, or it becomes an
+     unused patch.
+   - sha2: keep `patch-sha2-0.10.9-sp1-6.10.0`. Add upstream's `sha2-v11` only if sha2 0.11 shows
+     up in a **guest** tree (`cargo tree -p range -i sha2@0.11.0`, same for `aggregation`); with
+     revm 41 it is host-only (via `aws-sigv4`), as it is here.
+   - substrate-bn / p256 / k256 / tiny-keccak: the `sp1-6.10.0` tags, as here.
+   - Check: `[[patch.unused]]` absent from `Cargo.lock`; every `sp1-*` / `slop-*` package at
+     6.10.0 (the 6.8.1 bump on that branch drifted transitively once — re-pin with
+     `cargo update -p <crate>@<wrong> --precise 6.10.0`).
+3. **`utils/proof/src/lib.rs` `cluster_access_token`.** Added here *and* by upstream v3.14.3 (#1038)
+   in the same shape. Keep exactly one copy — a duplicated field or argument means both sides were
+   kept. Prefer upstream's text so later syncs stay clean.
+4. **tonic pin (`validity/Cargo.toml`).** The branch still pins tonic `0.12` (its SP1 6.8.1 uses 0.12.3).
+   It must become `0.14` together with SP1 6.10.0 — keep this side. `tonic_matches_the_sdk`
+   fails if it does not; do not "fix" that test.
+5. **`Cargo.lock`.** Do not hand-merge: take one side, then `cargo update -p` the conflicting
+   crates (or regenerate) and re-run the checks in 2 and 4.
+6. **`elf/` binaries always conflict** (both sides rebuilt them). Do not pick either side's ELFs:
+   resolve the sources, then `just build-elfs` on the merged tree (docker `v6.10.0`; refill the
+   `sp1-cargo-git` volume first — §3.7) and commit the new ELFs in the merge.
+7. **vkeys move again** when the v1.8.0 line ships: the range program changes with kona/revm, the
+   aggregation vkey usually too. Read both from `cargo run --release --bin config` on the merged
+   tree; on-chain `updateRangeVkeyCommitment` / `updateAggregationVkey` for every network. Watch the
+   first proposer start for `Rollup config hash mismatch` — kona's `RollupConfig` serialisation
+   may differ, in which case `updateRollupConfigHash` with the logged `expected` value.
+8. **This file.** §1's SP1 row conflicts (take the merged truth); this section (§3.11a) and the
+   branch's §3.12 / §3.13 do not collide. Add the merge outcome to the merged branch's sync
+   section, and a Version-map row when the release is cut.
+9. **Merge, never squash** the sync PR (§4.4) — squashing loses the upstream merge-base.
+10. **PR #60 (`feature/aws-kms-signer`)** also touches `validity/Dockerfile` (distroless runtime
+   stage) and `utils/signer`; its `sp1up` lines are untouched, so a conflict there is in the
+   runtime stage only. Whichever lands first, the other merges `main` and keeps both changes.
+
+**Local test note.** `postgresql_embedded` (bundled) resolves the newest PostgreSQL 18.x at build time;
+18.6.1's archive is missing the `UTC` / `Etc/UTC` zone links, so every DB test fails with
+`invalid value for parameter "TimeZone": "UTC"`. Unrelated to SP1 (pristine `main` fails the same).
+Workaround on a dev machine: `cp -Rn /usr/share/zoneinfo/ ~/.theseus/postgresql/18.6.1/share/timezone/`.
+
 ## 4. Sync workflow
 
 When a new upstream Succinct Labs release lands (e.g. v3.9.0, v4.0.0):
@@ -1031,11 +1129,11 @@ the on-chain ELFs (`programs/range/*`, `programs/aggregation/*`).
 
 ```bash
 curl -L https://sp1.succinct.xyz | bash
-sp1up --version v6.4.0      # matches the SP1 version pinned in Cargo.toml
+sp1up --version v6.10.0     # matches the SP1 version pinned in Cargo.toml
 cargo prove --version
 ```
 
-ELF rebuilds run inside Docker (`cargo prove build --docker --tag v6.4.0`), so the
+ELF rebuilds run inside Docker (`cargo prove build --docker --tag v6.10.0`), so the
 host's nightly doesn't need to match the toolchain inside the Docker image —
 the host just needs `cargo` and the SP1 CLI on PATH.
 
