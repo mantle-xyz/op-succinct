@@ -2,6 +2,7 @@
 // computing its layout exceeds the default rustc query depth.
 #![recursion_limit = "256"]
 
+mod chain_lock;
 mod config;
 mod contract;
 mod db;
@@ -13,6 +14,7 @@ mod relay_rejection;
 mod types;
 mod utils;
 
+pub use chain_lock::*;
 pub use config::*;
 pub use contract::*;
 pub use db::*;

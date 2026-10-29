@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE chain_locks\n               SET locked_at = NOW(), lease_expires_at = NOW() + $4::interval\n             WHERE l1_chain_id = $1 AND l2_chain_id = $2\n               AND owner_id = $3 AND lease_expires_at > NOW()\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Text",
+        "Interval"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2475f916f8b6daf98b4a727d20220b5c0ffc1fa1b0bb4d9eb85c18d1abf27b8d"
+}

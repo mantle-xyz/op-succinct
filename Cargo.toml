@@ -150,6 +150,8 @@ alloy-rpc-types-eth = { version = "2.0.4", default-features = false }
 alloy-rpc-types-trace = { version = "2.0.4", default-features = false }
 alloy-signer = { version = "2.0.4", default-features = false }
 alloy-signer-gcp = { version = "2.0.4", default-features = false }
+# [MANTLE] AWS KMS L1 signer (utils/signer). Moves with the alloy family above.
+alloy-signer-aws = { version = "2.0.4", default-features = false }
 alloy = { version = "2.0.4", features = [
     "reqwest",
     "network",
@@ -212,6 +214,11 @@ c-kzg = { version = "2.1.5", default-features = false }
 # the alloy family at 2.0.4 (see the Alloy block above), so the gcloud-sdk pin stays
 # with it. Bump both together or not at all.
 gcloud-sdk = "0.27"
+# [MANTLE] AWS KMS L1 signer. Caret requirements on purpose: sp1-sdk's network signer already
+# pulls both, and these resolve to the same versions rather than adding a second copy.
+aws-config = "1"
+aws-credential-types = "1"
+aws-sdk-kms = "1"
 
 [profile.release-client-lto]
 inherits = "release"

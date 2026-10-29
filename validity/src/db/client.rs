@@ -10,8 +10,8 @@ use std::time::Duration;
 use tracing::info;
 
 use crate::{
-    CommitmentConfig, CompletedRangeMetadata, DriverDBClient, MissingRangeMetadata,
-    OPSuccinctRequest, RequestStatus, RequestType,
+    ChainLockHolder, CommitmentConfig, CompletedRangeMetadata, DriverDBClient,
+    MissingRangeMetadata, OPSuccinctRequest, RequestStatus, RequestType,
 };
 
 impl DriverDBClient {
@@ -26,57 +26,96 @@ impl DriverDBClient {
         Ok(DriverDBClient { pool })
     }
 
-    /// Adds a chain lock to the database.
-    pub async fn add_chain_lock(
+    /// [MANTLE] Atomically takes the chain lock for `owner_id` for one `lease`.
+    ///
+    /// One statement, so two proposers cannot both succeed: the row is created, or taken over
+    /// only if the current lease has lapsed (by the database clock). A row written by an older
+    /// binary (`owner_id IS NULL`, no `lease_expires_at`) counts as held until its `locked_at` is
+    /// older than one `lease`. Returns `true` if `owner_id` now holds the lock.
+    pub async fn try_acquire_chain_lock(
         &self,
         l1_chain_id: i64,
         l2_chain_id: i64,
-    ) -> Result<PgQueryResult, Error> {
-        sqlx::query!(
-            "INSERT INTO chain_locks (l1_chain_id, l2_chain_id, locked_at) 
-             VALUES ($1, $2, NOW())
-             ON CONFLICT (l1_chain_id, l2_chain_id) 
-             DO UPDATE SET locked_at = NOW()",
-            l1_chain_id,
-            l2_chain_id
-        )
-        .execute(&self.pool)
-        .await
-    }
-
-    /// Checks if a proposer already has a lock on the chain.
-    pub async fn is_chain_locked(
-        &self,
-        l1_chain_id: i64,
-        l2_chain_id: i64,
-        interval: Duration,
+        owner_id: &str,
+        lease: Duration,
     ) -> Result<bool, Error> {
-        let result = sqlx::query!(
+        let lease = PgInterval::try_from(lease).map_err(Error::Decode)?;
+        let acquired = sqlx::query_scalar!(
             r#"
-            SELECT EXISTS(SELECT 1 FROM chain_locks WHERE l1_chain_id = $1 AND l2_chain_id = $2 AND locked_at > NOW() - $3::interval)
+            INSERT INTO chain_locks (l1_chain_id, l2_chain_id, locked_at, owner_id, lease_expires_at)
+            VALUES ($1, $2, NOW(), $3, NOW() + $4::interval)
+            ON CONFLICT (l1_chain_id, l2_chain_id) DO UPDATE
+                SET locked_at = NOW(),
+                    owner_id = EXCLUDED.owner_id,
+                    lease_expires_at = EXCLUDED.lease_expires_at
+                WHERE chain_locks.owner_id = EXCLUDED.owner_id
+                   OR (chain_locks.lease_expires_at IS NOT NULL
+                       AND chain_locks.lease_expires_at <= NOW())
+                   OR (chain_locks.lease_expires_at IS NULL
+                       AND (chain_locks.locked_at IS NULL
+                            OR chain_locks.locked_at <= NOW() - $4::interval))
+            RETURNING owner_id
             "#,
             l1_chain_id,
             l2_chain_id,
-            PgInterval::try_from(interval).unwrap()
+            owner_id,
+            lease
         )
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
-        Ok(result.exists.unwrap_or(false))
+        Ok(acquired.flatten().is_some_and(|owner| owner == owner_id))
     }
 
-    /// Updates the chain lock for a given chain.
-    pub async fn update_chain_lock(
+    /// [MANTLE] Extends the chain lock by `lease`, but only if `owner_id` still holds it and its
+    /// lease has not lapsed. Returns `false` when it does not — the lease expired or another
+    /// proposer took it — in which case the caller has lost the lock and must stop sending.
+    pub async fn renew_chain_lock(
         &self,
         l1_chain_id: i64,
         l2_chain_id: i64,
-    ) -> Result<PgQueryResult, Error> {
-        sqlx::query!(
-            "UPDATE chain_locks SET locked_at = NOW() WHERE l1_chain_id = $1 AND l2_chain_id = $2",
+        owner_id: &str,
+        lease: Duration,
+    ) -> Result<bool, Error> {
+        let lease = PgInterval::try_from(lease).map_err(Error::Decode)?;
+        let result = sqlx::query!(
+            r#"
+            UPDATE chain_locks
+               SET locked_at = NOW(), lease_expires_at = NOW() + $4::interval
+             WHERE l1_chain_id = $1 AND l2_chain_id = $2
+               AND owner_id = $3 AND lease_expires_at > NOW()
+            "#,
+            l1_chain_id,
+            l2_chain_id,
+            owner_id,
+            lease
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// [MANTLE] Who holds the chain lock and until when, for logs while waiting to acquire it.
+    pub async fn chain_lock_holder(
+        &self,
+        l1_chain_id: i64,
+        l2_chain_id: i64,
+    ) -> Result<Option<ChainLockHolder>, Error> {
+        let row = sqlx::query!(
+            r#"
+            SELECT owner_id, lease_expires_at, locked_at
+              FROM chain_locks
+             WHERE l1_chain_id = $1 AND l2_chain_id = $2
+            "#,
             l1_chain_id,
             l2_chain_id
         )
-        .execute(&self.pool)
-        .await
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| ChainLockHolder {
+            owner_id: r.owner_id,
+            lease_expires_at: r.lease_expires_at,
+            locked_at: r.locked_at,
+        }))
     }
 
     /// Inserts a request into the database.
@@ -1160,19 +1199,227 @@ mod tests {
 
     // ==================== Tests ====================
 
+    // [MANTLE] Chain lock lease (chain_lock.rs). Raw rows are written with the runtime query API
+    // so the tests do not need entries in the offline .sqlx cache.
+
+    const LEASE: Duration = Duration::from_secs(120);
+
     #[tokio::test]
-    async fn test_chain_lock_prevents_concurrent_proposers() {
+    async fn test_chain_lease_end_to_end_takeover_is_detected_at_once() {
+        use crate::chain_lock::{acquire_chain_lease, renew_once, RenewOutcome};
+
         let db = TestDb::new().await;
-        let interval = Duration::from_secs(60);
         let c = db.client();
 
-        assert!(!c.is_chain_locked(L1ID, L2ID, interval).await.unwrap());
+        let lease = acquire_chain_lease(c, L1ID, L2ID).await;
+        assert!(lease.ensure_held().is_ok());
+        assert_eq!(renew_once(c, &lease).await, RenewOutcome::Renewed);
+        assert!(lease.ensure_held().is_ok());
 
-        c.add_chain_lock(L1ID, L2ID).await.unwrap();
+        // Someone else ends up holding the row (e.g. this process was paused past its lease and
+        // a successor took over). The very next renewal must mark the lease lost and refuse
+        // sends — not wait for the local deadline.
+        sqlx::query(
+            "UPDATE chain_locks SET owner_id = 'successor' \
+             WHERE l1_chain_id = $1 AND l2_chain_id = $2",
+        )
+        .bind(L1ID)
+        .bind(L2ID)
+        .execute(&c.pool)
+        .await
+        .unwrap();
+        assert_eq!(renew_once(c, &lease).await, RenewOutcome::Lost);
+        assert!(lease.ensure_held().is_err());
+        assert!(lease.lost_reason().unwrap().contains("no longer the holder"));
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), lease.lost()).await.is_ok(),
+            "lost() resolves, which is what makes main exit"
+        );
+    }
 
-        assert!(c.is_chain_locked(L1ID, L2ID, interval).await.unwrap());
-        assert!(!c.is_chain_locked(L1ID, 999, interval).await.unwrap());
-        assert!(!c.is_chain_locked(999, L2ID, interval).await.unwrap());
+    #[tokio::test]
+    async fn test_chain_lock_is_exclusive_per_chain() {
+        let db = TestDb::new().await;
+        let c = db.client();
+
+        assert!(c.try_acquire_chain_lock(L1ID, L2ID, "a", LEASE).await.unwrap());
+        assert!(!c.try_acquire_chain_lock(L1ID, L2ID, "b", LEASE).await.unwrap());
+        // Other chains are independent.
+        assert!(c.try_acquire_chain_lock(L1ID, 999, "b", LEASE).await.unwrap());
+        assert!(c.try_acquire_chain_lock(999, L2ID, "b", LEASE).await.unwrap());
+
+        let holder = c.chain_lock_holder(L1ID, L2ID).await.unwrap().unwrap();
+        assert_eq!(holder.owner_id.as_deref(), Some("a"));
+        assert!(holder.lease_expires_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_chain_lock_concurrent_acquire_has_one_winner() {
+        let db = TestDb::new().await;
+        let c = db.client();
+        for l2 in 100..120 {
+            let (a, b) = tokio::join!(
+                c.try_acquire_chain_lock(L1ID, l2, "a", LEASE),
+                c.try_acquire_chain_lock(L1ID, l2, "b", LEASE),
+            );
+            assert!(a.unwrap() ^ b.unwrap(), "exactly one of two racing proposers wins (l2 {l2})");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_chain_lock_renew_only_by_the_live_holder() {
+        let db = TestDb::new().await;
+        let c = db.client();
+        assert!(c.try_acquire_chain_lock(L1ID, L2ID, "a", LEASE).await.unwrap());
+
+        let before = c.chain_lock_holder(L1ID, L2ID).await.unwrap().unwrap().lease_expires_at;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(c.renew_chain_lock(L1ID, L2ID, "a", LEASE).await.unwrap());
+        let after = c.chain_lock_holder(L1ID, L2ID).await.unwrap().unwrap().lease_expires_at;
+        assert!(after > before, "renewal extends the lease");
+
+        // A non-holder cannot renew — and does not disturb the holder.
+        assert!(!c.renew_chain_lock(L1ID, L2ID, "b", LEASE).await.unwrap());
+        let holder = c.chain_lock_holder(L1ID, L2ID).await.unwrap().unwrap();
+        assert_eq!(holder.owner_id.as_deref(), Some("a"));
+    }
+
+    #[tokio::test]
+    async fn test_chain_lock_lapsed_lease_is_taken_over_and_old_holder_cannot_renew() {
+        let db = TestDb::new().await;
+        let c = db.client();
+        let short = Duration::from_secs(1);
+
+        assert!(c.try_acquire_chain_lock(L1ID, L2ID, "a", short).await.unwrap());
+        assert!(!c.try_acquire_chain_lock(L1ID, L2ID, "b", short).await.unwrap());
+
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+
+        // Lapsed: even with nobody else around, the old holder may not renew it back to life.
+        assert!(!c.renew_chain_lock(L1ID, L2ID, "a", short).await.unwrap());
+        // And another proposer takes it over.
+        assert!(c.try_acquire_chain_lock(L1ID, L2ID, "b", short).await.unwrap());
+        assert!(!c.renew_chain_lock(L1ID, L2ID, "a", short).await.unwrap());
+        assert!(c.renew_chain_lock(L1ID, L2ID, "b", short).await.unwrap());
+    }
+
+    /// QA finding 7: once this release has migrated a database, the previous release (which ships
+    /// migrations 1–6 only) exits at startup — sqlx refuses a database that records a migration the
+    /// binary does not have. `validity/migrations-rollback/07_chain_lock_owner.sql` is the
+    /// documented rollback step; this walks the whole round trip with the real migrators.
+    #[tokio::test]
+    async fn rollback_sql_lets_a_release_without_migration_7_start() {
+        let db = TestDb::new().await; // the current release has migrated (1–7)
+        let c = db.client();
+        assert!(c.try_acquire_chain_lock(L1ID, L2ID, "current", LEASE).await.unwrap());
+        // ...and was stopped a while ago, so its lease has long lapsed.
+        sqlx::query(
+            "UPDATE chain_locks SET lease_expires_at = NOW() - INTERVAL '1 hour' \
+             WHERE l1_chain_id = $1 AND l2_chain_id = $2",
+        )
+        .bind(L1ID)
+        .bind(L2ID)
+        .execute(&c.pool)
+        .await
+        .unwrap();
+
+        let current = sqlx::migrate!("./migrations");
+        // Without the advisory lock: sqlx's `run` returns VersionMissing *after* taking it and
+        // never unlocks on that path, so the pooled connection would keep holding it and the later
+        // `run` calls here would block until the pool recycles it (~20 min). A real older release
+        // exits on that error, which closes the connection and frees the lock.
+        let previous = sqlx::migrate::Migrator {
+            migrations: std::borrow::Cow::Owned(
+                current.migrations.iter().filter(|m| m.version < 7).cloned().collect(),
+            ),
+            locking: false,
+            ..sqlx::migrate!("./migrations")
+        };
+
+        // Without the rollback step the previous release cannot start — the reported failure.
+        let err = previous.run(&c.pool).await.unwrap_err();
+        assert!(matches!(err, sqlx::migrate::MigrateError::VersionMissing(7)), "{err:?}");
+
+        sqlx::raw_sql(include_str!("../../migrations-rollback/07_chain_lock_owner.sql"))
+            .execute(&c.pool)
+            .await
+            .unwrap();
+        previous.run(&c.pool).await.expect("the previous release starts after the rollback SQL");
+
+        // The row is a legacy row again, which the previous release keeps refreshing.
+        let (owner, lease): (Option<String>, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+            "SELECT owner_id, lease_expires_at FROM chain_locks \
+             WHERE l1_chain_id = $1 AND l2_chain_id = $2",
+        )
+        .bind(L1ID)
+        .bind(L2ID)
+        .fetch_one(&c.pool)
+        .await
+        .unwrap();
+        assert_eq!((owner, lease), (None, None));
+        sqlx::query(
+            "UPDATE chain_locks SET locked_at = NOW() WHERE l1_chain_id = $1 AND l2_chain_id = $2",
+        )
+        .bind(L1ID)
+        .bind(L2ID)
+        .execute(&c.pool)
+        .await
+        .unwrap();
+
+        // Re-upgrade: migration 7 re-applies (it is idempotent), and a lock the previous release
+        // just refreshed is still respected — the legacy rule decides, not the long-lapsed lease
+        // the current release left behind (which is why the rollback SQL clears it).
+        current.run(&c.pool).await.expect("re-upgrading re-applies migration 7");
+        assert!(
+            !c.try_acquire_chain_lock(L1ID, L2ID, "current-again", LEASE).await.unwrap(),
+            "a lock the previous release refreshed just now must still be held"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_chain_lock_legacy_row_is_held_for_one_lease_after_locked_at() {
+        // A row last written by an older binary: no owner, no lease_expires_at, just locked_at.
+        let db = TestDb::new().await;
+        let c = db.client();
+
+        sqlx::query(
+            "INSERT INTO chain_locks (l1_chain_id, l2_chain_id, locked_at) \
+             VALUES ($1, $2, NOW() - INTERVAL '119 seconds')",
+        )
+        .bind(L1ID)
+        .bind(L2ID)
+        .execute(&c.pool)
+        .await
+        .unwrap();
+        assert!(
+            !c.try_acquire_chain_lock(L1ID, L2ID, "new", LEASE).await.unwrap(),
+            "legacy lock refreshed 119s ago is still held under a 120s lease"
+        );
+
+        sqlx::query(
+            "UPDATE chain_locks SET locked_at = NOW() - INTERVAL '121 seconds' \
+             WHERE l1_chain_id = $1 AND l2_chain_id = $2",
+        )
+        .bind(L1ID)
+        .bind(L2ID)
+        .execute(&c.pool)
+        .await
+        .unwrap();
+        assert!(
+            c.try_acquire_chain_lock(L1ID, L2ID, "new", LEASE).await.unwrap(),
+            "legacy lock older than one lease is taken over"
+        );
+        let holder = c.chain_lock_holder(L1ID, L2ID).await.unwrap().unwrap();
+        assert_eq!(holder.owner_id.as_deref(), Some("new"));
+
+        // A legacy row with no timestamp at all is free.
+        sqlx::query("INSERT INTO chain_locks (l1_chain_id, l2_chain_id) VALUES ($1, $2)")
+            .bind(L1ID)
+            .bind(555_i64)
+            .execute(&c.pool)
+            .await
+            .unwrap();
+        assert!(c.try_acquire_chain_lock(L1ID, 555, "new", LEASE).await.unwrap());
     }
 
     /// Tests batch chunking logic (BATCH_SIZE = 100) to avoid PostgreSQL parameter limit.
