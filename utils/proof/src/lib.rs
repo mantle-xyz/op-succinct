@@ -172,6 +172,10 @@ impl ClusterArtifactStore {
 /// Always stored behind `Arc` — no `Clone` needed (and `ArtifactStoreConfig` is not `Clone`).
 pub struct ClusterProofConfig {
     pub cluster_rpc: String,
+    /// Bearer token for clusters with auth enabled (sp1-cluster v2.9.0); read by
+    /// `request_config_from_env` from `CLI_CLUSTER_ACCESS_TOKEN`, falling back to
+    /// `CLUSTER_ACCESS_TOKEN`. `None` when unset — auth is off by default.
+    pub cluster_access_token: Option<String>,
     pub artifact_store: ClusterArtifactStore,
     /// The raw `ArtifactStoreConfig` from `request_config_from_env()`, used to construct
     /// per-call `ProofRequestConfig`. We pass the real value rather than a dummy to avoid
@@ -202,6 +206,7 @@ impl ClusterProofConfig {
         // Use dummy mode/timeout — these are per-call and only matter for `create_request`.
         let config = request_config_from_env(ProofMode::Compressed, 1);
         let cluster_rpc = config.cluster_rpc.clone();
+        let cluster_access_token = config.cluster_access_token.clone();
 
         let artifact_store = match &config.artifact_store {
             ArtifactStoreConfig::Redis { nodes } => {
@@ -223,12 +228,14 @@ impl ClusterProofConfig {
             }
         };
 
-        let service_client = ClusterServiceClient::new(cluster_rpc.clone())
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to create cluster service client: {e}"))?;
+        let service_client =
+            ClusterServiceClient::new(cluster_rpc.clone(), cluster_access_token.clone())
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to create cluster service client: {e}"))?;
 
         Ok(Self {
             cluster_rpc,
+            cluster_access_token,
             artifact_store,
             artifact_store_config: config.artifact_store,
             service_client,
@@ -240,6 +247,7 @@ impl ClusterProofConfig {
         let timeout_hours = timeout_secs.div_ceil(3600).max(1);
         ProofRequestConfig {
             cluster_rpc: self.cluster_rpc.clone(),
+            cluster_access_token: self.cluster_access_token.clone(),
             mode,
             timeout_hours,
             artifact_store: match &self.artifact_store_config {
