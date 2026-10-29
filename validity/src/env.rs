@@ -41,6 +41,10 @@ pub struct EnvironmentConfig {
     pub min_auction_period: u64,
     pub auction_timeout: u64,
     pub tx_confirmation_timeout: u64,
+    /// [MANTLE] `PROGRESS_WATCHDOG_SECS`: how long the main loop may go without completing an
+    /// iteration (while no L1 send is in flight) before the process gives up its chain lock and
+    /// exits. Unset → derived from LOOP_INTERVAL and the worst-case send; `0` → disabled.
+    pub progress_watchdog_secs: Option<u64>,
 }
 
 /// Helper function to get environment variables with a default value and parse them.
@@ -85,7 +89,9 @@ const DEFAULT_LOOP_INTERVAL: u64 = 60;
 
 /// Read proposer environment variables and return a config.
 ///
-/// Signer address and signer URL take precedence over private key.
+/// The L1 signer is chosen by `SignerLock::from_env`: exactly one backend (AWS KMS, GCP KMS,
+/// Web3Signer, or `PRIVATE_KEY` when no remote backend is configured) — see
+/// `op_succinct_signer_utils::Signer::from_env`.
 pub async fn read_proposer_env() -> Result<EnvironmentConfig> {
     let signer = SignerLock::from_env().await?;
 
@@ -151,6 +157,14 @@ pub async fn read_proposer_env() -> Result<EnvironmentConfig> {
         min_auction_period: get_env_var("MIN_AUCTION_PERIOD", Some(1))?,
         auction_timeout: get_env_var("AUCTION_TIMEOUT", Some(60))?, // 1 minute
         tx_confirmation_timeout: get_env_var("TX_CONFIRMATION_TIMEOUT", Some(60))?,
+        progress_watchdog_secs: match env::var("PROGRESS_WATCHDOG_SECS") {
+            Ok(v) => {
+                Some(v.trim().parse().map_err(|e| {
+                    anyhow::anyhow!("Failed to parse PROGRESS_WATCHDOG_SECS: {e:?}")
+                })?)
+            }
+            Err(_) => None,
+        },
     };
 
     Ok(config)

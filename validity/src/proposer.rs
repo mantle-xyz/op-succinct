@@ -50,8 +50,8 @@ use crate::{
         classify_revert_data, revert_data_of_anyhow, revert_data_of_rpc_error, NoVerdictReason,
         RelayRejection,
     },
-    CommitmentConfig, ContractConfig, OPSuccinctProofRequester, ProgramConfig,
-    RequestExecutionStatistics, RequesterConfig, ValidityGauge,
+    ChainLease, CommitmentConfig, ContractConfig, LoopProgress, OPSuccinctProofRequester,
+    ProgramConfig, RequestExecutionStatistics, RequesterConfig, ValidityGauge,
 };
 
 /// Number of consecutive poll failures before a cluster proof is marked as permanently failed.
@@ -607,12 +607,18 @@ where
     /// `ClusterProofHandle`; the network path had no equivalent, so a request the network could
     /// no longer answer for was polled forever. Cleared on the first success and on abandon.
     network_poll_failures: Arc<Mutex<HashMap<i64, u32>>>,
+    /// [MANTLE] This process's chain lock lease; checked before every L1 send.
+    chain_lease: ChainLease,
+    /// [MANTLE] Main-loop progress, read by the watchdog in `main`.
+    progress: LoopProgress,
 }
 
 impl<P, H: OPSuccinctHost> Proposer<P, H>
 where
     P: Provider + 'static + Clone,
 {
+    // [MANTLE] Two more for the chain lease and loop progress (chain_lock.rs).
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         provider: P,
         db_client: Arc<DriverDBClient>,
@@ -621,6 +627,8 @@ where
         signer: SignerLock,
         loop_interval: u64,
         host: Arc<H>,
+        chain_lease: ChainLease,
+        progress: LoopProgress,
     ) -> Result<Self> {
         let is_cluster = is_cluster_mode();
         anyhow::ensure!(
@@ -628,57 +636,12 @@ where
             "PRIVATE_STDIN only applies to SP1 network proof requests; disable mock mode and SP1_PROVER=cluster"
         );
 
-        // [MANTLE] The chain lock is a lease of `loop_interval`, refreshed by `update_chain_lock`
-        // at the end of each iteration and checked only here, at startup. For it to do its job the
-        // lease must outlast the slowest iteration: otherwise a restart during a slow one reads
-        // the lease as expired and starts a second proposer against the same account, and the two
-        // then fight over nonces and double-submit.
-        //
-        // An iteration can broadcast twice (aggregation submission and a checkpoint), each now
-        // waiting up to `(1 + L1_TX_MAX_BUMPS) * TX_CONFIRMATION_TIMEOUT` because of fee
-        // escalation. The imbalance predates escalation — two 60s sends already exceeded a 60s
-        // lease — but escalation widens it by the bump factor, so it is worth surfacing.
-        //
-        // Warned rather than enforced: the right setting depends on how the deployment supervises
-        // restarts, and refusing to start would be worse than the risk being warned about.
-        let worst_case_send = op_succinct_signer_utils::GasPolicy::from_env()
-            .worst_case_send_secs(requester_config.tx_confirmation_timeout);
-        let worst_case_iteration = loop_interval.saturating_add(2 * worst_case_send);
-        // Only complain when the gap is wide enough to matter; a lease merely a little shorter
-        // than the theoretical worst case is normal and would make this pure noise.
-        if worst_case_iteration > loop_interval.saturating_mul(2) {
-            tracing::warn!(
-                loop_interval,
-                tx_confirmation_timeout = requester_config.tx_confirmation_timeout,
-                worst_case_send,
-                worst_case_iteration,
-                "Chain lock lease (LOOP_INTERVAL) is well short of the slowest possible \
-                 iteration. A restart while a transaction is escalating may read the lease as \
-                 expired and allow a second proposer to start, which would contend for nonces. \
-                 ACTION: raise LOOP_INTERVAL toward the worst-case iteration, or lower \
-                 L1_TX_MAX_BUMPS / TX_CONFIRMATION_TIMEOUT."
-            );
-        }
-
-        // This check prevents users from running multiple proposers for the same chain at the same
-        // time.
-        let is_locked = db_client
-            .is_chain_locked(
-                requester_config.l1_chain_id,
-                requester_config.l2_chain_id,
-                Duration::from_secs(loop_interval),
-            )
-            .await?;
-        if is_locked {
-            return Err(anyhow!(
-                "There is another proposer for the same chain connected to the database. Only one proposer can be connected to the database for a chain at a time."
-            ));
-        }
-
-        // Add the chain lock to the database.
-        db_client
-            .add_chain_lock(requester_config.l1_chain_id, requester_config.l2_chain_id)
-            .await?;
+        // [MANTLE] The chain lock is no longer taken here. `main` acquires an owner-scoped lease
+        // (chain_lock.rs) before constructing the proposer and keeps it renewed from a background
+        // heartbeat; every L1 send checks it first. The former check-then-insert here was two
+        // statements, its lease was `LOOP_INTERVAL` — which `run` sleeps for in full, so the lease
+        // lapsed at the start of every iteration — and renewal was an unconditional UPDATE at the
+        // end of an iteration. See MANTLE_CHANGES.md §3.10d.
 
         let cluster_config =
             if is_cluster { Some(Arc::new(ClusterProofConfig::from_env().await?)) } else { None };
@@ -782,6 +745,8 @@ where
             proof_requester,
             tasks: Arc::new(Mutex::new(HashMap::new())),
             network_poll_failures: Arc::new(Mutex::new(HashMap::new())),
+            chain_lease,
+            progress,
         };
         Ok(proposer)
     }
@@ -1921,13 +1886,18 @@ where
                             .checkpointBlockHash(U256::from(checkpoint_header.number))
                             .into_transaction_request();
 
+                        // [MANTLE] Only the chain lock holder may send; see chain_lock.rs.
+                        self.chain_lease.ensure_held()?;
+                        let _sending = self.progress.begin_send()?;
+                        let lease = self.chain_lease.clone();
                         let receipt = self
                             .driver_config
                             .signer
-                            .send_transaction_request_with_timeout(
+                            .send_transaction_request_guarded(
                                 self.driver_config.fetcher.as_ref().rpc_config.l1_rpc.clone(),
                                 transaction_request,
                                 self.requester_config.tx_confirmation_timeout,
+                                &move || lease.ensure_held(),
                             )
                             .await?;
 
@@ -2464,13 +2434,22 @@ where
         // reverts on chain has to be replayed to recover why.
         let replay_request = transaction_request.clone();
 
+        // [MANTLE] Only the chain lock holder may send; see chain_lock.rs. Refused here, the
+        // submission is retried next iteration (if this process still holds the lock).
+        self.chain_lease.ensure_held()?;
+        let _sending = self.progress.begin_send()?;
+        // Checked again before every broadcast of this send, including fee-escalation
+        // replacements. A refusal surfaces as `Undelivered` below (no revert data), i.e. "retry
+        // unchanged" — by then the process is exiting on the lost lease anyway.
+        let lease = self.chain_lease.clone();
         let sent = self
             .driver_config
             .signer
-            .send_transaction_request_with_timeout(
+            .send_transaction_request_guarded(
                 self.driver_config.fetcher.as_ref().rpc_config.l1_rpc.clone(),
                 transaction_request,
                 self.requester_config.tx_confirmation_timeout,
+                &move || lease.ensure_held(),
             )
             .await;
 
@@ -2921,12 +2900,18 @@ where
 
         // Initialize the metrics gauges.
         ValidityGauge::init_all();
+        // [MANTLE] `init_all` zeroes every gauge, including the lease and progress ones set
+        // before the loop started; restore them, and count the start as progress for the
+        // watchdog.
+        self.chain_lease.publish_metrics();
+        self.progress.mark_progress();
 
         // Loop interval in seconds.
         loop {
             // Wrap the entire loop body in a match to handle errors
             match self.run_loop_iteration().await {
                 Ok(_) => {
+                    self.progress.mark_progress();
                     // Normal sleep between iterations
                     tokio::time::sleep(Duration::from_secs(self.driver_config.loop_interval)).await;
                 }
@@ -3058,11 +3043,9 @@ where
             self.request_queued_proofs().await?;
         }
 
-        // Update the chain lock.
-        self.proof_requester
-            .db_client
-            .update_chain_lock(self.requester_config.l1_chain_id, self.requester_config.l2_chain_id)
-            .await?;
+        // [MANTLE] No chain lock update here any more: the lease is renewed by the heartbeat in
+        // chain_lock.rs, independent of this loop. Renewing it only at the end of a successful
+        // iteration let it lapse during every iteration and whenever one returned early.
 
         Ok(())
     }

@@ -945,6 +945,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloy-signer-aws"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1258987fbc82716b5153ec7bb95a8a295e7640871b8f03d8ec7c4000dc80c215"
+dependencies = [
+ "alloy-consensus 2.0.4",
+ "alloy-network 2.0.4",
+ "alloy-primitives",
+ "alloy-signer 2.0.4",
+ "async-trait",
+ "aws-config",
+ "aws-sdk-kms",
+ "k256",
+ "spki 0.7.3",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "alloy-signer-gcp"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6884,15 +6903,20 @@ version = "3.12.0"
 dependencies = [
  "alloy-consensus 2.0.4",
  "alloy-eips 2.0.4",
+ "alloy-json-rpc 2.0.4",
  "alloy-network 2.0.4",
  "alloy-primitives",
  "alloy-provider",
  "alloy-rpc-types-eth 2.0.4",
  "alloy-signer 2.0.4",
+ "alloy-signer-aws 2.0.4",
  "alloy-signer-gcp",
  "alloy-signer-local 2.0.4",
  "alloy-transport-http",
  "anyhow",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-kms",
  "dotenv",
  "gcloud-sdk 0.27.4",
  "op-succinct-host-utils",
@@ -10885,7 +10909,7 @@ checksum = "699ee2e78537efab20f76aa2049058aa5fa803c804cc6cd4bce25a50ee59c341"
 dependencies = [
  "alloy-primitives",
  "alloy-signer 1.8.3",
- "alloy-signer-aws",
+ "alloy-signer-aws 1.8.3",
  "alloy-signer-local 1.8.3",
  "anyhow",
  "async-trait",
