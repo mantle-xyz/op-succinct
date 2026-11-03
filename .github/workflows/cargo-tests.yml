@@ -55,8 +55,8 @@ jobs:
     - name: Install Go
       run: |
         GO_ARCH=$(dpkg --print-architecture)
-        curl -LO https://go.dev/dl/go1.24.0.linux-${GO_ARCH}.tar.gz
-        sudo tar -C /usr/local -xzf go1.24.0.linux-${GO_ARCH}.tar.gz
+        curl -LO https://go.dev/dl/go1.25.14.linux-${GO_ARCH}.tar.gz
+        sudo tar -C /usr/local -xzf go1.25.14.linux-${GO_ARCH}.tar.gz
         echo "/usr/local/go/bin" >> $GITHUB_PATH
     - uses: Swatinem/rust-cache@v2
     - name: Install SP1 toolchain

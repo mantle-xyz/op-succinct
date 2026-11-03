@@ -1065,6 +1065,39 @@ cargo-git checkout path, which is derived from the dependency URL and commit.
    re-verify that downcast — a silent mismatch sends transient transport faults back into range
    bisection (§3.9).
 
+### 3.12 Dependency security sweep (2026-11-03)
+
+Targeted lockfile-only bump for Dependabot alerts. **No `Cargo.toml` version pins changed** —
+SP1 `=6.4.0`, the kona `mantle-v1.6.3` tag family, the revm `v107-mantle-arsia.2` patch family,
+the alloy `2.0.4` hold, the gcloud-sdk `0.27` hold, and the sha3 patch tag are all untouched.
+
+Cargo.lock (in-range `cargo update -p … --precise`): rustls 0.23.40→0.23.46,
+aws-smithy family refresh (json 0.62.7, http-client 1.5.1, runtime-api 1.19.1, sdk-s3 1.132,
+schema added), cmov 0.5.4, openssl 0.10.80, quinn-proto 0.11.15, serde_with 3.21.0, tar 0.4.46.
+`[[patch.unused]]` count verified 0 after each step.
+
+tests/go.mod: `go` directive 1.23.8 → 1.25.0 (required by x/crypto ≥0.52 / grpc 1.83 / otel
+1.45); CI Go pins (`.github/actions/setup*`, `cargo-tests`/`integration-tests`/`lint` workflows)
+bumped to go1.25.14; x/crypto 0.54.0, x/net 0.57.0, grpc 1.83.1, otel family 1.45.0,
+gnark-crypto 0.18.1, klauspost/compress 1.18.7, ulikunitz/xz 0.5.15, docker/docker
+28.5.2+incompatible (path-frozen max).
+
+Deliberately NOT taken (would break the SP1/kona lockstep):
+
+- aws-config 1.13+ — drags the RustCrypto family (signature 1→3, ecdsa, elliptic-curve
+  0.12→0.14, p256 0.11→0.14) which entangles sp1's patched k256/p256 forks; it would also not
+  remove rustls 0.21 (still required via hyper-rustls 0.24 `acceptor`), so the webpki 0.101
+copy stays regardless.
+- quic-go/webtransport-go/libp2p — same libp2p 0.36.2 sandwich as mantle-v2 (kurtosis-pinned).
+- opentelemetry 0.23→0.32 family migration (would clear GHSA-w9wp) — needs a dedicated PR;
+  both `opentelemetry_sdk` copies (0.21.2 via `opentelemetry-stdout` 0.2, 0.23.0 direct) are
+  ours, not gcloud's.
+- jsonwebtoken 9 (gcloud-sdk 0.27 hold), lru 0.12 (sp1-prover requires `^0.12.4`),
+  tracing-subscriber 0.2 (ark-relations 0.5.1 requires `0.2`), p3-* `-succinct` fork versions
+  (SP1 6.4.0 internals), mholt/archiver ≥3.5 (module path moved to `/v3`; kurtosis imports the
+  old path), docker/docker unpatched advisories (path frozen at 28.5.2; 29.x lives on
+  moby/moby), go-yaml v2 + pion/* + rardecode (no fixed release on the required paths).
+
 ## 4. Sync workflow
 
 When a new upstream Succinct Labs release lands (e.g. v3.9.0, v4.0.0):

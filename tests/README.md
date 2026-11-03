@@ -22,7 +22,7 @@ run the suite with the expected environment.
 
 ## Prerequisites
 
-- Go 1.23+ (matches `go.mod`).
+- Go 1.25+ (matches `tests/go.mod`; CI pins go1.25.14).
 - Rust toolchain (to build the `validity`, `proposer`, and `challenger` binaries).
 - `just`, `zstd`, and `tar` available on your PATH.
 
