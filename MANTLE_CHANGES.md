@@ -1098,10 +1098,14 @@ ships `v6.0.0` and `v6.1.0` verifiers for the v6 line). Only the vkeys move.
 
 **vkeys (this build):**
 
-| | Before (`mantle-v1.6.x`, SP1 6.4.0) | After (SP1 6.10.0) |
-|---|---|---|
-| range vkey commitment | `0x1e2b863405480e5509bcae955f9e23e1170419ba26af2f271cd0199f1e228fdb` | `0x477a0bf8430d434109eb0d054931ea240f4c87147079de9b43096cf674047cd1` |
-| aggregation vkey | `0x00fa36417110bce994f3054a68baef78ca51dee1a38659c70e108da7eb3d6bbf` | `0x0076cf345898ec11c4fd78f6839f2c4fe2cdffd53e967ea6d6d2ab5de0edafe8` |
+| | Before (`mantle-v1.6.x`, SP1 6.4.0) | SP1 6.10.0 (PR #62 only, superseded) | **Current (SP1 6.10.0 + §3.12 lockfile)** |
+|---|---|---|---|
+| range vkey commitment | `0x1e2b863405480e5509bcae955f9e23e1170419ba26af2f271cd0199f1e228fdb` | `0x477a0bf8430d434109eb0d054931ea240f4c87147079de9b43096cf674047cd1` | `0x57b7251f39bcced01bb272042859b1511b1cb42d49ac5ebe45117b32570ad872` |
+| aggregation vkey | `0x00fa36417110bce994f3054a68baef78ca51dee1a38659c70e108da7eb3d6bbf` | `0x0076cf345898ec11c4fd78f6839f2c4fe2cdffd53e967ea6d6d2ab5de0edafe8` | `0x007ed65c7e2e8c98e61b66811a86adc05a182e444cee082fda55242fe9b4a56e` |
+
+The middle column was only ever set on QA oracles. §3.12's lockfile bump moved the guest ELFs again
+before any release, so the right-hand column is what ships; QA envs that were set to the middle
+column must be updated once more.
 
 **Deployment:**
 1. Ship together with the prover network's SP1 6.10.0 upgrade (same window); a 6.4.0 proposer and a
@@ -1167,6 +1171,62 @@ branch merging `main`, or `main` finally merging the branch — handle these exp
 18.6.1's archive is missing the `UTC` / `Etc/UTC` zone links, so every DB test fails with
 `invalid value for parameter "TimeZone": "UTC"`. Unrelated to SP1 (pristine `main` fails the same).
 Workaround on a dev machine: `cp -Rn /usr/share/zoneinfo/ ~/.theseus/postgresql/18.6.1/share/timezone/`.
+
+### 3.12 Dependency security sweep (2026-11-03)
+
+Targeted lockfile bump for Dependabot alerts. **No `Cargo.toml` version pins changed** —
+SP1 `=6.10.0` (§3.11a), the kona `mantle-v1.6.3` tag family, the revm `v107-mantle-arsia.2` patch family,
+the alloy `2.0.4` hold, the gcloud-sdk `0.27` hold, and the sha3 patch tag are all untouched.
+
+Cargo.lock (in-range `cargo update -p … --precise`): rustls 0.23.40→0.23.46,
+aws-smithy family refresh (json 0.62.7, http-client 1.5.1, runtime-api 1.19.1, sdk-s3 1.132,
+schema added), cmov 0.5.4, openssl 0.10.80, quinn-proto 0.11.15, serde_with 3.21.0, tar 0.4.46.
+`[[patch.unused]]` count verified 0 after each step.
+
+tests/go.mod: `go` directive 1.23.8 → 1.25.0 (required by x/crypto ≥0.52 / grpc 1.83 / otel
+1.45); CI Go pins (`.github/actions/setup*`, `cargo-tests`/`integration-tests`/`lint` workflows)
+bumped to go1.25.14; x/crypto 0.54.0, x/net 0.57.0, grpc 1.83.1, otel family 1.45.0,
+gnark-crypto 0.18.1, klauspost/compress 1.18.7, ulikunitz/xz 0.5.15, docker/docker
+28.5.2+incompatible (path-frozen max).
+
+Deliberately NOT taken (would break the SP1/kona lockstep):
+
+- aws-config 1.13+ — drags the RustCrypto family (signature 1→3, ecdsa, elliptic-curve
+  0.12→0.14, p256 0.11→0.14) which entangles sp1's patched k256/p256 forks; it would also not
+  remove rustls 0.21 (still required via hyper-rustls 0.24 `acceptor`), so the webpki 0.101
+copy stays regardless.
+- quic-go/webtransport-go/libp2p — same libp2p 0.36.2 sandwich as mantle-v2 (kurtosis-pinned).
+- opentelemetry 0.23→0.32 family migration (would clear GHSA-w9wp) — needs a dedicated PR;
+  both `opentelemetry_sdk` copies (0.21.2 via `opentelemetry-stdout` 0.2, 0.23.0 direct) are
+  ours, not gcloud's.
+- jsonwebtoken 9 (gcloud-sdk 0.27 hold),
+  tracing-subscriber 0.2 (ark-relations 0.5.1 requires `0.2`), p3-* `-succinct` fork versions
+  (SP1 6.10.0 internals, still `0.4.3-succinct`), mholt/archiver ≥3.5 (module path moved to `/v3`; kurtosis imports the
+  old path), docker/docker unpatched advisories (path frozen at 28.5.2; 29.x lives on
+  moby/moby), go-yaml v2 + pion/* + rardecode (no fixed release on the required paths).
+
+Rebased onto `main` after §3.11a (SP1 6.10.0): the lockfile was regenerated from `main`'s and the
+same `--precise` updates re-applied, rather than merging the two lockfiles by hand. One extra
+alert clears as a side effect: `lru 0.12.5` is gone — SP1 6.10.0's `sp1-prover` no longer uses it
+and `aws-sdk-s3` 1.132 dropped it, so it is no longer listed under "NOT taken".
+
+One `--precise` step (`aws-smithy-runtime-api`) also re-picked, among versions already in the lock,
+`socket2` 0.5.10 for `hyper-util`/`quinn`/`quinn-udp` and other `windows-sys` copies for six
+Windows-only dependents; those nine entries were put back to `main`'s, and `cargo metadata --locked`
+accepts the result unchanged. Every other entry equals either this PR's original lock or `main`'s.
+
+**Guest ELFs and vkeys change.** The guest programs share this workspace lockfile, and
+`serde_with` reaches them through `alloy-eips` (`kona-protocol` → `kona-derive` → … → `range` /
+`aggregation`). Moving it to 3.21.0 (GHSA for `KeyValueMap`, alert #90 — no dependency here uses
+`KeyValueMap`, but the bump was taken because §3.11a changes the vkeys in the same release anyway)
+changes both ELFs; it is the only bumped crate in the guest graph — with `serde_with` held at 3.20.0
+the rebuilt ELFs were byte-identical to `main`'s. `just build-elfs` was run twice with identical
+output and the ELFs are committed; new vkeys are in the §3.11a table. Deploy with §3.11a's steps
+(the on-chain vkey update covers both).
+
+Anyone bumping `Cargo.lock` later: run `just build-elfs` and check `git status elf/` — `elf.yml`
+fails the PR if the committed ELFs no longer reproduce.
+
 
 ## 4. Sync workflow
 
