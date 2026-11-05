@@ -190,19 +190,19 @@ revm = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.2"
 revm-precompile = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.2", default-features = false }
 op-revm = { git = "https://github.com/mantle-xyz/revm", tag = "v107-mantle-arsia.2", default-features = false }
 
-# SP1 v6.4.0 (Hypercube)
-sp1-sdk = { version = "=6.4.0", features = ["network", "blocking", "profiling"] }
-sp1-lib = { version = "=6.4.0", features = ["verify"] }
-sp1-zkvm = { version = "=6.4.0", features = ["verify"] }
-sp1-build = "=6.4.0"
-sp1-prover = "=6.4.0"
-sp1-prover-types = "=6.4.0"
-sp1-core-executor = "=6.4.0"
-sp1-hypercube = "=6.4.0"
-sp1-primitives = "=6.4.0"
-sp1-cluster-artifact = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.7.2" }
-sp1-cluster-common = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.7.2" }
-sp1-cluster-utils = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.7.2" }
+# SP1 v6.10.0 (Hypercube) — must match the self-hosted prover network (sp1-cluster mantle-v2.9.0).
+sp1-sdk = { version = "=6.10.0", features = ["network", "blocking", "profiling"] }
+sp1-lib = { version = "=6.10.0", features = ["verify"] }
+sp1-zkvm = { version = "=6.10.0", features = ["verify"] }
+sp1-build = "=6.10.0"
+sp1-prover = "=6.10.0"
+sp1-prover-types = "=6.10.0"
+sp1-core-executor = "=6.10.0"
+sp1-hypercube = "=6.10.0"
+sp1-primitives = "=6.10.0"
+sp1-cluster-artifact = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.9.0" }
+sp1-cluster-common = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.9.0" }
+sp1-cluster-utils = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.9.0" }
 
 # kzg
 kzg-rs = { version = "0.2.8", features = ["rkyv", "serde"] }
@@ -227,7 +227,7 @@ codegen-units = 1
 lto = "fat"
 
 [patch.crates-io]
-sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.0.0" }
+sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.10.0" }
 # [MANTLE] Held at the 0.10.8 patch tag, NOT upstream v3.12.0's 0.11.0.
 #
 # This tag must match the sha3 requirement of whatever `alloy-primitives` resolves to,
@@ -246,11 +246,11 @@ sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sh
 # When changing this tag, verify with: grep -c '^\[\[patch.unused\]\]' Cargo.lock  # want 0
 # Note cargo will not re-resolve sha3 on its own if the locked version still satisfies the
 # requirement — force it with `cargo update -p sha3 --precise <version>`.
-sha3 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha3", tag = "patch-sha3-0.10.8-sp1-6.0.0" }
-substrate-bn = { git = "https://github.com/sp1-patches/bn", tag = "patch-0.6.0-sp1-6.0.0-substrate-bn" }
-p256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-p256-13.2-sp1-6.0.0" }
-k256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-k256-13.4-sp1-6.0.0" }
-tiny-keccak = { git = "https://github.com/sp1-patches/tiny-keccak", tag = "patch-2.0.2-sp1-6.0.0" }
+sha3 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha3", tag = "patch-sha3-0.10.8-sp1-6.10.0" }
+substrate-bn = { git = "https://github.com/sp1-patches/bn", tag = "patch-0.6.0-sp1-6.10.0-substrate-bn" }
+p256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-p256-13.2-sp1-6.10.0" }
+k256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-k256-13.4-sp1-6.10.0" }
+tiny-keccak = { git = "https://github.com/sp1-patches/tiny-keccak", tag = "patch-2.0.2-sp1-6.10.0" }
 
 # Patch op-alloy and alloy-op-evm to use the mantle-v2 versions
 # Required so transitive deps from kona + op-alloy all resolve to the same source.

@@ -6,6 +6,23 @@
 FROM lukemathwalker/cargo-chef:latest-rust-1.85 AS chef
 WORKDIR /build
 
+# [MANTLE] Install the pinned toolchain once, in the stage both planner and
+# builder inherit. rust-toolchain.toml pins a nightly (see that file for why:
+# several deps need rustc >= 1.94, so the image's baked-in 1.85 never compiles
+# anything real — rustup switches toolchains based on this file). Left to
+# itself, rustup installs that nightly lazily on the first cargo invocation,
+# which happened twice per build: once in planner's `cargo chef prepare`
+# (~130s, mostly downloading rustc/rustc-dev/llvm-tools) and again in cook.
+# planner re-runs on every source change because it starts with `COPY . .`,
+# so every code change paid for a fresh toolchain download. Copying only this
+# file keeps the layer keyed on the toolchain pin alone.
+#
+# `cargo --version` rather than `rustup show` / `rustup toolchain install`:
+# it goes through the same rustup-proxy auto-install that prepare and cook
+# were already triggering, whose behaviour differs less across rustup releases.
+COPY rust-toolchain.toml rust-toolchain.toml
+RUN cargo --version && rustc --version
+
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --bin clear-stuck-txs --recipe-path recipe.json
@@ -39,21 +56,25 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 # fails. Same fix as mantle-xyz/sp1-cluster 7a825cd.
 ENV GOPROXY="https://proxy.golang.org,https://goproxy.cn,direct"
 
-# Install SP1
-RUN curl -L https://sp1.succinct.xyz | bash && \
-    ~/.sp1/bin/sp1up -v 6.4.0 && \
-    ~/.sp1/bin/cargo-prove prove --version
+# [MANTLE] No SP1 toolchain here. Upstream installs one (sp1up + cargo-prove),
+# but nothing in this repo invokes it: `build_all()` in utils/build has every
+# `build_program` call commented out — upstream's copy is empty too — so no
+# guest program is compiled during the image build, and the ELFs in elf/ are
+# committed artefacts that utils/elfs `include_bytes!`s. A grep for
+# `cargo-prove`, `~/.sp1` or `SP1_HOME` across the workspace returns nothing.
+# sp1-sdk itself is an ordinary crate; the only external toolchain its build
+# needs is Go, installed above for sp1-recursion-gnark-ffi.
+# Installing it cost ~300MB of download and 4.8GB unpacked.
+# The SP1 version is pinned by Cargo.toml / Cargo.lock alone; lint.yml's
+# consistency gate finds no `sp1up -v` in this file and passes.
 
 # Pre-cook only clear-stuck-txs's dependency graph, keyed on the recipe
 # (Cargo.toml/Cargo.lock) rather than the full source tree.
 #
-# rust-toolchain.toml pins a nightly channel (see that file for why — several
-# deps require rustc >= 1.94, hence FROM rust:1.85 alone isn't actually what
-# compiles anything real: rustup auto-switches based on this file). cook's
-# reconstructed skeleton dir doesn't otherwise contain it, so without this
-# COPY, cargo falls back to the image's baked-in 1.85 and errors out on any
-# dependency with a higher MSRV — unrelated to which --bin is requested.
-COPY --from=planner /build/rust-toolchain.toml rust-toolchain.toml
+# rust-toolchain.toml is already at /build/ from the chef stage, so cook runs
+# on the pinned nightly. It must stay there: cook's reconstructed skeleton
+# doesn't otherwise contain it, and without it cargo falls back to the image's
+# baked-in 1.85 and errors out on any dependency with a higher MSRV.
 COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=ssh \
     cargo chef cook --release --bin clear-stuck-txs --recipe-path recipe.json
