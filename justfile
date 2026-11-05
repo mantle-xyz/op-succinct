@@ -535,13 +535,13 @@ build-elfs: verify-git-pins build-range-elfs build-agg-elf
 #      alloy-op-evm, etc.) declare via `rust-version = "1.94"`. That build
 #      compiles those crates fine — the floor is a policy declaration, not a hard
 #      requirement — so we tell cargo to skip the MSRV check.
-#      TODO(v3.12.0 sync): re-test whether the SP1 v6.4.0 image still needs this.
+#      TODO(v3.12.0 sync): re-test whether the SP1 v6.10.0 image still needs this.
 #      If its bundled rustc is >= 1.94, drop the flag from both recipes below.
 build-range-elfs:
     #!/usr/bin/env bash
 
     cd programs/range/ethereum
-    ~/.sp1/bin/cargo-prove prove build --elf-name range-elf-embedded --docker --tag v6.4.0 --output-directory ../../../elf --ignore-rust-version
+    ~/.sp1/bin/cargo-prove prove build --elf-name range-elf-embedded --docker --tag v6.10.0 --output-directory ../../../elf --ignore-rust-version
 
 # Build ELF file for aggregation program.
 #
@@ -551,7 +551,7 @@ build-agg-elf:
     #!/usr/bin/env bash
 
     cd programs/aggregation
-    ~/.sp1/bin/cargo-prove prove build --elf-name aggregation-elf --docker --tag v6.4.0 --output-directory ../../elf --ignore-rust-version
+    ~/.sp1/bin/cargo-prove prove build --elf-name aggregation-elf --docker --tag v6.10.0 --output-directory ../../elf --ignore-rust-version
 
 # Run all unit tests except for the specified ones.
 tests:

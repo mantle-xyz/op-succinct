@@ -31,11 +31,13 @@ op-succinct-signer-utils.workspace = true
 # sp1
 sp1-sdk.workspace = true
 sp1-cluster-utils.workspace = true
-# [MANTLE] Pinned to the tonic the pinned sp1-sdk uses (0.12.x) so downcasting an
-# SDK RPC error to `tonic::Status` resolves the SAME type the SDK produced — a
-# version mismatch would silently make the downcast return None. Only the core
+# [MANTLE] Pinned to the tonic the pinned sp1-sdk uses (0.14.x since SP1 6.10.0; 0.12.x through
+# SP1 6.8.1) so downcasting an SDK RPC error to `tonic::Status` resolves the SAME type the SDK
+# produced. A mismatch silently makes the downcast return None, and the proposer then bisects
+# ranges on UNAVAILABLE / FAILED_PRECONDITION. Bump this together with sp1-sdk;
+# `proposer::admission_shed_tests::tonic_matches_the_sdk` fails when they diverge. Only the core
 # `Status`/`Code` types are needed, so no transport/codegen features.
-tonic = { version = "0.12", default-features = false }
+tonic = { version = "0.14", default-features = false }
 
 # alloy
 alloy-eips.workspace = true
