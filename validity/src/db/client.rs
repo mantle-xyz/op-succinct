@@ -747,6 +747,30 @@ impl DriverDBClient {
         Ok(result.rows_affected() > 0)
     }
 
+    /// [MANTLE] Put a request the prover has not accepted back to `Unrequested`, returning
+    /// whether it was still unaccepted (and not invalidated).
+    ///
+    /// "Not accepted" = `Unrequested` (e.g. `try_start_witness_generation` itself errored) or
+    /// `WitnessGeneration` (between that and a successful `update_request_to_prove*`). A failure
+    /// that finds the row in either retries the SAME range instead of counting towards bisection
+    /// (MANTLE_CHANGES.md §3.13). Guarded on the status because the row may have moved on: after
+    /// a lost lease the next proposer's orphan reaper can mark it `Failed` and rebuild the range,
+    /// and an unconditional write would revive the old row as a second, overlapping request.
+    /// Invalidated rows are left for `finish_invalidated_request`. Runtime `sqlx::query`: there is
+    /// no `.sqlx` offline-cache entry for it.
+    pub async fn reset_unaccepted_request_to_unrequested(&self, id: i64) -> Result<bool, Error> {
+        let result = sqlx::query(
+            "UPDATE requests SET status = $1, updated_at = NOW() WHERE id = $2 AND status = ANY($3) AND invalidated_at IS NULL",
+        )
+        .bind(RequestStatus::Unrequested as i16)
+        .bind(id)
+        .bind(vec![RequestStatus::Unrequested as i16, RequestStatus::WitnessGeneration as i16])
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Update the status of a request to Prove.
     ///
     /// Updates the proof_request_time to the current time.
@@ -1817,6 +1841,78 @@ mod tests {
             );
             assert_eq!(count(c, RequestStatus::Unrequested).await, 1);
             assert_eq!(count(c, RequestStatus::Prove).await, 0);
+        }
+
+        /// [MANTLE] §3.13: a range that failed before the prover accepted it, still in
+        /// `WitnessGeneration`, goes back to `Unrequested` — same row, no `Failed` row, so
+        /// nothing counts towards bisection.
+        #[tokio::test]
+        async fn test_reset_unaccepted_request_resets_unaccepted_rows() {
+            let db = TestDb::new().await;
+            let c = db.client();
+
+            let req = RequestBuilder::new().range(100, 200).build();
+            let id = insert_and_get_id(c, &req).await;
+            assert!(c.try_start_witness_generation(id).await.unwrap());
+
+            assert!(c.reset_unaccepted_request_to_unrequested(id).await.unwrap());
+            assert_eq!(count(c, RequestStatus::Unrequested).await, 1);
+            assert_eq!(count(c, RequestStatus::WitnessGeneration).await, 0);
+            assert_eq!(count(c, RequestStatus::Failed).await, 0);
+
+            // Still Unrequested (`try_start_witness_generation` itself failed): also unaccepted,
+            // reported as such, left as is.
+            assert!(c.reset_unaccepted_request_to_unrequested(id).await.unwrap());
+            assert_eq!(count(c, RequestStatus::Unrequested).await, 1);
+        }
+
+        /// The race the guard exists for: after a lost lease the next proposer's orphan reaper
+        /// marks the row `Failed` and rebuilds the range; the old process's late failure must not
+        /// revive the old row as a second, overlapping request. Likewise a row that already
+        /// reached `Prove` (accepted by the prover) must not be reset.
+        #[tokio::test]
+        async fn test_reset_unaccepted_request_leaves_rows_that_moved_on() {
+            let db = TestDb::new().await;
+            let c = db.client();
+
+            for (start, status) in [
+                (100, RequestStatus::Failed),
+                (200, RequestStatus::Prove),
+                // Mock mode moves a range to `Execution` before executing it; a failure there
+                // must keep the pre-existing path (mock execution failures still bisect).
+                (300, RequestStatus::Execution),
+            ] {
+                let req = RequestBuilder::new().range(start, start + 100).build();
+                let id = insert_and_get_id(c, &req).await;
+                c.update_request_status(id, status).await.unwrap();
+                assert!(
+                    !c.reset_unaccepted_request_to_unrequested(id).await.unwrap(),
+                    "a {status:?} row must be left alone"
+                );
+            }
+            assert_eq!(count(c, RequestStatus::Unrequested).await, 0);
+            assert_eq!(count(c, RequestStatus::Failed).await, 1);
+            assert_eq!(count(c, RequestStatus::Prove).await, 1);
+            assert_eq!(count(c, RequestStatus::Execution).await, 1);
+        }
+
+        /// An invalidated row is not revived either; `finish_invalidated_request` owns it.
+        #[tokio::test]
+        async fn test_reset_unaccepted_request_leaves_invalidated_rows() {
+            let db = TestDb::new().await;
+            let c = db.client();
+
+            let req = RequestBuilder::new().range(100, 200).build();
+            let id = insert_and_get_id(c, &req).await;
+            assert!(c.try_start_witness_generation(id).await.unwrap());
+            sqlx::query("UPDATE requests SET invalidated_at = NOW() WHERE id = $1")
+                .bind(id)
+                .execute(&c.pool)
+                .await
+                .unwrap();
+
+            assert!(!c.reset_unaccepted_request_to_unrequested(id).await.unwrap());
+            assert_eq!(count(c, RequestStatus::WitnessGeneration).await, 1);
         }
 
         /// The data-loss case this guard exists for: a poll can store a finished proof and move

@@ -6,7 +6,7 @@ use op_succinct_host_utils::{
     fetcher::OPSuccinctDataFetcher,
     host::enforce_l1_selection_supported,
     l1_selection::L1BlockSelectionConfig,
-    metrics::{init_metrics, MetricsGauge},
+    metrics::{init_metrics_with_buckets, MetricsGauge},
     setup_logger,
 };
 use op_succinct_proof_utils::initialize_host;
@@ -116,8 +116,11 @@ async fn main() -> Result<()> {
     // Initialize the metrics exporter before taking the chain lock, so a proposer waiting for
     // another one's lease is observable (`succinct_chain_lock_held` = 0).
     info!("Initializing metrics on port {}", env_config.metrics_port);
+    init_metrics_with_buckets(&env_config.metrics_port, op_succinct_validity::HISTOGRAM_BUCKETS);
+    // [MANTLE] Describe after the recorder is installed: before it, `describe_*` goes to the
+    // no-op recorder and the HELP/unit lines are lost.
     ValidityGauge::register_all();
-    init_metrics(&env_config.metrics_port);
+    op_succinct_validity::describe_histograms();
 
     // [MANTLE] Take the chain lock lease (waits while another live proposer holds it), keep it
     // renewed from a background heartbeat, and arm the main-loop progress watchdog. See

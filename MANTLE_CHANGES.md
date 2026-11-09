@@ -633,6 +633,12 @@ Note the alternative is not "give up". A `Failed` range is not in the active set
 `add_new_ranges` reads, so it is re-created as a gap next pass regardless — bisecting only
 changes the *shape* of the retry, for the worse.
 
+Before that gate, `handle_ongoing_tasks` routes every failed **range** through a guarded reset
+first (`reset_first` / `fail_after_reset`): if its row shows the prover never accepted it, it is
+retried whole whatever the error looked like (§3.13). For aggregations the gate below decides, as
+before. The witnessgen timeout is handled at the source in `make_proof_request` and also resets
+only an unaccepted row.
+
 Both paths that can reach `handle_failed_request` from a classifiable error consult the gate:
 the task-failure path in `handle_ongoing_tasks`, and the cluster-poll path via
 `reset_cluster_request_for_retry`. The remaining two call sites are not classifiable — a task
@@ -1227,6 +1233,114 @@ output and the ELFs are committed; new vkeys are in the §3.11a table. Deploy wi
 Anyone bumping `Cargo.lock` later: run `just build-elfs` and check `git status elf/` — `elf.yml`
 fails the PR if the committed ELFs no longer reproduce.
 
+
+### 3.13 Range failures before the prover accepted them no longer bisect; per-stage latency histograms (QA, 2026-11)
+
+**1. A range the prover never accepted is retried whole.**
+QA took the L1 beacon away: every range's witnessgen failed while fetching blobs, each failure
+went `make_proof_request` → `Err` → `handle_ongoing_tasks` → `handle_failed_request`, and the
+split gate (`fetch_failed_request_count_by_block_range > 2`) halved the range after its third
+failure — then each half after *its* third, down to one block. After the beacon came back the
+fragments were proved one by one: 10 extra range proofs and ~13 extra minutes for one interval,
+and on mainnet (Succinct's network) every extra piece is a separately paid proof. The witnessgen
+*timeout* branch next to it already reset to `Unrequested`; the error branch did not.
+
+The same held one step later. A failed **submission** (stdin upload / request creation) only
+escaped bisection if `no_bisect_reason` recognised the error, and that knows gRPC `UNAVAILABLE`,
+`FAILED_PRECONDITION` and the admission-shed marker. A refused connection on the network prover's
+HTTP artifact upload (reqwest), a `DeadlineExceeded`, or anything from the cluster path
+(sp1-cluster stringifies its errors) bisected. So did a panic, and a DB error around witnessgen.
+
+**Rule: decided by the row, not by the error.** `handle_ongoing_tasks` hands every failed task
+(error *or* panic) to `handle_failed_task`. For a **range**, `try_reset_unaccepted` runs first:
+`reset_unaccepted_request_to_unrequested` moves the row to `Unrequested` iff it is still
+`Unrequested` or `WitnessGeneration` and not invalidated. Those states mean the prover never
+accepted the request — a range is `WitnessGeneration` from `try_start_witness_generation` until
+`update_request_to_prove*` records the accepted request (mock mode moves it to `Execution` before
+executing). If the reset applies, the range is retried as is (counted in
+`succinct_proof_request_retry_count`); if the row had moved on, `handle_failed_request` runs as
+before (it also finishes an invalidated row); a DB error in the reset does not fall through.
+Keying on the row means no rendering of "could not connect" across tonic, reqwest and sp1-cluster
+can slip through. The routing is two pure functions, `reset_first` and `fail_after_reset`, pinned
+by `failed_task_routing_tests`.
+
+| `req_type` | Failure before acceptance → | Why |
+|---|---|---|
+| Range | retry the same range | witnessgen only fetches and derives inputs; submission only registers the program, reads auction params, uploads the stdin and creates the request — ranges go out with `skip_simulation(true)` and explicit cycle/gas limits, so sp1-sdk's `get_execution_limits` executes nothing (sp1-cluster's `create_request` likewise uses `u64::MAX` limits). Errors here are connectivity, data availability, account (balance, auth) or configuration. "Too big" normally surfaces only after the prover ran it, as `Unexecutable`, which still bisects |
+| Aggregation | fail (rebuilt next pass) — unchanged | built from stored range proofs and a checkpointed L1 block; the error can be specific to this request (checkpoint reorged away), and only failing it gets a fresh checkpoint. Aggregations are never bisected |
+
+The guard on the status matters: after a lost lease the next proposer's orphan reaper can mark the
+row `Failed` and rebuild the range, and the old process's late failure must not revive the old
+row as a second, overlapping request. All three resets share it: this one, the witnessgen-timeout
+reset in `make_proof_request`, and the aggregation `no_bisect_reason` reset — the latter two were
+unconditional, which could turn an invalidated row into an `Unrequested` one nothing ever picks up.
+Successful resets are counted in `succinct_proof_request_retry_count`; a row that had moved on is
+logged and left for the reaper. One side effect: with the `no_bisect_reason` reset now
+aggregation-only and guarded, a mock-mode range in `Execution` whose error happens to match
+`no_bisect_reason` goes to `handle_failed_request` instead of being reset — mock only, and mock
+execution failures are exactly what should count. The `tasks` lock is held across these DB calls
+on purpose: removing the task and resetting its row must be atomic with respect to
+`set_orphaned_tasks_to_failed`. A DB error in a reset does not fall through into `handle_failed_request`: the
+row stays put, the orphan reaper marks it `Failed` next pass and `add_new_ranges` rebuilds the same
+range — not split right then, but that reaped `Failed` row does count towards the >2 split
+threshold; such errors are counted in `succinct_retry_error_count`.
+
+**Accepted behaviours:**
+- A range that fails before acceptance *deterministically* (a derivation bug at one block, an
+  empty prover account, a misconfigured endpoint) is retried whole every pass instead of being
+  bisected. Not a liveness regression: bisection could only narrow it to one block, which then
+  fails forever just the same — after up to log2(range) rounds of extra proofs. The primary
+  signal is a steadily rising `succinct_proof_request_retry_count` with the same
+  `start_block`/`end_block` in the "failed before the prover accepted it" warn;
+  `succinct_witnessgen_error_count` / `succinct_range_proof_request_error_count` rise too when the
+  failure is a witnessgen or submission error, but not for a panic or a DB error around
+  witnessgen. While it lasts, that range takes the one dispatch slot per pass (it is the lowest
+  unproven range, so `request_queued_proofs` picks it first again), so later ranges are not
+  started — as before, when the bisected one-block remnant did the same; aggregation is blocked
+  by that range either way, so on-chain progress is no different.
+- **Exception, cluster-direct + Redis artifact store only:** sp1-cluster's Redis client can fail
+  deterministically on stdin *size* — `check_admission` waits 120s and errors (`admission wait`)
+  when one stdin exceeds the shard's free memory, and a single upload has a 60s
+  `TRANSFER_TIMEOUT`. Bisection used to shrink the stdin out of that; now the range retries
+  forever. Needs a stdin of hundreds of MB or a small Redis, and Mantle proves through the
+  prove-network router (`SP1_PROVER=network`), not cluster-direct. If it ever shows up (same range,
+  `submission` errors containing `admission wait` / `timed out`): lower `RANGE_PROOF_INTERVAL` or
+  give Redis more memory.
+- A submission that errors *after* the backend actually created the request (response lost), or
+  a DB error writing `update_request_to_prove*` after a successful submission, leaves the row in
+  `WitnessGeneration`, so the range is submitted again and may be proved twice. Same as before
+  this change — the old path re-created the range too, and could additionally split it (sp1-sdk
+  itself also re-requests inside `with_retry` on `Internal` / `DeadlineExceeded`).
+
+**2. Stage latency histograms.** The gauges could only say *that* witnessgen or a submission
+failed, not how long the stages take. Two Prometheus histograms (seconds, explicit buckets, so
+`histogram_quantile` works):
+
+| Metric | Labels | Covers |
+|---|---|---|
+| `succinct_witnessgen_duration_seconds` | `req_type` (`range`/`aggregation`), `outcome` (`ok`/`error`/`timeout`) | until the stdin is built — range: host fetch + native run; aggregation: loading the range proofs |
+| `succinct_proof_submit_duration_seconds` | `req_type`, `backend` (`network`/`cluster`), `outcome` (`ok`/`error`) | network: program registration + auction params + stdin upload + request creation; cluster: ELF/stdin upload + request creation |
+
+Upload and request creation are one stage because both backends do them inside one library call
+(`sp1-sdk` `request()`, sp1-cluster-utils `create_request`); splitting them would mean
+re-implementing those. A submission that hangs records nothing until it returns, and a panic
+records nothing at all. Proving time itself is already in the DB (`prove_duration`) and logs.
+
+Buckets come from `HISTOGRAM_BUCKETS` (`validity/src/prom.rs`) via `prometheus_builder` /
+`init_metrics_with_buckets` in `utils/host/src/metrics.rs` (additive — `init_metrics` is
+unchanged); a histogram without an entry renders as a summary.
+`stage_latencies_render_as_prometheus_histograms` renders through the same builder and asserts
+`# TYPE … histogram` and the HELP lines. Metric
+descriptions are now registered *after* the recorder is installed — before, `describe_*` went to
+the no-op recorder, which had also been silently dropping every `ValidityGauge` HELP line.
+`metrics` is a new direct dependency of validity at the version already locked — no new crates,
+so the guest ELFs are unaffected.
+
+Example queries:
+```promql
+histogram_quantile(0.95, sum by (le, req_type) (rate(succinct_witnessgen_duration_seconds_bucket{outcome="ok"}[30m])))
+sum by (req_type, backend) (rate(succinct_proof_submit_duration_seconds_count{outcome="error"}[1h]))
+```
 
 ## 4. Sync workflow
 

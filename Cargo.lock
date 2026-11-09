@@ -6928,6 +6928,7 @@ dependencies = [
  "clap",
  "dotenv",
  "futures-util",
+ "metrics",
  "op-succinct-build-utils",
  "op-succinct-client-utils",
  "op-succinct-elfs",

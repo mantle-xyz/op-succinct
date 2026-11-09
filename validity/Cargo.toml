@@ -19,6 +19,7 @@ alloy-primitives.workspace = true
 
 # tracing and telemetry
 tracing.workspace = true
+metrics.workspace = true
 
 
 # local
