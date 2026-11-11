@@ -11331,7 +11331,7 @@ dependencies = [
 [[package]]
 name = "substrate-bn"
 version = "0.6.0"
-source = "git+https://github.com/sp1-patches/bn?tag=patch-0.6.0-sp1-6.10.0-substrate-bn#ab4d0085567695967cf34c23b3090f1ae02a03d1"
+source = "git+https://github.com/mantle-xyz/bn?rev=6fd9e7c76bc42e722941e0f5173123afa806f25c#6fd9e7c76bc42e722941e0f5173123afa806f25c"
 dependencies = [
  "bytemuck",
  "byteorder",

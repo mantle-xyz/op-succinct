@@ -1342,6 +1342,58 @@ histogram_quantile(0.95, sum by (le, req_type) (rate(succinct_witnessgen_duratio
 sum by (req_type, backend) (rate(succinct_proof_submit_duration_seconds_count{outcome="error"}[1h]))
 ```
 
+### 3.14 substrate-bn: native BN254 multiplication fast path (load test, 2026-11)
+
+**Symptom.** In the 2026-11-10 load test, a range containing 150 blocks of bn254 pairing calls
+(~3.79M gas each) took 1234–1397s of witness generation, close to `WITNESSGEN_TIMEOUT`; the same
+range without them took 63s. Exported locally, the pairing window took 1223s against 25s for an
+ordinary window of the same size (49×), although its proving cost is low (complexity factor 4.9).
+
+**Cause.** Witness generation executes the blocks natively, and revm-precompile's `bn` feature
+(enabled through kona-host) routes bn254 to `substrate-bn`, which `[patch.crates-io]` replaces with
+SP1's `sp1-patches/bn`. That patch keeps field elements in normal form and, outside the zkVM,
+multiplies with schoolbook + `U512::divrem` (bitwise long division) instead of upstream's
+Montgomery multiplication: a 57-pair pairing took 1071 ms natively vs 18.7 ms with upstream
+substrate-bn 0.6.0 (57×). Upstream op-succinct uses the same patch.
+
+**Fix.** `substrate-bn` now comes from `mantle-xyz/bn` (fork of sp1-patches/bn), commit
+`6fd9e7c7` (tag `patch-0.6.0-sp1-6.10.0-substrate-bn-mantle.1`) = `patch-0.6.0-sp1-6.10.0-substrate-bn`
+(`ab4d008`) + one purely additive commit: under `cfg(not(target_os = "zkvm"))` only, when the
+modulus is exactly Fq or Fr and both operands are reduced, `U256::cpu_mul` computes
+`REDC(REDC(a, b), R²) = a·b mod p` with upstream's `mul_reduce` and constants. Everything else —
+the zkVM path (syscalls and unconstrained hints), other moduli, unreduced operands — is unchanged.
+A 57-pair pairing now takes 35 ms natively.
+
+Safety: the guest never consumes a host-computed bn254 result (`PreimageKeyType::Precompile` is
+`unimplemented!` in the guest; it recomputes through the SP1 syscall path), so a host-side error
+could only make witness generation or proving fail, not produce an accepted wrong proof. The
+fork's tests check bit-for-bit agreement with the `divrem` path (200k random pairs per modulus +
+edge values); revm-precompile's bn254 add/mul/pair tests pass against it.
+
+**Pinning.** By `rev` (tags are mutable; the tag is only noted in the `Cargo.toml` comment).
+`Cargo.lock` changed in exactly one line (substrate-bn's `source`): `cargo update -p substrate-bn`
+also re-picked `itertools` for unrelated crates, so the line was edited by hand and checked with
+`cargo metadata --locked`. `[[patch.unused]]` = 0.
+
+**Guest ELFs and vkeys change** — the zkVM logic does not, but the dependency source path is
+embedded in the ELF. `just build-elfs` twice, identical:
+
+| | Before (`mantle-v1.6.4`, this branch before §3.14) | After |
+|---|---|---|
+| `rangeVkeyCommitment` | `0x0b2464e13b29257e7aa42c6812e35bdd5a41011b79b84b422e33737a23da5a12` | `0x070da4015402eaf744e6a7850d00a99c36150b297974545624d78df46bf2c9f0` |
+| `aggregationVkey` | `0x0077b1f58fc3c3c5890214676f11e344826e6b23e7d93394e74f3e7988469d83` | `0x00ad69c41ea30e42363b0b3660ab7193e17d7ecc506a1f633cce64c91bea83d8` |
+
+**Rollout.** Have a second person rebuild the ELFs independently and reproduce these vkeys. Then
+per network: stop the proposer (or let in-flight aggregations land) → owner updates both vkeys in
+**one** transaction (Safe multisend), avoiding a window with one old and one new vkey → deploy the
+image built from these ELFs → confirm the startup config check passes. Keep the old image, ELFs
+and vkeys for rollback (rollback is the same Safe operation in reverse, paired with the old image).
+
+**On every SP1 bump** re-apply `6fd9e7c7` on top of the new `sp1-patches/bn` tag in `mantle-xyz/bn`
+and pin the new commit. Pointing back at `sp1-patches/bn` loses the fix silently: nothing fails,
+witness generation for bn254-heavy blocks just becomes slow again. Keep the fork's `sp1-lib`
+version in step with the SP1 bump.
+
 ## 4. Sync workflow
 
 When a new upstream Succinct Labs release lands (e.g. v3.9.0, v4.0.0):
