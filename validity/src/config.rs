@@ -52,6 +52,10 @@ pub struct RequesterConfig {
     /// The evm gas limit for each range proof. Ranges will be split to not exceed this gas limit.
     /// If 0, will use range_proof_interval instead.
     pub evm_gas_limit: u64,
+    /// [MANTLE] Gas-equivalent counted per user transaction when splitting by `evm_gas_limit`
+    /// (`RANGE_PROOF_TX_GAS_WEIGHT`). 0 = gas only, the upstream behaviour. See
+    /// [`crate::get_ranges_to_prove_by_weighted_gas`].
+    pub tx_gas_weight: u64,
     /// The number of blocks in each range proof. Used when gas_limit is 0.
     pub range_proof_interval: u64,
     pub submission_interval: u64,
@@ -126,6 +130,7 @@ impl RequesterConfig {
             l2oo_address = %self.l2oo_address,
             dgf_address = %self.dgf_address,
             evm_gas_limit = self.evm_gas_limit,
+            tx_gas_weight = self.tx_gas_weight,
             range_proof_interval = self.range_proof_interval,
             submission_interval = self.submission_interval,
             max_concurrent_witness_gen = self.max_concurrent_witness_gen,

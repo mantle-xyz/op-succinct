@@ -6,7 +6,7 @@ use op_succinct_host_utils::{
     fetcher::OPSuccinctDataFetcher,
     host::enforce_l1_selection_supported,
     l1_selection::L1BlockSelectionConfig,
-    metrics::{init_metrics, MetricsGauge},
+    metrics::{init_metrics_with_buckets, MetricsGauge},
     setup_logger,
 };
 use op_succinct_proof_utils::initialize_host;
@@ -74,12 +74,22 @@ async fn main() -> Result<()> {
         ));
     }
 
+    // [MANTLE] The per-transaction weight only applies to gas-based splitting; set without a gas
+    // limit it would be silently ignored, so refuse to start.
+    if env_config.tx_gas_weight > 0 && env_config.evm_gas_limit == 0 {
+        return Err(anyhow::anyhow!(
+            "RANGE_PROOF_TX_GAS_WEIGHT is set but RANGE_PROOF_EVM_GAS_LIMIT is 0; the weight only \
+             applies to gas-based range splitting. Set RANGE_PROOF_EVM_GAS_LIMIT or unset the weight"
+        ));
+    }
+
     let proposer_config = RequesterConfig {
         l1_chain_id: fetcher.l1_provider.get_chain_id().await? as i64,
         l2_chain_id: fetcher.l2_provider.get_chain_id().await? as i64,
         l2oo_address: env_config.l2oo_address,
         dgf_address: env_config.dgf_address,
         evm_gas_limit: env_config.evm_gas_limit,
+        tx_gas_weight: env_config.tx_gas_weight,
         range_proof_interval: env_config.range_proof_interval,
         max_concurrent_witness_gen: env_config.max_concurrent_witness_gen,
         max_concurrent_proof_requests: env_config.max_concurrent_proof_requests,
@@ -116,8 +126,11 @@ async fn main() -> Result<()> {
     // Initialize the metrics exporter before taking the chain lock, so a proposer waiting for
     // another one's lease is observable (`succinct_chain_lock_held` = 0).
     info!("Initializing metrics on port {}", env_config.metrics_port);
+    init_metrics_with_buckets(&env_config.metrics_port, op_succinct_validity::HISTOGRAM_BUCKETS);
+    // [MANTLE] Describe after the recorder is installed: before it, `describe_*` goes to the
+    // no-op recorder and the HELP/unit lines are lost.
     ValidityGauge::register_all();
-    init_metrics(&env_config.metrics_port);
+    op_succinct_validity::describe_histograms();
 
     // [MANTLE] Take the chain lock lease (waits while another live proposer holds it), keep it
     // renewed from a background heartbeat, and arm the main-loop progress watchdog. See

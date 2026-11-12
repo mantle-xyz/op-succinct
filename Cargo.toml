@@ -247,7 +247,13 @@ sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sh
 # Note cargo will not re-resolve sha3 on its own if the locked version still satisfies the
 # requirement — force it with `cargo update -p sha3 --precise <version>`.
 sha3 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha3", tag = "patch-sha3-0.10.8-sp1-6.10.0" }
-substrate-bn = { git = "https://github.com/sp1-patches/bn", tag = "patch-0.6.0-sp1-6.10.0-substrate-bn" }
+# [MANTLE] substrate-bn: mantle-xyz/bn tag patch-0.6.0-sp1-6.10.0-substrate-bn-mantle.1 = SP1's
+# patch-0.6.0-sp1-6.10.0-substrate-bn + a native-only (non-zkvm) Montgomery fast path for BN254
+# multiplication; the zkVM path is untouched. Without it, host witness generation for bn254-pairing
+# blocks is ~57x slower than upstream (MANTLE_CHANGES.md §3.14). Pinned by `rev` (tags are mutable).
+# On every SP1 bump, re-apply that commit on the new sp1-patches/bn tag — switching back to
+# sp1-patches silently loses the fix (witnessgen just gets slow again).
+substrate-bn = { git = "https://github.com/mantle-xyz/bn", rev = "6fd9e7c76bc42e722941e0f5173123afa806f25c" }
 p256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-p256-13.2-sp1-6.10.0" }
 k256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-k256-13.4-sp1-6.10.0" }
 tiny-keccak = { git = "https://github.com/sp1-patches/tiny-keccak", tag = "patch-2.0.2-sp1-6.10.0" }

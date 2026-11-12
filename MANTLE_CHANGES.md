@@ -633,6 +633,12 @@ Note the alternative is not "give up". A `Failed` range is not in the active set
 `add_new_ranges` reads, so it is re-created as a gap next pass regardless — bisecting only
 changes the *shape* of the retry, for the worse.
 
+Before that gate, `handle_ongoing_tasks` routes every failed **range** through a guarded reset
+first (`reset_first` / `fail_after_reset`): if its row shows the prover never accepted it, it is
+retried whole whatever the error looked like (§3.13). For aggregations the gate below decides, as
+before. The witnessgen timeout is handled at the source in `make_proof_request` and also resets
+only an unaccepted row.
+
 Both paths that can reach `handle_failed_request` from a classifiable error consult the gate:
 the task-failure path in `handle_ongoing_tasks`, and the cluster-poll path via
 `reset_cluster_request_for_retry`. The remaining two call sites are not classifiable — a task
@@ -1227,6 +1233,197 @@ output and the ELFs are committed; new vkeys are in the §3.11a table. Deploy wi
 Anyone bumping `Cargo.lock` later: run `just build-elfs` and check `git status elf/` — `elf.yml`
 fails the PR if the committed ELFs no longer reproduce.
 
+
+### 3.13 Range failures before the prover accepted them no longer bisect; per-stage latency histograms (QA, 2026-11)
+
+**1. A range the prover never accepted is retried whole.**
+QA took the L1 beacon away: every range's witnessgen failed while fetching blobs, each failure
+went `make_proof_request` → `Err` → `handle_ongoing_tasks` → `handle_failed_request`, and the
+split gate (`fetch_failed_request_count_by_block_range > 2`) halved the range after its third
+failure — then each half after *its* third, down to one block. After the beacon came back the
+fragments were proved one by one: 10 extra range proofs and ~13 extra minutes for one interval,
+and on mainnet (Succinct's network) every extra piece is a separately paid proof. The witnessgen
+*timeout* branch next to it already reset to `Unrequested`; the error branch did not.
+
+The same held one step later. A failed **submission** (stdin upload / request creation) only
+escaped bisection if `no_bisect_reason` recognised the error, and that knows gRPC `UNAVAILABLE`,
+`FAILED_PRECONDITION` and the admission-shed marker. A refused connection on the network prover's
+HTTP artifact upload (reqwest), a `DeadlineExceeded`, or anything from the cluster path
+(sp1-cluster stringifies its errors) bisected. So did a panic, and a DB error around witnessgen.
+
+**Rule: decided by the row, not by the error.** `handle_ongoing_tasks` hands every failed task
+(error *or* panic) to `handle_failed_task`. For a **range**, `try_reset_unaccepted` runs first:
+`reset_unaccepted_request_to_unrequested` moves the row to `Unrequested` iff it is still
+`Unrequested` or `WitnessGeneration` and not invalidated. Those states mean the prover never
+accepted the request — a range is `WitnessGeneration` from `try_start_witness_generation` until
+`update_request_to_prove*` records the accepted request (mock mode moves it to `Execution` before
+executing). If the reset applies, the range is retried as is (counted in
+`succinct_proof_request_retry_count`); if the row had moved on, `handle_failed_request` runs as
+before (it also finishes an invalidated row); a DB error in the reset does not fall through.
+Keying on the row means no rendering of "could not connect" across tonic, reqwest and sp1-cluster
+can slip through. The routing is two pure functions, `reset_first` and `fail_after_reset`, pinned
+by `failed_task_routing_tests`.
+
+| `req_type` | Failure before acceptance → | Why |
+|---|---|---|
+| Range | retry the same range | witnessgen only fetches and derives inputs; submission only registers the program, reads auction params, uploads the stdin and creates the request — ranges go out with `skip_simulation(true)` and explicit cycle/gas limits, so sp1-sdk's `get_execution_limits` executes nothing (sp1-cluster's `create_request` likewise uses `u64::MAX` limits). Errors here are connectivity, data availability, account (balance, auth) or configuration. "Too big" normally surfaces only after the prover ran it, as `Unexecutable`, which still bisects |
+| Aggregation | fail (rebuilt next pass) — unchanged | built from stored range proofs and a checkpointed L1 block; the error can be specific to this request (checkpoint reorged away), and only failing it gets a fresh checkpoint. Aggregations are never bisected |
+
+The guard on the status matters: after a lost lease the next proposer's orphan reaper can mark the
+row `Failed` and rebuild the range, and the old process's late failure must not revive the old
+row as a second, overlapping request. All three resets share it: this one, the witnessgen-timeout
+reset in `make_proof_request`, and the aggregation `no_bisect_reason` reset — the latter two were
+unconditional, which could turn an invalidated row into an `Unrequested` one nothing ever picks up.
+Successful resets are counted in `succinct_proof_request_retry_count`; a row that had moved on is
+logged and left for the reaper. One side effect: with the `no_bisect_reason` reset now
+aggregation-only and guarded, a mock-mode range in `Execution` whose error happens to match
+`no_bisect_reason` goes to `handle_failed_request` instead of being reset — mock only, and mock
+execution failures are exactly what should count. The `tasks` lock is held across these DB calls
+on purpose: removing the task and resetting its row must be atomic with respect to
+`set_orphaned_tasks_to_failed`. A DB error in a reset does not fall through into `handle_failed_request`: the
+row stays put, the orphan reaper marks it `Failed` next pass and `add_new_ranges` rebuilds the same
+range — not split right then, but that reaped `Failed` row does count towards the >2 split
+threshold; such errors are counted in `succinct_retry_error_count`.
+
+**Accepted behaviours:**
+- A range that fails before acceptance *deterministically* (a derivation bug at one block, an
+  empty prover account, a misconfigured endpoint) is retried whole every pass instead of being
+  bisected. Not a liveness regression: bisection could only narrow it to one block, which then
+  fails forever just the same — after up to log2(range) rounds of extra proofs. The primary
+  signal is a steadily rising `succinct_proof_request_retry_count` with the same
+  `start_block`/`end_block` in the "failed before the prover accepted it" warn;
+  `succinct_witnessgen_error_count` / `succinct_range_proof_request_error_count` rise too when the
+  failure is a witnessgen or submission error, but not for a panic or a DB error around
+  witnessgen. While it lasts, that range takes the one dispatch slot per pass (it is the lowest
+  unproven range, so `request_queued_proofs` picks it first again), so later ranges are not
+  started — as before, when the bisected one-block remnant did the same; aggregation is blocked
+  by that range either way, so on-chain progress is no different.
+- **Exception, cluster-direct + Redis artifact store only:** sp1-cluster's Redis client can fail
+  deterministically on stdin *size* — `check_admission` waits 120s and errors (`admission wait`)
+  when one stdin exceeds the shard's free memory, and a single upload has a 60s
+  `TRANSFER_TIMEOUT`. Bisection used to shrink the stdin out of that; now the range retries
+  forever. Needs a stdin of hundreds of MB or a small Redis, and Mantle proves through the
+  prove-network router (`SP1_PROVER=network`), not cluster-direct. If it ever shows up (same range,
+  `submission` errors containing `admission wait` / `timed out`): lower `RANGE_PROOF_INTERVAL` or
+  give Redis more memory.
+- A submission that errors *after* the backend actually created the request (response lost), or
+  a DB error writing `update_request_to_prove*` after a successful submission, leaves the row in
+  `WitnessGeneration`, so the range is submitted again and may be proved twice. Same as before
+  this change — the old path re-created the range too, and could additionally split it (sp1-sdk
+  itself also re-requests inside `with_retry` on `Internal` / `DeadlineExceeded`).
+
+**2. Stage latency histograms.** The gauges could only say *that* witnessgen or a submission
+failed, not how long the stages take. Two Prometheus histograms (seconds, explicit buckets, so
+`histogram_quantile` works):
+
+| Metric | Labels | Covers |
+|---|---|---|
+| `succinct_witnessgen_duration_seconds` | `req_type` (`range`/`aggregation`), `outcome` (`ok`/`error`/`timeout`) | until the stdin is built — range: host fetch + native run; aggregation: loading the range proofs |
+| `succinct_proof_submit_duration_seconds` | `req_type`, `backend` (`network`/`cluster`), `outcome` (`ok`/`error`) | network: program registration + auction params + stdin upload + request creation; cluster: ELF/stdin upload + request creation |
+
+Upload and request creation are one stage because both backends do them inside one library call
+(`sp1-sdk` `request()`, sp1-cluster-utils `create_request`); splitting them would mean
+re-implementing those. A submission that hangs records nothing until it returns, and a panic
+records nothing at all. Proving time itself is already in the DB (`prove_duration`) and logs.
+
+Buckets come from `HISTOGRAM_BUCKETS` (`validity/src/prom.rs`) via `prometheus_builder` /
+`init_metrics_with_buckets` in `utils/host/src/metrics.rs` (additive — `init_metrics` is
+unchanged); a histogram without an entry renders as a summary.
+`stage_latencies_render_as_prometheus_histograms` renders through the same builder and asserts
+`# TYPE … histogram` and the HELP lines. Metric
+descriptions are now registered *after* the recorder is installed — before, `describe_*` went to
+the no-op recorder, which had also been silently dropping every `ValidityGauge` HELP line.
+`metrics` is a new direct dependency of validity at the version already locked — no new crates,
+so the guest ELFs are unaffected.
+
+Example queries:
+```promql
+histogram_quantile(0.95, sum by (le, req_type) (rate(succinct_witnessgen_duration_seconds_bucket{outcome="ok"}[30m])))
+sum by (req_type, backend) (rate(succinct_proof_submit_duration_seconds_count{outcome="error"}[1h]))
+```
+
+### 3.14 substrate-bn: native BN254 multiplication fast path (load test, 2026-11)
+
+**Symptom.** In the 2026-11-10 load test, a range containing 150 blocks of bn254 pairing calls
+(~3.79M gas each) took 1234–1397s of witness generation, close to `WITNESSGEN_TIMEOUT`; the same
+range without them took 63s. Exported locally, the pairing window took 1223s against 25s for an
+ordinary window of the same size (49×), although its proving cost is low (complexity factor 4.9).
+
+**Cause.** Witness generation executes the blocks natively, and revm-precompile's `bn` feature
+(enabled through kona-host) routes bn254 to `substrate-bn`, which `[patch.crates-io]` replaces with
+SP1's `sp1-patches/bn`. That patch keeps field elements in normal form and, outside the zkVM,
+multiplies with schoolbook + `U512::divrem` (bitwise long division) instead of upstream's
+Montgomery multiplication: a 57-pair pairing took 1071 ms natively vs 18.7 ms with upstream
+substrate-bn 0.6.0 (57×). Upstream op-succinct uses the same patch.
+
+**Fix.** `substrate-bn` now comes from `mantle-xyz/bn` (fork of sp1-patches/bn), commit
+`6fd9e7c7` (tag `patch-0.6.0-sp1-6.10.0-substrate-bn-mantle.1`) = `patch-0.6.0-sp1-6.10.0-substrate-bn`
+(`ab4d008`) + one purely additive commit: under `cfg(not(target_os = "zkvm"))` only, when the
+modulus is exactly Fq or Fr and both operands are reduced, `U256::cpu_mul` computes
+`REDC(REDC(a, b), R²) = a·b mod p` with upstream's `mul_reduce` and constants. Everything else —
+the zkVM path (syscalls and unconstrained hints), other moduli, unreduced operands — is unchanged.
+A 57-pair pairing now takes 35 ms natively.
+
+Safety: the guest never consumes a host-computed bn254 result (`PreimageKeyType::Precompile` is
+`unimplemented!` in the guest; it recomputes through the SP1 syscall path), so a host-side error
+could only make witness generation or proving fail, not produce an accepted wrong proof. The
+fork's tests check bit-for-bit agreement with the `divrem` path (200k random pairs per modulus +
+edge values); revm-precompile's bn254 add/mul/pair tests pass against it.
+
+**Pinning.** By `rev` (tags are mutable; the tag is only noted in the `Cargo.toml` comment).
+`Cargo.lock` changed in exactly one line (substrate-bn's `source`): `cargo update -p substrate-bn`
+also re-picked `itertools` for unrelated crates, so the line was edited by hand and checked with
+`cargo metadata --locked`. `[[patch.unused]]` = 0.
+
+**Guest ELFs and vkeys change** — the zkVM logic does not, but the dependency source path is
+embedded in the ELF. `just build-elfs` twice, identical:
+
+| | Before (`mantle-v1.6.4`, this branch before §3.14) | After |
+|---|---|---|
+| `rangeVkeyCommitment` | `0x0b2464e13b29257e7aa42c6812e35bdd5a41011b79b84b422e33737a23da5a12` | `0x070da4015402eaf744e6a7850d00a99c36150b297974545624d78df46bf2c9f0` |
+| `aggregationVkey` | `0x0077b1f58fc3c3c5890214676f11e344826e6b23e7d93394e74f3e7988469d83` | `0x00ad69c41ea30e42363b0b3660ab7193e17d7ecc506a1f633cce64c91bea83d8` |
+
+**Rollout.** Have a second person rebuild the ELFs independently and reproduce these vkeys. Then
+per network: stop the proposer (or let in-flight aggregations land) → owner updates both vkeys in
+**one** transaction (Safe multisend), avoiding a window with one old and one new vkey → deploy the
+image built from these ELFs → confirm the startup config check passes. Keep the old image, ELFs
+and vkeys for rollback (rollback is the same Safe operation in reverse, paired with the old image).
+
+**On every SP1 bump** re-apply `6fd9e7c7` on top of the new `sp1-patches/bn` tag in `mantle-xyz/bn`
+and pin the new commit. Pointing back at `sp1-patches/bn` loses the fix silently: nothing fails,
+witness generation for bn254-heavy blocks just becomes slow again. Keep the fork's `sp1-lib`
+version in step with the SP1 bump.
+
+### 3.15 Range splitting weighted by transaction count (load test, 2026-11)
+
+**Problem.** `RANGE_PROOF_EVM_GAS_LIMIT` caps a range by accumulated `gasUsed` only. Proving cost
+also has a per-transaction part that gas misses: for the same proving time (2280s) a range held
+~6.1B gas of plain transfers but ~18.6B of mixed traffic — at equal gas, all-transfer ranges cost
+~3× mixed ones. A single gas limit therefore either cuts mixed ranges to ~1/3 (lower sustainable
+TPS, since each range carries fixed overhead and ranges are proved one at a time) or lets
+transfer-heavy ranges through until the prover's `RANGE_CYCLE_LIMIT` rejects them, a whole proving
+budget later.
+
+**Change.** New `RANGE_PROOF_TX_GAS_WEIGHT` (k, default `0`). With a gas limit set, each block now
+weighs `gasUsed + k × userTxs` against `RANGE_PROOF_EVM_GAS_LIMIT` (W), where
+`userTxs = transaction_count − 1` (every block carries one L1-attributes deposit, which is not
+weighted). `RANGE_PROOF_INTERVAL` still caps the block count, and a single block over W still forms
+its own range. Implemented as `get_ranges_to_prove_by_weighted_gas`; upstream's
+`get_ranges_to_prove_by_gas` is kept as a wrapper with k = 0, so k = 0 is exactly the previous
+behaviour; the existing `get_ranges_to_prove_by_gas` tests, which now run through the weighted code,
+pin that. The proposer refuses to start if
+k > 0 but `RANGE_PROOF_EVM_GAS_LIMIT` is 0 (the weight would be silently ignored). Host-only: no
+ELF/vkey change.
+
+**Choosing k and W (from the load test).** Regression over 11 all-transfer and mixed ranges:
+`prove_seconds ≈ 461 + 68.5 × (gas / 1e9) + 496 × (userTxs / 1e5)` (R² 0.991). So one user
+transaction ≈ 72k gas (k ≈ 72,000), and a 2280s target gives W ≈ 26.5B. Values are set per
+environment in mantle-config once the load test confirms them (DEX-heavy traffic measured ~45%
+heavier per gas historically; pending new data).
+
+**Not covered.** Precompile-heavy traffic (blake2f, BLS12-381: up to ~46× the proving cost per
+gas) is not captured by gas or transaction count; that is what `RANGE_CYCLE_LIMIT` /
+`RANGE_GAS_LIMIT` are for, which needs the prover to enforce them (self-hosted cluster: pending).
 
 ## 4. Sync workflow
 
