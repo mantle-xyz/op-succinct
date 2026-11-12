@@ -45,7 +45,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     db::{DriverDBClient, OPSuccinctRequest, RequestMode, RequestStatus, RequestType},
     find_gaps, get_latest_proposed_block_number, get_ranges_to_prove_by_blocks,
-    get_ranges_to_prove_by_gas,
+    get_ranges_to_prove_by_weighted_gas,
     relay_rejection::{
         classify_revert_data, revert_data_of_anyhow, revert_data_of_rpc_error, NoVerdictReason,
         RelayRejection,
@@ -916,9 +916,11 @@ where
                 }
             }
 
-            get_ranges_to_prove_by_gas(
+            // [MANTLE] Weighted by user transactions when RANGE_PROOF_TX_GAS_WEIGHT > 0.
+            get_ranges_to_prove_by_weighted_gas(
                 &disjoint_ranges,
                 self.requester_config.evm_gas_limit,
+                self.requester_config.tx_gas_weight,
                 self.requester_config.range_proof_interval as i64,
                 &all_block_infos,
             )?

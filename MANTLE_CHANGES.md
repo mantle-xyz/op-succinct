@@ -1394,6 +1394,37 @@ and pin the new commit. Pointing back at `sp1-patches/bn` loses the fix silently
 witness generation for bn254-heavy blocks just becomes slow again. Keep the fork's `sp1-lib`
 version in step with the SP1 bump.
 
+### 3.15 Range splitting weighted by transaction count (load test, 2026-11)
+
+**Problem.** `RANGE_PROOF_EVM_GAS_LIMIT` caps a range by accumulated `gasUsed` only. Proving cost
+also has a per-transaction part that gas misses: for the same proving time (2280s) a range held
+~6.1B gas of plain transfers but ~18.6B of mixed traffic — at equal gas, all-transfer ranges cost
+~3× mixed ones. A single gas limit therefore either cuts mixed ranges to ~1/3 (lower sustainable
+TPS, since each range carries fixed overhead and ranges are proved one at a time) or lets
+transfer-heavy ranges through until the prover's `RANGE_CYCLE_LIMIT` rejects them, a whole proving
+budget later.
+
+**Change.** New `RANGE_PROOF_TX_GAS_WEIGHT` (k, default `0`). With a gas limit set, each block now
+weighs `gasUsed + k × userTxs` against `RANGE_PROOF_EVM_GAS_LIMIT` (W), where
+`userTxs = transaction_count − 1` (every block carries one L1-attributes deposit, which is not
+weighted). `RANGE_PROOF_INTERVAL` still caps the block count, and a single block over W still forms
+its own range. Implemented as `get_ranges_to_prove_by_weighted_gas`; upstream's
+`get_ranges_to_prove_by_gas` is kept as a wrapper with k = 0, so k = 0 is exactly the previous
+behaviour; the existing `get_ranges_to_prove_by_gas` tests, which now run through the weighted code,
+pin that. The proposer refuses to start if
+k > 0 but `RANGE_PROOF_EVM_GAS_LIMIT` is 0 (the weight would be silently ignored). Host-only: no
+ELF/vkey change.
+
+**Choosing k and W (from the load test).** Regression over 11 all-transfer and mixed ranges:
+`prove_seconds ≈ 461 + 68.5 × (gas / 1e9) + 496 × (userTxs / 1e5)` (R² 0.991). So one user
+transaction ≈ 72k gas (k ≈ 72,000), and a 2280s target gives W ≈ 26.5B. Values are set per
+environment in mantle-config once the load test confirms them (DEX-heavy traffic measured ~45%
+heavier per gas historically; pending new data).
+
+**Not covered.** Precompile-heavy traffic (blake2f, BLS12-381: up to ~46× the proving cost per
+gas) is not captured by gas or transaction count; that is what `RANGE_CYCLE_LIMIT` /
+`RANGE_GAS_LIMIT` are for, which needs the prover to enforce them (self-hosted cluster: pending).
+
 ## 4. Sync workflow
 
 When a new upstream Succinct Labs release lands (e.g. v3.9.0, v4.0.0):

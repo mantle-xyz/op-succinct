@@ -70,6 +70,28 @@ pub fn get_ranges_to_prove_by_gas(
     range_proof_interval: i64,
     block_infos: &HashMap<i64, BlockInfo>,
 ) -> Result<Vec<Range<i64>>> {
+    get_ranges_to_prove_by_weighted_gas(
+        disjoint_ranges,
+        evm_gas_limit,
+        0,
+        range_proof_interval,
+        block_infos,
+    )
+}
+
+/// [MANTLE] [`get_ranges_to_prove_by_gas`], with each block weighted as
+/// `gas_used + tx_gas_weight × user transactions` (`transaction_count − 1`: every block carries
+/// one L1-attributes deposit). Proving cost has a per-transaction part that gas alone misses: at
+/// the same gas, an all-transfer range costs ~3× a mixed one (6.1B vs 18.6B gas per 2280s proof),
+/// so a gas-only limit either over-splits mixed traffic or lets transfer-heavy ranges through.
+/// `tx_gas_weight = 0` is exactly `get_ranges_to_prove_by_gas`. See MANTLE_CHANGES.md §3.15.
+pub fn get_ranges_to_prove_by_weighted_gas(
+    disjoint_ranges: &[Range<i64>],
+    evm_gas_limit: u64,
+    tx_gas_weight: u64,
+    range_proof_interval: i64,
+    block_infos: &HashMap<i64, BlockInfo>,
+) -> Result<Vec<Range<i64>>> {
     let mut ranges = Vec::new();
 
     for &Range { start, end } in disjoint_ranges {
@@ -95,16 +117,20 @@ pub fn get_ranges_to_prove_by_gas(
                 ));
             }
 
+            let block_weight = block_info.gas_used.saturating_add(
+                tx_gas_weight.saturating_mul(block_info.transaction_count.saturating_sub(1)),
+            );
+
             // Check if adding this block would exceed gas limit or block count limit
-            if (accumulated_gas > 0 && accumulated_gas + block_info.gas_used > evm_gas_limit) ||
+            if (accumulated_gas > 0 && accumulated_gas.saturating_add(block_weight) > evm_gas_limit) ||
                 (range_proof_interval > 0 && block_num - current_start > range_proof_interval)
             {
                 // Create a range from current_start to the previous block
                 ranges.push(current_start..block_num - 1);
                 current_start = block_num - 1;
-                accumulated_gas = block_info.gas_used;
+                accumulated_gas = block_weight;
             } else {
-                accumulated_gas += block_info.gas_used;
+                accumulated_gas = accumulated_gas.saturating_add(block_weight);
             }
         }
 
@@ -314,6 +340,113 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    // [MANTLE] Tests for get_ranges_to_prove_by_weighted_gas (§3.15).
+    fn weighted_block_infos(blocks: &[(i64, u64, u64)]) -> HashMap<i64, BlockInfo> {
+        blocks
+            .iter()
+            .map(|&(block_number, gas_used, transaction_count)| {
+                (
+                    block_number,
+                    BlockInfo {
+                        block_number: block_number as u64,
+                        transaction_count,
+                        gas_used,
+                        total_l1_fees: 0,
+                        total_tx_fees: 0,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn weighted_with_zero_weight_equals_gas_only() {
+        let blocks = [
+            (1, 50_000_000, 900),
+            (2, 20_000_000, 10),
+            (3, 40_000_000, 1),
+            (4, 10_000_000, 5000),
+            (5, 60_000_000, 2),
+        ];
+        let infos = weighted_block_infos(&blocks);
+        for interval in [0, 2, 600] {
+            assert_eq!(
+                get_ranges_to_prove_by_weighted_gas(&[0..5], 100_000_000, 0, interval, &infos)
+                    .unwrap(),
+                get_ranges_to_prove_by_gas(&[0..5], 100_000_000, interval, &infos).unwrap(),
+            );
+        }
+    }
+
+    /// Transfer-heavy blocks: low gas but many transactions. Gas alone (60M) fits in one range;
+    /// with 72k gas per user transaction each block weighs 20M + 72k × 999 ≈ 92M.
+    #[test]
+    fn weighted_splits_transaction_heavy_blocks() {
+        let infos = weighted_block_infos(&[
+            (1, 20_000_000, 1000),
+            (2, 20_000_000, 1000),
+            (3, 20_000_000, 1000),
+        ]);
+        assert_eq!(
+            get_ranges_to_prove_by_gas(&[0..3], 100_000_000, 600, &infos).unwrap(),
+            vec![0..3]
+        );
+        assert_eq!(
+            get_ranges_to_prove_by_weighted_gas(&[0..3], 100_000_000, 72_000, 600, &infos).unwrap(),
+            vec![0..1, 1..2, 2..3]
+        );
+    }
+
+    /// Gas-heavy blocks with few transactions split (almost) as with gas alone.
+    #[test]
+    fn weighted_leaves_gas_heavy_blocks_as_gas_only() {
+        let infos =
+            weighted_block_infos(&[(1, 40_000_000, 3), (2, 40_000_000, 3), (3, 40_000_000, 3)]);
+        assert_eq!(
+            get_ranges_to_prove_by_weighted_gas(&[0..3], 100_000_000, 72_000, 600, &infos).unwrap(),
+            get_ranges_to_prove_by_gas(&[0..3], 100_000_000, 600, &infos).unwrap(),
+        );
+    }
+
+    /// The L1-attributes deposit (one per block) is not weighted; an empty block weighs nothing
+    /// beyond its gas.
+    #[test]
+    fn weighted_ignores_the_system_transaction() {
+        let infos = weighted_block_infos(&[(1, 0, 1), (2, 0, 1), (3, 0, 0)]);
+        assert_eq!(
+            get_ranges_to_prove_by_weighted_gas(&[0..3], 1, u64::MAX, 600, &infos).unwrap(),
+            vec![0..3]
+        );
+    }
+
+    /// A single block heavier than the limit still forms its own range; the block interval still
+    /// applies; huge weights saturate instead of overflowing.
+    #[test]
+    fn weighted_single_heavy_block_interval_and_saturation() {
+        let infos = weighted_block_infos(&[
+            (1, 1_000, 10),
+            (2, 1_000, u64::MAX),
+            (3, 1_000, 10),
+            (4, 1_000, 10),
+            (5, 1_000, 10),
+        ]);
+        assert_eq!(
+            get_ranges_to_prove_by_weighted_gas(&[0..5], 100_000, u64::MAX, 600, &infos).unwrap(),
+            vec![0..1, 1..2, 2..3, 3..4, 4..5]
+        );
+        let light = weighted_block_infos(&[
+            (1, 1_000, 2),
+            (2, 1_000, 2),
+            (3, 1_000, 2),
+            (4, 1_000, 2),
+            (5, 1_000, 2),
+        ]);
+        assert_eq!(
+            get_ranges_to_prove_by_weighted_gas(&[0..5], 100_000_000, 72_000, 2, &light).unwrap(),
+            vec![0..2, 2..4, 4..5]
+        );
     }
 
     #[test]

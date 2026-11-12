@@ -74,12 +74,22 @@ async fn main() -> Result<()> {
         ));
     }
 
+    // [MANTLE] The per-transaction weight only applies to gas-based splitting; set without a gas
+    // limit it would be silently ignored, so refuse to start.
+    if env_config.tx_gas_weight > 0 && env_config.evm_gas_limit == 0 {
+        return Err(anyhow::anyhow!(
+            "RANGE_PROOF_TX_GAS_WEIGHT is set but RANGE_PROOF_EVM_GAS_LIMIT is 0; the weight only \
+             applies to gas-based range splitting. Set RANGE_PROOF_EVM_GAS_LIMIT or unset the weight"
+        ));
+    }
+
     let proposer_config = RequesterConfig {
         l1_chain_id: fetcher.l1_provider.get_chain_id().await? as i64,
         l2_chain_id: fetcher.l2_provider.get_chain_id().await? as i64,
         l2oo_address: env_config.l2oo_address,
         dgf_address: env_config.dgf_address,
         evm_gas_limit: env_config.evm_gas_limit,
+        tx_gas_weight: env_config.tx_gas_weight,
         range_proof_interval: env_config.range_proof_interval,
         max_concurrent_witness_gen: env_config.max_concurrent_witness_gen,
         max_concurrent_proof_requests: env_config.max_concurrent_proof_requests,
