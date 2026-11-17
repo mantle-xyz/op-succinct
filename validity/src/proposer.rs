@@ -51,7 +51,8 @@ use crate::{
         RelayRejection,
     },
     ChainLease, CommitmentConfig, ContractConfig, LoopProgress, OPSuccinctProofRequester,
-    ProgramConfig, RequestExecutionStatistics, RequesterConfig, ValidityGauge,
+    ProgramConfig, RequestExecutionStatistics, RequesterConfig, SubmissionCheckpoints,
+    ValidityGauge,
 };
 
 /// Number of consecutive poll failures before a cluster proof is marked as permanently failed.
@@ -570,6 +571,37 @@ mod failed_task_routing_tests {
     }
 }
 
+/// [MANTLE] Where an aggregation over the contiguous chain should end so the L1 output lands on
+/// the submission grid `latest_proposed + k × submission_interval` (MANTLE_CHANGES.md §3.15).
+///
+/// Returns the last range end in the chain that is on the grid; if no range in the chain ends on
+/// it (block-based ranges whose interval does not divide the submission interval, or ranges cut
+/// before checkpoint alignment), `contiguous_end` — i.e. the previous behaviour. Ranges past the
+/// returned end stay completed and are aggregated next time, from the new latest proposed block.
+/// Assumes `completed` is sorted and already validated by [`highest_contiguous_end`].
+fn aggregation_end_on_grid(
+    latest_proposed: i64,
+    completed: &[(i64, i64)],
+    contiguous_end: i64,
+    submission_interval: i64,
+) -> i64 {
+    if submission_interval <= 0 {
+        return contiguous_end;
+    }
+    let mut on_grid = None;
+    let mut current = latest_proposed;
+    for &(start, end) in completed {
+        if start != current || end > contiguous_end {
+            break;
+        }
+        current = end;
+        if (end - latest_proposed) % submission_interval == 0 {
+            on_grid = Some(end);
+        }
+    }
+    on_grid.unwrap_or(contiguous_end)
+}
+
 /// Return the end of the completed range chain beginning at `expected_start`.
 fn highest_contiguous_end(
     expected_start: i64,
@@ -916,12 +948,26 @@ where
                 }
             }
 
-            // [MANTLE] Weighted by user transactions when RANGE_PROOF_TX_GAS_WEIGHT > 0.
+            // [MANTLE] Gas-based ranges never cross a submission checkpoint (latest proposed +
+            // k × the effective submission interval — the same value `create_aggregation_proofs`
+            // uses), so aggregations land on the same grid as with block-based splitting.
+            // Weighted by user transactions when RANGE_PROOF_TX_GAS_WEIGHT > 0. MANTLE_CHANGES.md
+            // §3.15.
+            let contract_submission_interval: u64 =
+                self.contract_config.l2oo_contract.submissionInterval().call().await?.to::<u64>();
+            let checkpoints = SubmissionCheckpoints {
+                base: latest_proposed_block_number as i64,
+                interval: contract_submission_interval
+                    .max(self.requester_config.submission_interval)
+                    as i64,
+                tip: finalized_block_number as i64,
+            };
             get_ranges_to_prove_by_weighted_gas(
                 &disjoint_ranges,
                 self.requester_config.evm_gas_limit,
                 self.requester_config.tx_gas_weight,
                 self.requester_config.range_proof_interval as i64,
+                Some(checkpoints),
                 &all_block_infos,
             )?
         } else {
@@ -1868,6 +1914,17 @@ where
             contract_submission_interval.max(self.requester_config.submission_interval) as i64;
 
         debug!("Submission interval for aggregation proof: {}.", submission_interval);
+
+        // [MANTLE] End the aggregation on the submission grid. A range of the next period can
+        // complete before the last one of this period (a retry, or concurrent proving); taking the
+        // whole contiguous chain would then put the output off the grid and re-base it. Ranges
+        // past the grid point are aggregated next time.
+        let highest_proven_contiguous_block_number = aggregation_end_on_grid(
+            latest_proposed_block_number,
+            &completed_range_proofs,
+            highest_proven_contiguous_block_number,
+            submission_interval,
+        );
 
         // If the highest proven contiguous block number is greater than the latest proposed block
         // number plus the submission interval, create an aggregation proof.
@@ -3661,8 +3718,9 @@ mod tests {
     };
 
     use super::{
-        handle_terminal_proof_failure_before_request_details, highest_contiguous_end,
-        select_checkpoint_block_number, OPSuccinctRequest, RequestStatus, RequestType,
+        aggregation_end_on_grid, handle_terminal_proof_failure_before_request_details,
+        highest_contiguous_end, select_checkpoint_block_number, OPSuccinctRequest, RequestStatus,
+        RequestType,
     };
 
     #[test]
@@ -3688,6 +3746,27 @@ mod tests {
             highest_contiguous_end(100, &[(100, 200), (200, 300), (400, 500)]).unwrap(),
             Some(300)
         );
+    }
+
+    /// [MANTLE] §3.15: the next period's range completed before this period's last one; the
+    /// aggregation stops at the checkpoint (1800) instead of 2500.
+    #[test]
+    fn aggregation_ends_on_the_grid() {
+        let completed = [(0, 700), (700, 1400), (1400, 1800), (1800, 2500)];
+        assert_eq!(aggregation_end_on_grid(0, &completed, 2500, 1800), 1800);
+        // Several full periods: still on the grid, all of them in one aggregation.
+        let periods = [(0, 1800), (1800, 3600), (3600, 4000)];
+        assert_eq!(aggregation_end_on_grid(0, &periods, 4000, 1800), 3600);
+        // Grid counted from the latest proposed block.
+        assert_eq!(aggregation_end_on_grid(1234, &[(1234, 3034), (3034, 3500)], 3500, 1800), 3034);
+    }
+
+    /// No range ends on the grid (unaligned ranges): previous behaviour, the whole chain.
+    #[test]
+    fn aggregation_end_falls_back_to_the_contiguous_end() {
+        let unaligned = [(0, 1000), (1000, 2000)];
+        assert_eq!(aggregation_end_on_grid(0, &unaligned, 2000, 1800), 2000);
+        assert_eq!(aggregation_end_on_grid(0, &unaligned, 2000, 0), 2000);
     }
 
     #[test]

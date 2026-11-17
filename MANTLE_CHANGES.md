@@ -1415,6 +1415,52 @@ pin that. The proposer refuses to start if
 k > 0 but `RANGE_PROOF_EVM_GAS_LIMIT` is 0 (the weight would be silently ignored). Host-only: no
 ELF/vkey change.
 
+**Ranges never cross a submission checkpoint.** Greedy gas cuts used to drift off the
+submission grid: the block cap counted from the last cut, so after any gas cut a range could
+straddle `latest proposed + k × 1800`. The 1800th block of a period then landed in the next
+period's range, and the aggregation (which takes every contiguous completed range) overshot the
+checkpoint and waited for that straddling range; near the tip, each loop also inserted the
+unfinished tail as a small range. Gas-based splitting now follows checkpoints
+`latest_proposed + k × I`, with `I = max(contract submissionInterval, SUBMISSION_INTERVAL)` — the
+interval aggregation uses:
+
+1. a block that would push the range over W starts a new range;
+2. a range always ends at a checkpoint, whether or not it reached W;
+3. `RANGE_PROOF_INTERVAL` still caps the blocks per range (from the last cut);
+4. the last piece of a gap is inserted, except at the tip: the gap ending at the highest provable
+   block waits for the next loop unless its piece reached W or `RANGE_PROOF_INTERVAL`. A gap ending
+   at an existing range (e.g. a failed range being rebuilt) gets no more blocks and is inserted in
+   full — applying rule 4 there would leave it unproven forever.
+
+| Load | One 1800-block period | Aggregation |
+|---|---|---|
+| idle / low | one range, cut at the checkpoint — same as block-based splitting | every 1800 blocks |
+| high (W reached at 700, 1400) | 0–700, 700–1400, 1400–1800; the last piece is cut at the checkpoint, not carried over | once the three are proven |
+| catching up | several periods in one pass, none crossing a checkpoint | on the grid; one aggregation may cover several whole periods |
+
+**Aggregation ends on the grid.** Aligned ranges alone are not enough: aggregation takes every
+contiguous completed range, so if a range of the next period completes before the last one of the
+current period (a retry, or `MAX_CONCURRENT_PROOF_REQUESTS` > 1) the output would land past the
+checkpoint (e.g. 0–2500 instead of 0–1800) and re-base the grid. `create_aggregation_proofs` now
+ends the aggregation at the last range end in the contiguous chain that is on the grid
+(`aggregation_end_on_grid`); the ranges past it stay completed and go into the next aggregation.
+If no range in the chain ends on the grid — block-based ranges whose `RANGE_PROOF_INTERVAL` does
+not divide the submission interval, or ranges cut before this change — it falls back to the whole
+contiguous chain, the previous behaviour. With block-based splitting at the default 1800/1800 the
+chain always ends on the grid, so nothing changes there.
+
+This applies whenever `RANGE_PROOF_EVM_GAS_LIMIT` > 0, with or without the tx weight; block-based
+splitting is unchanged (aligned by construction when `RANGE_PROOF_INTERVAL` divides the submission
+interval). `get_ranges_to_prove_by_gas` (upstream signature, now only used by its tests) keeps the
+old greedy behaviour. The grid re-bases on every loop from the on-chain latest proposed block, so a
+one-off unaligned output (e.g. ranges created before this change) is absorbed after the next
+submission. If the highest provable block stalls between checkpoints, the tip piece is not inserted
+until it moves — as with block-based splitting. A greedy split is already minimal in range count;
+balancing a period's ranges would only delay the first range until the period is complete, so it
+was not done. A W cut just before a checkpoint can leave a small last range in that period (one
+extra fixed proving overhead), never one that crosses into the next. Tests: `checkpoint_*` in
+`validity/src/utils.rs`; `aggregation_end_*` in `validity/src/proposer.rs`.
+
 **Choosing k and W (from the load test).** Regression over 11 all-transfer and mixed ranges:
 `prove_seconds ≈ 461 + 68.5 × (gas / 1e9) + 496 × (userTxs / 1e5)` (R² 0.991). So one user
 transaction ≈ 72k gas (k ≈ 72,000), and a 2280s target gives W ≈ 26.5B. Values are set per

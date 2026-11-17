@@ -75,8 +75,26 @@ pub fn get_ranges_to_prove_by_gas(
         evm_gas_limit,
         0,
         range_proof_interval,
+        None,
         block_infos,
     )
+}
+
+/// [MANTLE] Submission checkpoints for gas-based splitting: `base + k × interval` (k ≥ 1), where
+/// `base` is the latest proposed block and `interval` the effective submission interval, and `tip`
+/// is the highest provable block (the end of the last gap). See
+/// [`get_ranges_to_prove_by_weighted_gas`].
+#[derive(Debug, Clone, Copy)]
+pub struct SubmissionCheckpoints {
+    pub base: i64,
+    pub interval: i64,
+    pub tip: i64,
+}
+
+impl SubmissionCheckpoints {
+    fn is_checkpoint(&self, block: i64) -> bool {
+        self.interval > 0 && block > self.base && (block - self.base) % self.interval == 0
+    }
 }
 
 /// [MANTLE] [`get_ranges_to_prove_by_gas`], with each block weighted as
@@ -84,12 +102,25 @@ pub fn get_ranges_to_prove_by_gas(
 /// one L1-attributes deposit). Proving cost has a per-transaction part that gas alone misses: at
 /// the same gas, an all-transfer range costs ~3× a mixed one (6.1B vs 18.6B gas per 2280s proof),
 /// so a gas-only limit either over-splits mixed traffic or lets transfer-heavy ranges through.
-/// `tx_gas_weight = 0` is exactly `get_ranges_to_prove_by_gas`. See MANTLE_CHANGES.md §3.15.
+///
+/// With `checkpoints`, no range crosses a submission checkpoint, so aggregations land on the same
+/// `latest proposed + k × interval` grid as with block-based splitting:
+/// 1. a block that would push the range over `evm_gas_limit` starts a new range;
+/// 2. a range always ends at a checkpoint, whether or not it reached the limit;
+/// 3. `range_proof_interval` still caps the blocks per range (counted from the last cut);
+/// 4. the last piece of a gap is inserted, except at the tip (gap ending at `tip`): there it waits
+///    for the next loop unless it reached the limit or `range_proof_interval`. A gap ending at an
+///    existing range (e.g. a failed range being rebuilt) gets no more blocks, so it must be
+///    inserted in full.
+///
+/// `tx_gas_weight = 0` with `checkpoints = None` is exactly `get_ranges_to_prove_by_gas`. See
+/// MANTLE_CHANGES.md §3.15.
 pub fn get_ranges_to_prove_by_weighted_gas(
     disjoint_ranges: &[Range<i64>],
     evm_gas_limit: u64,
     tx_gas_weight: u64,
     range_proof_interval: i64,
+    checkpoints: Option<SubmissionCheckpoints>,
     block_infos: &HashMap<i64, BlockInfo>,
 ) -> Result<Vec<Range<i64>>> {
     let mut ranges = Vec::new();
@@ -132,11 +163,24 @@ pub fn get_ranges_to_prove_by_weighted_gas(
             } else {
                 accumulated_gas = accumulated_gas.saturating_add(block_weight);
             }
+
+            // [MANTLE] Rule 2: a range never crosses a submission checkpoint.
+            if checkpoints.is_some_and(|c| c.is_checkpoint(block_num)) {
+                ranges.push(current_start..block_num);
+                current_start = block_num;
+                accumulated_gas = 0;
+            }
         }
 
         // Handle remaining blocks
         if current_start < end {
-            ranges.push(current_start..end);
+            // [MANTLE] Rule 4: at the tip, an unfinished piece waits for the next loop.
+            let open_at_tip = checkpoints.is_some_and(|c| end == c.tip) &&
+                accumulated_gas < evm_gas_limit &&
+                (range_proof_interval <= 0 || end - current_start < range_proof_interval);
+            if !open_at_tip {
+                ranges.push(current_start..end);
+            }
         }
     }
 
@@ -373,8 +417,15 @@ mod tests {
         let infos = weighted_block_infos(&blocks);
         for interval in [0, 2, 600] {
             assert_eq!(
-                get_ranges_to_prove_by_weighted_gas(&[0..5], 100_000_000, 0, interval, &infos)
-                    .unwrap(),
+                get_ranges_to_prove_by_weighted_gas(
+                    &[0..5],
+                    100_000_000,
+                    0,
+                    interval,
+                    None,
+                    &infos
+                )
+                .unwrap(),
                 get_ranges_to_prove_by_gas(&[0..5], 100_000_000, interval, &infos).unwrap(),
             );
         }
@@ -394,7 +445,8 @@ mod tests {
             vec![0..3]
         );
         assert_eq!(
-            get_ranges_to_prove_by_weighted_gas(&[0..3], 100_000_000, 72_000, 600, &infos).unwrap(),
+            get_ranges_to_prove_by_weighted_gas(&[0..3], 100_000_000, 72_000, 600, None, &infos)
+                .unwrap(),
             vec![0..1, 1..2, 2..3]
         );
     }
@@ -405,7 +457,8 @@ mod tests {
         let infos =
             weighted_block_infos(&[(1, 40_000_000, 3), (2, 40_000_000, 3), (3, 40_000_000, 3)]);
         assert_eq!(
-            get_ranges_to_prove_by_weighted_gas(&[0..3], 100_000_000, 72_000, 600, &infos).unwrap(),
+            get_ranges_to_prove_by_weighted_gas(&[0..3], 100_000_000, 72_000, 600, None, &infos)
+                .unwrap(),
             get_ranges_to_prove_by_gas(&[0..3], 100_000_000, 600, &infos).unwrap(),
         );
     }
@@ -416,7 +469,7 @@ mod tests {
     fn weighted_ignores_the_system_transaction() {
         let infos = weighted_block_infos(&[(1, 0, 1), (2, 0, 1), (3, 0, 0)]);
         assert_eq!(
-            get_ranges_to_prove_by_weighted_gas(&[0..3], 1, u64::MAX, 600, &infos).unwrap(),
+            get_ranges_to_prove_by_weighted_gas(&[0..3], 1, u64::MAX, 600, None, &infos).unwrap(),
             vec![0..3]
         );
     }
@@ -433,7 +486,8 @@ mod tests {
             (5, 1_000, 10),
         ]);
         assert_eq!(
-            get_ranges_to_prove_by_weighted_gas(&[0..5], 100_000, u64::MAX, 600, &infos).unwrap(),
+            get_ranges_to_prove_by_weighted_gas(&[0..5], 100_000, u64::MAX, 600, None, &infos)
+                .unwrap(),
             vec![0..1, 1..2, 2..3, 3..4, 4..5]
         );
         let light = weighted_block_infos(&[
@@ -444,8 +498,115 @@ mod tests {
             (5, 1_000, 2),
         ]);
         assert_eq!(
-            get_ranges_to_prove_by_weighted_gas(&[0..5], 100_000_000, 72_000, 2, &light).unwrap(),
+            get_ranges_to_prove_by_weighted_gas(&[0..5], 100_000_000, 72_000, 2, None, &light)
+                .unwrap(),
             vec![0..2, 2..4, 4..5]
+        );
+    }
+
+    // [MANTLE] Checkpoint-aligned splitting (§3.15). Blocks 1..=n with the given weights (gas only,
+    // one tx each so the tx weight never applies); checkpoints at base + k × interval.
+    fn cp_infos(weights: &[u64]) -> HashMap<i64, BlockInfo> {
+        let blocks: Vec<(i64, u64, u64)> =
+            weights.iter().enumerate().map(|(i, &w)| (i as i64 + 1, w, 1)).collect();
+        weighted_block_infos(&blocks)
+    }
+
+    fn cp(base: i64, interval: i64, tip: i64) -> Option<SubmissionCheckpoints> {
+        Some(SubmissionCheckpoints { base, interval, tip })
+    }
+
+    fn split(
+        gaps: &[Range<i64>],
+        limit: u64,
+        interval: i64,
+        checkpoints: Option<SubmissionCheckpoints>,
+        infos: &HashMap<i64, BlockInfo>,
+    ) -> Vec<Range<i64>> {
+        get_ranges_to_prove_by_weighted_gas(gaps, limit, 0, interval, checkpoints, infos).unwrap()
+    }
+
+    /// Idle / low load: one range per checkpoint period, same as block-based splitting.
+    #[test]
+    fn checkpoint_idle_one_range_per_period() {
+        let infos = cp_infos(&[1; 36]);
+        assert_eq!(split(&[0..36], 1_000, 18, cp(0, 18, 36), &infos), vec![0..18, 18..36]);
+        assert_eq!(get_ranges_to_prove_by_blocks(&[0..36], 18), vec![0..18, 18..36]);
+    }
+
+    /// High load: the limit cuts at blocks 7 and 14 inside an 18-block period; the last piece ends
+    /// at the checkpoint and is inserted at once.
+    #[test]
+    fn checkpoint_high_load_cuts_inside_the_period() {
+        let infos = cp_infos(&[10; 18]);
+        assert_eq!(split(&[0..18], 70, 18, cp(0, 18, 18), &infos), vec![0..7, 7..14, 14..18]);
+    }
+
+    /// The case that motivated this: the 18th block of the period would push the range over the
+    /// limit. It becomes its own one-block range ending at the checkpoint and is not carried into
+    /// the next period.
+    #[test]
+    fn checkpoint_last_block_of_period_is_not_carried_over() {
+        let mut w = vec![1u64; 36];
+        w[17] = 100; // block 18
+        let infos = cp_infos(&w);
+        assert_eq!(split(&[0..36], 100, 18, cp(0, 18, 36), &infos), vec![0..17, 17..18, 18..36]);
+    }
+
+    /// Catching up: several periods in one pass, no range crosses a checkpoint.
+    #[test]
+    fn checkpoint_catch_up_never_crosses_a_checkpoint() {
+        let infos = cp_infos(&[10; 54]);
+        let ranges = split(&[0..54], 100, 18, cp(0, 18, 54), &infos);
+        assert_eq!(ranges, vec![0..10, 10..18, 18..28, 28..36, 36..46, 46..54]);
+        for r in &ranges {
+            assert!((r.start + 1..r.end).all(|b| b % 18 != 0), "{r:?} crosses a checkpoint");
+        }
+    }
+
+    /// At the tip, a piece that reached neither the limit nor a checkpoint waits for the next loop;
+    /// once a checkpoint is reached it is inserted.
+    #[test]
+    fn checkpoint_open_tail_at_tip_waits() {
+        let infos = cp_infos(&[1; 18]);
+        assert_eq!(split(&[0..10], 1_000, 18, cp(0, 18, 10), &infos), Vec::<Range<i64>>::new());
+        assert_eq!(split(&[0..18], 1_000, 18, cp(0, 18, 18), &infos), vec![0..18]);
+        // A piece at the tip that already reached the limit is inserted (block 2 alone is 120);
+        // one still under it (60) waits.
+        let heavy = cp_infos(&[60, 120]);
+        assert_eq!(split(&[0..2], 100, 18, cp(0, 18, 2), &heavy), vec![0..1, 1..2]);
+        let under = cp_infos(&[60, 60]);
+        assert_eq!(split(&[0..2], 100, 18, cp(0, 18, 2), &under), vec![0..1]);
+    }
+
+    /// A gap that ends at an existing range (e.g. a failed range being rebuilt) gets no more
+    /// blocks, so its last piece is inserted even though it reached neither limit.
+    #[test]
+    fn checkpoint_gap_ending_at_an_existing_range_is_inserted() {
+        let infos = cp_infos(&[1; 40]);
+        // Gaps 0..5 (mid, bounded by an existing range 5..30) and 30..40 (tip at 40).
+        assert_eq!(split(&[0..5, 30..40], 1_000, 18, cp(0, 18, 40), &infos), vec![0..5, 30..36]);
+    }
+
+    /// RANGE_PROOF_INTERVAL smaller than the submission interval still caps blocks per range;
+    /// ranges stay inside the period.
+    #[test]
+    fn checkpoint_with_smaller_range_proof_interval() {
+        let infos = cp_infos(&[1; 18]);
+        assert_eq!(
+            split(&[0..18], 1_000, 5, cp(0, 18, 18), &infos),
+            vec![0..5, 5..10, 10..15, 15..18]
+        );
+    }
+
+    /// Checkpoints are counted from the latest proposed block, not from multiples of the interval.
+    #[test]
+    fn checkpoint_base_is_the_latest_proposed_block() {
+        let blocks: Vec<(i64, u64, u64)> = (1235..=1270).map(|b| (b, 1, 1)).collect();
+        let infos = weighted_block_infos(&blocks);
+        assert_eq!(
+            split(&[1234..1270], 1_000, 18, cp(1234, 18, 1270), &infos),
+            vec![1234..1252, 1252..1270]
         );
     }
 
