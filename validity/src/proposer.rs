@@ -49,8 +49,8 @@ use crate::{
         classify_revert_data, revert_data_of_anyhow, revert_data_of_rpc_error, NoVerdictReason,
         RelayRejection,
     },
-    CommitmentConfig, ContractConfig, OPSuccinctProofRequester, ProgramConfig,
-    RequestExecutionStatistics, RequesterConfig, ValidityGauge,
+    ChainLease, CommitmentConfig, ContractConfig, LoopProgress, OPSuccinctProofRequester,
+    ProgramConfig, RequestExecutionStatistics, RequesterConfig, ValidityGauge,
 };
 
 /// Number of consecutive poll failures before a cluster proof is marked as permanently failed.
@@ -344,10 +344,23 @@ const ADMISSION_SHED_MARKER: &str = "x-sp1-admission-shed";
 /// prover pool was momentarily full) rather than a genuine proof/range failure.
 /// A shed is transient: the request must be retried as-is, NOT marked Failed —
 /// marking it Failed counts toward range bisection and needlessly fragments the
-/// range (the prover is just busy, not the range too big). The marker travels
-/// in the tonic `Status` message + metadata, so it appears in the error's debug
-/// rendering regardless of any anyhow wrapping.
+/// range (the prover is just busy, not the range too big).
+///
+/// The gateway/router put the marker in both the `Status` trailer (metadata) and
+/// the message prefix. When the error is a downcastable `Status` (our tonic is
+/// the SDK's — see `tonic_matches_the_sdk`) both are checked directly, so a
+/// change to the message wording cannot hide a shed. Otherwise only the rendered
+/// text is available — e.g. the cluster-direct path, which stringifies its eyre
+/// errors — and since tonic 0.13 `Status`'s Display omits metadata, the message
+/// prefix is what that fallback relies on.
 fn is_admission_shed_error(e: &anyhow::Error) -> bool {
+    if let Some(status) = e.downcast_ref::<tonic::Status>() {
+        if status.metadata().contains_key(ADMISSION_SHED_MARKER) ||
+            status.message().contains(ADMISSION_SHED_MARKER)
+        {
+            return true;
+        }
+    }
     format!("{e:?}").contains(ADMISSION_SHED_MARKER)
 }
 
@@ -380,10 +393,22 @@ fn is_transient_transport_error(e: &anyhow::Error) -> bool {
         return status.code() == tonic::Code::Unavailable;
     }
     let rendered = format!("{e:?}");
-    rendered.contains("status: Unavailable") ||
+    UNAVAILABLE_RENDERINGS.iter().any(|r| rendered.contains(r)) ||
         rendered.contains("tcp connect error") ||
         rendered.contains("error trying to connect")
 }
+
+/// How a `Status` with that code renders when it is *not* our tonic type (so the typed downcast
+/// above misses): tonic 0.12 displays `status: <Code:?>`, tonic 0.13+ displays
+/// `code: '<Code::description>'`. Both are listed so the fallback survives the next SDK tonic bump
+/// as well as the one that motivated it (SP1 6.10.0 moved to tonic 0.14 while this crate was still
+/// on 0.12 — `tonic_matches_the_sdk` now guards that). The descriptions are tonic's own strings.
+const UNAVAILABLE_RENDERINGS: &[&str] =
+    &["status: Unavailable", "code: 'The service is currently unavailable'"];
+const FAILED_PRECONDITION_RENDERINGS: &[&str] = &[
+    "status: FailedPrecondition",
+    "code: 'The system is not in a state required for the operation's execution'",
+];
 
 /// Whether the prover backend rejected the request because its own state does not admit it,
 /// rather than because anything is wrong with the range.
@@ -434,7 +459,8 @@ fn is_unsatisfiable_precondition_error(e: &anyhow::Error) -> bool {
     if let Some(status) = e.downcast_ref::<tonic::Status>() {
         return status.code() == tonic::Code::FailedPrecondition;
     }
-    format!("{e:?}").contains("status: FailedPrecondition")
+    let rendered = format!("{e:?}");
+    FAILED_PRECONDITION_RENDERINGS.iter().any(|r| rendered.contains(r))
 }
 
 /// Why this failure must not bisect the range, or `None` if bisection is the right response.
@@ -589,12 +615,18 @@ where
     /// `ClusterProofHandle`; the network path had no equivalent, so a request the network could
     /// no longer answer for was polled forever. Cleared on the first success and on abandon.
     network_poll_failures: Arc<Mutex<HashMap<i64, u32>>>,
+    /// [MANTLE] This process's chain lock lease; checked before every L1 send.
+    chain_lease: ChainLease,
+    /// [MANTLE] Main-loop progress, read by the watchdog in `main`.
+    progress: LoopProgress,
 }
 
 impl<P, H: OPSuccinctHost> Proposer<P, H>
 where
     P: Provider + 'static + Clone,
 {
+    // [MANTLE] Two more for the chain lease and loop progress (chain_lock.rs).
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         provider: P,
         db_client: Arc<DriverDBClient>,
@@ -603,6 +635,8 @@ where
         signer: SignerLock,
         loop_interval: u64,
         host: Arc<H>,
+        chain_lease: ChainLease,
+        progress: LoopProgress,
     ) -> Result<Self> {
         let is_cluster = is_cluster_mode();
         anyhow::ensure!(
@@ -610,57 +644,12 @@ where
             "PRIVATE_STDIN only applies to SP1 network proof requests; disable mock mode and SP1_PROVER=cluster"
         );
 
-        // [MANTLE] The chain lock is a lease of `loop_interval`, refreshed by `update_chain_lock`
-        // at the end of each iteration and checked only here, at startup. For it to do its job the
-        // lease must outlast the slowest iteration: otherwise a restart during a slow one reads
-        // the lease as expired and starts a second proposer against the same account, and the two
-        // then fight over nonces and double-submit.
-        //
-        // An iteration can broadcast twice (aggregation submission and a checkpoint), each now
-        // waiting up to `(1 + L1_TX_MAX_BUMPS) * TX_CONFIRMATION_TIMEOUT` because of fee
-        // escalation. The imbalance predates escalation — two 60s sends already exceeded a 60s
-        // lease — but escalation widens it by the bump factor, so it is worth surfacing.
-        //
-        // Warned rather than enforced: the right setting depends on how the deployment supervises
-        // restarts, and refusing to start would be worse than the risk being warned about.
-        let worst_case_send = op_succinct_signer_utils::GasPolicy::from_env()
-            .worst_case_send_secs(requester_config.tx_confirmation_timeout);
-        let worst_case_iteration = loop_interval.saturating_add(2 * worst_case_send);
-        // Only complain when the gap is wide enough to matter; a lease merely a little shorter
-        // than the theoretical worst case is normal and would make this pure noise.
-        if worst_case_iteration > loop_interval.saturating_mul(2) {
-            tracing::warn!(
-                loop_interval,
-                tx_confirmation_timeout = requester_config.tx_confirmation_timeout,
-                worst_case_send,
-                worst_case_iteration,
-                "Chain lock lease (LOOP_INTERVAL) is well short of the slowest possible \
-                 iteration. A restart while a transaction is escalating may read the lease as \
-                 expired and allow a second proposer to start, which would contend for nonces. \
-                 ACTION: raise LOOP_INTERVAL toward the worst-case iteration, or lower \
-                 L1_TX_MAX_BUMPS / TX_CONFIRMATION_TIMEOUT."
-            );
-        }
-
-        // This check prevents users from running multiple proposers for the same chain at the same
-        // time.
-        let is_locked = db_client
-            .is_chain_locked(
-                requester_config.l1_chain_id,
-                requester_config.l2_chain_id,
-                Duration::from_secs(loop_interval),
-            )
-            .await?;
-        if is_locked {
-            return Err(anyhow!(
-                "There is another proposer for the same chain connected to the database. Only one proposer can be connected to the database for a chain at a time."
-            ));
-        }
-
-        // Add the chain lock to the database.
-        db_client
-            .add_chain_lock(requester_config.l1_chain_id, requester_config.l2_chain_id)
-            .await?;
+        // [MANTLE] The chain lock is no longer taken here. `main` acquires an owner-scoped lease
+        // (chain_lock.rs) before constructing the proposer and keeps it renewed from a background
+        // heartbeat; every L1 send checks it first. The former check-then-insert here was two
+        // statements, its lease was `LOOP_INTERVAL` — which `run` sleeps for in full, so the lease
+        // lapsed at the start of every iteration — and renewal was an unconditional UPDATE at the
+        // end of an iteration. See MANTLE_CHANGES.md §3.10d.
 
         let cluster_config =
             if is_cluster { Some(Arc::new(ClusterProofConfig::from_env().await?)) } else { None };
@@ -759,6 +748,8 @@ where
             proof_requester,
             tasks: Arc::new(Mutex::new(HashMap::new())),
             network_poll_failures: Arc::new(Mutex::new(HashMap::new())),
+            chain_lease,
+            progress,
         };
         Ok(proposer)
     }
@@ -1883,13 +1874,18 @@ where
                             .checkpointBlockHash(U256::from(checkpoint_header.number))
                             .into_transaction_request();
 
+                        // [MANTLE] Only the chain lock holder may send; see chain_lock.rs.
+                        self.chain_lease.ensure_held()?;
+                        let _sending = self.progress.begin_send()?;
+                        let lease = self.chain_lease.clone();
                         let receipt = self
                             .driver_config
                             .signer
-                            .send_transaction_request_with_timeout(
+                            .send_transaction_request_guarded(
                                 self.driver_config.fetcher.as_ref().rpc_config.l1_rpc.clone(),
                                 transaction_request,
                                 self.requester_config.tx_confirmation_timeout,
+                                &move || lease.ensure_held(),
                             )
                             .await?;
 
@@ -2383,13 +2379,22 @@ where
         // reverts on chain has to be replayed to recover why.
         let replay_request = transaction_request.clone();
 
+        // [MANTLE] Only the chain lock holder may send; see chain_lock.rs. Refused here, the
+        // submission is retried next iteration (if this process still holds the lock).
+        self.chain_lease.ensure_held()?;
+        let _sending = self.progress.begin_send()?;
+        // Checked again before every broadcast of this send, including fee-escalation
+        // replacements. A refusal surfaces as `Undelivered` below (no revert data), i.e. "retry
+        // unchanged" — by then the process is exiting on the lost lease anyway.
+        let lease = self.chain_lease.clone();
         let sent = self
             .driver_config
             .signer
-            .send_transaction_request_with_timeout(
+            .send_transaction_request_guarded(
                 self.driver_config.fetcher.as_ref().rpc_config.l1_rpc.clone(),
                 transaction_request,
                 self.requester_config.tx_confirmation_timeout,
+                &move || lease.ensure_held(),
             )
             .await;
 
@@ -2833,6 +2838,11 @@ where
 
         // Initialize the metrics gauges.
         ValidityGauge::init_all();
+        // [MANTLE] `init_all` zeroes every gauge, including the lease and progress ones set
+        // before the loop started; restore them, and count the start as progress for the
+        // watchdog.
+        self.chain_lease.publish_metrics();
+        self.progress.mark_progress();
 
         Ok(())
     }
@@ -2844,6 +2854,7 @@ where
             // Wrap the entire loop body in a match to handle errors
             match self.run_loop_iteration().await {
                 Ok(_) => {
+                    self.progress.mark_progress();
                     // Normal sleep between iterations
                     tokio::time::sleep(Duration::from_secs(self.driver_config.loop_interval)).await;
                 }
@@ -2975,11 +2986,9 @@ where
             self.request_queued_proofs().await?;
         }
 
-        // Update the chain lock.
-        self.proof_requester
-            .db_client
-            .update_chain_lock(self.requester_config.l1_chain_id, self.requester_config.l2_chain_id)
-            .await?;
+        // [MANTLE] No chain lock update here any more: the lease is renewed by the heartbeat in
+        // chain_lock.rs, independent of this loop. Renewing it only at the end of a successful
+        // iteration let it lapse during every iteration and whenever one returned early.
 
         Ok(())
     }
@@ -3584,7 +3593,7 @@ mod tests {
 mod admission_shed_tests {
     use super::{
         is_admission_shed_error, is_transient_transport_error, is_unsatisfiable_precondition_error,
-        no_bisect_reason,
+        no_bisect_reason, ADMISSION_SHED_MARKER,
     };
 
     /// `no_bisect_reason` is the single policy gate every failure path consults, so it has to
@@ -3617,6 +3626,68 @@ mod admission_shed_tests {
                 is_unsatisfiable_precondition_error(&e);
             assert_eq!(gate, predicates, "gate disagrees with predicates for {e:?}");
             assert_eq!(gate, expected_no_bisect, "wrong bisection policy for {e:?}");
+        }
+    }
+
+    /// The typed `tonic::Status` downcast only works while this crate and sp1-sdk resolve the same
+    /// tonic. SP1 6.10.0 moved the SDK to tonic 0.14 while this crate still pinned 0.12: everything
+    /// compiled and every test here passed (they build `Status` from *our* tonic), yet in
+    /// production every downcast returned None and UNAVAILABLE / FAILED_PRECONDITION bisected
+    /// ranges. This reads the lockfile so the next SDK bump fails here instead.
+    #[test]
+    fn tonic_matches_the_sdk() {
+        let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../Cargo.lock"))
+            .expect("workspace Cargo.lock");
+        // The `tonic` entries in a package's dependency list: `"tonic"` when the lockfile holds a
+        // single tonic, `"tonic 0.14.6"` when it holds several.
+        let tonic_deps_of = |package: &str| -> Vec<String> {
+            lock.split("[[package]]")
+                .filter(|block| block.contains(&format!("name = \"{package}\"\n")))
+                .flat_map(|block| {
+                    block
+                        .lines()
+                        .map(|line| line.trim().trim_end_matches(',').trim_matches('"'))
+                        .filter(|dep| *dep == "tonic" || dep.starts_with("tonic "))
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        let sdk = tonic_deps_of("sp1-sdk");
+        let ours = tonic_deps_of("op-succinct-validity");
+        assert_eq!(sdk.len(), 1, "expected exactly one tonic dependency of sp1-sdk: {sdk:?}");
+        assert_eq!(
+            ours, sdk,
+            "validity's `tonic` must be the version sp1-sdk uses (validity/Cargo.toml)"
+        );
+    }
+
+    /// The string fallback for a `Status` that is not our tonic type, in both renderings tonic
+    /// has used: 0.12 (`status: <Code>`) and 0.13+ (`code: '<description>'`).
+    #[test]
+    fn fallback_recognises_both_tonic_renderings() {
+        for rendering in [
+            "status: Unavailable, message: \"backend down\"",
+            "code: 'The service is currently unavailable', message: \"backend down\"",
+        ] {
+            let e = anyhow::anyhow!("{rendering}");
+            assert!(is_transient_transport_error(&e), "{rendering}");
+            assert!(no_bisect_reason(&e).is_some(), "{rendering}");
+        }
+        for rendering in [
+            "status: FailedPrecondition, message: \"program not registered for vk_hash abc\"",
+            "code: 'The system is not in a state required for the operation's execution', \
+             message: \"program not registered for vk_hash abc\"",
+        ] {
+            let e = anyhow::anyhow!("{rendering}");
+            assert!(is_unsatisfiable_precondition_error(&e), "{rendering}");
+            assert!(no_bisect_reason(&e).is_some(), "{rendering}");
+        }
+        // And a backend fault that is neither still bisects in either rendering.
+        for rendering in
+            ["status: Internal, message: \"x\"", "code: 'Internal error', message: \"x\""]
+        {
+            assert!(no_bisect_reason(&anyhow::anyhow!("{rendering}")).is_none(), "{rendering}");
         }
     }
 
@@ -3705,10 +3776,30 @@ mod admission_shed_tests {
         assert!(!is_unsatisfiable_precondition_error(&shed));
     }
 
+    /// With a downcastable `Status` the marker is read from the trailer (metadata) as well, so a
+    /// shed whose message wording changes is still recognised — and a plain UNAVAILABLE without
+    /// the marker anywhere is not a shed.
+    #[test]
+    fn admission_shed_is_read_from_the_status_trailer() {
+        let mut status = tonic::Status::unavailable("pool at capacity");
+        status
+            .metadata_mut()
+            .insert(ADMISSION_SHED_MARKER, tonic::metadata::MetadataValue::from_static("1"));
+        let trailer_only: anyhow::Error = status.into();
+        assert!(is_admission_shed_error(&trailer_only), "marker only in the trailer");
+
+        let in_message: anyhow::Error =
+            tonic::Status::unavailable(format!("{ADMISSION_SHED_MARKER}: pool at capacity")).into();
+        assert!(is_admission_shed_error(&in_message), "marker only in the message");
+
+        let plain: anyhow::Error = tonic::Status::unavailable("backend down").into();
+        assert!(!is_admission_shed_error(&plain), "no marker anywhere");
+    }
+
     #[test]
     fn detects_self_hosted_admission_shed_only() {
-        // A self-hosted gateway shed carries the marker in the Status message +
-        // metadata (which surface in the error's debug rendering).
+        // A self-hosted gateway shed as rendered text (the fallback path): the
+        // marker is the message prefix — tonic 0.13+ no longer renders metadata.
         let shed = anyhow::anyhow!(
             "status: Unavailable, message: \"x-sp1-admission-shed: self-hosted range proof pool at capacity; retry shortly\""
         );

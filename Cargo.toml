@@ -119,7 +119,7 @@ op-succinct-bindings = { path = "bindings" }
 # requirements, so `2.0.5` lets cargo resolve the whole family to the newest 2.x
 # (2.4.1 at the time of this sync). alloy-genesis >= 2.4.1 adds a `bogota_time`
 # field to `ChainConfig`, which mantle-v2's vendored kona (`kona-registry`
-# mantle-v1.6.3) does not initialize — the workspace fails to compile. Upstream avoids
+# v1.6.5) does not initialize — the workspace fails to compile. Upstream avoids
 # this only because its own lockfile pins the family lower. Our kona is pinned to
 # mantle-v2, so the alloy family moves when mantle-v2's kona moves, not before.
 alloy-signer-local = { version = "=2.4.2" }
@@ -150,6 +150,8 @@ alloy-rpc-types-eth = { version = "=2.4.2", default-features = false }
 alloy-rpc-types-trace = { version = "=2.4.2", default-features = false }
 alloy-signer = { version = "=2.4.2", default-features = false }
 alloy-signer-gcp = { version = "=2.4.2", default-features = false }
+# [MANTLE] AWS KMS L1 signer (utils/signer). Moves with the alloy family above.
+alloy-signer-aws = { version = "=2.4.2", default-features = false }
 alloy = { version = "=2.4.2", features = [
     "reqwest",
     "network",
@@ -191,22 +193,19 @@ revm = { git = "https://github.com/mantle-xyz/revm", rev = "c6df4c5ef5334e7757a2
 revm-precompile = { git = "https://github.com/mantle-xyz/revm", rev = "c6df4c5ef5334e7757a2b538bd0f39d77cb8cf12", default-features = false }
 op-revm = { git = "https://github.com/mantle-xyz/mantle-v2", branch = "dev/mantle-v1.6.3", default-features = false }
 
-# SP1 v6.8.1 (Hypercube). sp1-cluster pins the whole SP1 family with `=`, so the two move
-# together or the resolver fails. [MANTLE] Same pairing as our self-hosted cluster
-# (mantle-xyz/sp1-cluster `v2.8.4-admission-gate-1`) and prove-network; the three client crates
-# below are byte-identical between that fork and upstream `v2.8.4`, so we take upstream's tag.
-sp1-sdk = { version = "=6.8.1", features = ["network", "blocking", "profiling"] }
-sp1-lib = { version = "=6.8.1", features = ["verify"] }
-sp1-zkvm = { version = "=6.8.1", features = ["verify"] }
-sp1-build = "=6.8.1"
-sp1-prover = "=6.8.1"
-sp1-prover-types = "=6.8.1"
-sp1-core-executor = "=6.8.1"
-sp1-hypercube = "=6.8.1"
-sp1-primitives = "=6.8.1"
-sp1-cluster-artifact = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.8.4" }
-sp1-cluster-common = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.8.4" }
-sp1-cluster-utils = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.8.4" }
+# SP1 v6.10.0 (Hypercube) — must match the self-hosted prover network (sp1-cluster mantle-v2.9.0).
+sp1-sdk = { version = "=6.10.0", features = ["network", "blocking", "profiling"] }
+sp1-lib = { version = "=6.10.0", features = ["verify"] }
+sp1-zkvm = { version = "=6.10.0", features = ["verify"] }
+sp1-build = "=6.10.0"
+sp1-prover = "=6.10.0"
+sp1-prover-types = "=6.10.0"
+sp1-core-executor = "=6.10.0"
+sp1-hypercube = "=6.10.0"
+sp1-primitives = "=6.10.0"
+sp1-cluster-artifact = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.9.0" }
+sp1-cluster-common = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.9.0" }
+sp1-cluster-utils = { git = "https://github.com/succinctlabs/sp1-cluster.git", tag = "v2.9.0" }
 
 # kzg
 kzg-rs = { version = "0.2.8", features = ["rkyv", "serde"] }
@@ -222,6 +221,11 @@ gcloud-sdk = { version = "0.29", default-features = false, features = [
     "google-longrunning",
     "tls-webpki-roots",
 ] }
+# [MANTLE] AWS KMS L1 signer. Caret requirements on purpose: sp1-sdk's network signer already
+# pulls both, and these resolve to the same versions rather than adding a second copy.
+aws-config = "1"
+aws-credential-types = "1"
+aws-sdk-kms = "1"
 
 [profile.release-client-lto]
 inherits = "release"
@@ -230,7 +234,7 @@ codegen-units = 1
 lto = "fat"
 
 [patch.crates-io]
-sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.0.0" }
+sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.10.0" }
 # This tag must match the sha3 requirement of whatever `alloy-primitives` resolves to,
 # because `sha3-keccak` is what routes alloy's `keccak256()` through this crate — and the
 # patched fork is what turns that into an SP1 precompile syscall instead of software keccak.
@@ -247,10 +251,10 @@ sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sh
 # Note cargo will not re-resolve sha3 on its own if the locked version still satisfies the
 # requirement — force it with `cargo update -p sha3 --precise <version>`.
 sha3 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha3", tag = "patch-sha3-0.11.0-sp1-6.0.0" }
-substrate-bn = { git = "https://github.com/sp1-patches/bn", tag = "patch-0.6.0-sp1-6.0.0-substrate-bn" }
-p256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-p256-13.2-sp1-6.0.0" }
-k256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-k256-13.4-sp1-6.0.0" }
-tiny-keccak = { git = "https://github.com/sp1-patches/tiny-keccak", tag = "patch-2.0.2-sp1-6.0.0" }
+substrate-bn = { git = "https://github.com/sp1-patches/bn", tag = "patch-0.6.0-sp1-6.10.0-substrate-bn" }
+p256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-p256-13.2-sp1-6.10.0" }
+k256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-k256-13.4-sp1-6.10.0" }
+tiny-keccak = { git = "https://github.com/sp1-patches/tiny-keccak", tag = "patch-2.0.2-sp1-6.10.0" }
 
 # Patch op-alloy and alloy-op-evm to use the mantle-v2 versions
 # Required so transitive deps from kona + op-alloy all resolve to the same source.

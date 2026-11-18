@@ -18,7 +18,7 @@ synchronizing future upstream changes.
 | Dependency source: alloy-evm | **upstream `alloy-rs/evm` v0.34.0 from crates.io — NOT patched.** The former `mantle-xyz/evm @ mantle-v0.34.0` fork only added a dead-code `token_ratio` trait method; mantle-v2/rust dropped it at `d2e4ebea` (commit `75d90fc71`), so the `[patch.crates-io]` redirect was removed here to stay in lockstep. |
 | Dependency source: alloy core/network | crates.io `=2.4.2` — deliberately **ahead** of upstream v3.14.0's `=2.1.1`, because kona v1.7.0's Mantle registry sets `ChainConfig.bogota_time`, which needs alloy-genesis 2.4.x. The direction reversed from the previous sync; see §3.12. |
 | Dependency source: alloy-primitives | crates.io `1.6.0` (resolves 1.7.3), moved with the kona v1.7.0 lockstep. The `sha3` patch tag moved with it: `patch-sha3-0.11.0-sp1-6.0.0`. Getting this pair out of step silently drops SP1 keccak acceleration; see §3.11's trap and the `patch.unused` check in §3.12. |
-| SP1 | `=6.4.0` + sp1-cluster tag `v2.7.2`. Deliberately below upstream v3.14.0's `=6.8.0` — `sp1-cluster v2.7.2` pins SP1 exactly, so a bump cannot resolve. This blocks the mTLS feature; see §3.12a and the §6.2 time bomb. |
+| SP1 | `=6.10.0` + sp1-cluster tag `v2.9.0` — came in when this branch merged `main` (§3.11a, §3.12c); the §3.12a SP1 deferral no longer applies to the version itself |
 | Contracts baseline | `mantle-xyz/op-succinct` tag `v1.1.7-2` (a.k.a. "v117"); ported into `contracts/` |
 
 ### 1.0 Release versioning
@@ -321,12 +321,100 @@ The upstream `GOOGLE_PROJECT_ID` 4-env path is retained as a fallback so deploym
 that can use ADC / GCE metadata service / Workload Identity Federation aren't forced
 into the hex-JSON convention.
 
-**Env var precedence in `Signer::from_env()`:**
+**Env var precedence in `Signer::from_env()`** — *superseded by §3.5a, kept for history:*
 1. `HSM_API_NAME` set → Mantle compat branch (memory-only creds)
 2. `GOOGLE_PROJECT_ID` + `GOOGLE_LOCATION` + `GOOGLE_KEYRING` set → upstream branch (ADC)
 3. `SIGNER_URL` + `SIGNER_ADDRESS` set → Web3Signer
 4. `PRIVATE_KEY` set → local plaintext signer
 5. None set → error
+
+### 3.5a AWS KMS L1 signer, and exactly-one signer selection
+
+Added for the move of the proposer's L1 key from GCP KMS to AWS KMS (after the 2026-10-06 HSM
+compromise). Host-only — no guest code, **no vkey change**.
+
+| File | Change |
+|---|---|
+| `utils/signer/src/lib.rs` | `Signer::AwsKmsSigner(alloy_signer_aws::AwsSigner)`, built from `L1_SIGNER_AWS_KMS_KEY_ID`. Two regions are kept apart: credentials (IRSA → STS) use the *home* region from the default chain (`AWS_REGION` — which EKS injects into every IRSA pod — `AWS_DEFAULT_REGION`, profile; the key's region only as a fallback when none is found), while **only the KMS client** uses the key ARN's region, with a warning if it differs from home. A cross-region (e.g. `mrk-`) key is legitimate, and pointing STS at the key's region would break pods whose egress only covers their own region. |
+| | `from_env` now goes through `select_signer_backend`: exactly one backend. |
+| | KMS signers (GCP and AWS) sign a fixed probe digest at startup and check it recovers to their address; backend + address logged as `L1 transaction signer ready`. |
+| | Local / GCP / AWS dispatch share `send_with_wallet` (the per-signer bodies were identical). It now **signs, records the tx hash, then broadcasts** (`fill` → `send_tx_envelope`) instead of `send_transaction`, which only yields the hash after the broadcast returns; the Web3Signer path records its hash before broadcasting too. Required by the attempt timeout below: a timeout firing mid-broadcast must not lose the hash of a transaction the node already accepted, or the escalation loop would report a mined transaction as failed and the proposer could resend a checkpoint. |
+| | Timeouts: AWS KMS calls 10s per attempt / 30s per operation (the SDK sets none); each L1 send attempt is bounded by the confirmation timeout + 120s for fill/sign/broadcast (all signer kinds); every L1 read made under the lock — the pre-send nonce/fee reads, the post-failure receipt lookup, the final nonce read — is bounded by 30s (the default HTTP client has no request timeout); the startup self-check by 60s. A hung KMS or RPC call would otherwise hold the `SignerLock` and stall every later send while probes stay green. `GasPolicy::worst_case_send_secs` is computed from the same bounds, so the proposer's chain-lock lease check (`validity/src/proposer.rs`) sees the real worst case — with defaults, 4 × (60 + 120 + 30 + 60) + 2 × 30 = 1140s per send instead of 240s. |
+| | **Post-failure success now requires the same `NUM_CONFIRMATIONS` (3) as the normal path** (`confirmed_receipt_among`). Pre-existing on `main`: after an attempt failed, the first receipt found among our hashes was returned as success immediately, so a transaction one block deep — still reorg-able — was reported to the proposer as a completed checkpoint/submission. It now waits (≤ the confirmation timeout) for 3 confirmations, re-reading the receipt each round; a receipt that disappears (reorg) resumes escalation, and a mined transaction that does not reach depth in time is an error, not a success. |
+| `Cargo.toml` | `alloy-signer-aws =2.0.4` (moves with the alloy family); `aws-config` / `aws-sdk-kms` `^1` resolve to the copies sp1-sdk already pulls. `Cargo.lock` adds only `alloy-signer-aws 2.0.4`; sp1-sdk's own `alloy-signer-aws 1.8.3` (alloy 1.x) coexists. |
+
+**Selection rules (replace the §3.5 precedence list):**
+- AWS KMS, GCP KMS (either shape) and Web3Signer are *remote* backends. One is configured as soon
+  as one of its **signer-specific** selecting variables is **present — even if empty** —
+  `L1_SIGNER_AWS_KMS_KEY_ID`, `HSM_API_NAME`, `GOOGLE_KEYRING`, `SIGNER_URL` — and must then have
+  all its required variables set to non-empty values, otherwise startup fails. Previously a
+  half-configured remote signer fell through, ultimately to `PRIVATE_KEY`, which mainnet's secret
+  also carries; that silent fallback is what this closes. "Present but empty" counts as configured
+  for the same reason: a template whose value failed to render (`HSM_API_NAME: ""`) must fail
+  loudly rather than start on the plaintext key.
+  Generic names other components read (`GOOGLE_PROJECT_ID`, `GOOGLE_LOCATION`, `HSM_KEY_NAME`, a
+  leftover `SIGNER_ADDRESS`) deliberately do not select a backend, or an unrelated setting would
+  become a "partially configured signer" startup failure.
+- Two configured remote backends → startup error (no precedence order).
+- `PRIVATE_KEY` only when no remote backend is configured; alongside one it is ignored with a
+  warning.
+- Values are trimmed before use (a secret mounted with a trailing newline is harmless).
+
+**Why `L1_SIGNER_AWS_KMS_KEY_ID`.** Two obvious names are taken:
+- `CRYPTO_KEY_ID` — other Mantle services name a KMS key this, but there it is the key
+  `/usr/lib/crypto` uses to *decrypt* the secrets listed in `CRYPTO_SECRET_NAMES` at startup —
+  mantle-succinct's mainnet config sets it today, next to `HSM_API_NAME`. Reading it as a signing
+  key would make mainnet fail at startup under the exactly-one rule (and a symmetric decrypt key
+  cannot sign anyway). Pinned by `mantle_crypto_key_id_is_not_a_signer`.
+- `AWS_KMS_KEY_ID` — Foundry's `--aws` wallet variable, which this repo's deploy scripts
+  (`contracts/lib/func.sh`) use for the **deployer** key. An operator who deployed and then ran
+  `clear-stuck-txs` from the same shell would sign as the deployer, with only a warning that
+  `PRIVATE_KEY` was ignored. Pinned by `foundry_and_stray_gcp_variables_do_not_select_a_backend`.
+  (An earlier revision of this branch used this name; a second review caught it.)
+
+**QA follow-ups (2026-10-28).** Seven findings from QA (1–5 on the first revision, 6–7 a second
+round), reproduced and fixed:
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | `AWS_ENDPOINT_URL` / `AWS_ENDPOINT_URL_STS` also reach the STS client that exchanges the IRSA web-identity token, so the token went to the override address. `AWS_ENDPOINT_URL_KMS` alone does not. | Both are refused at startup (`check_aws_endpoint_overrides`); the SDK has no public way to keep them from the credential provider. `AWS_ENDPOINT_URL_KMS` stays supported — mantle-config#16830 (hoodi-qa3) relies on it for a KMS VPC endpoint with private DNS off — and is logged. KMS requests are SigV4-signed: an endpoint sees the access key id and session token, not the secret key. An STS VPC endpoint must use private DNS. **Not covered:** an `endpoint_url` set in a shared config file (`AWS_CONFIG_FILE` / `~/.aws/config`) reaches STS the same way; the image ships no such file, so keep it that way. **Log caveat:** with `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true` the SDK ignores `AWS_ENDPOINT_URL_KMS` although it is still logged — do not set it. |
+| 2 | Static keys in the environment silently take precedence over IRSA; nothing in the logs showed it. | The KMS client's credentials go through `CredentialSourceRecorder`, which reads the source tags the SDK itself puts on every set of credentials (`AwsCredentialFeature`) — the identity KMS calls actually use, with no inference from the environment and no extra credential resolution. Logged at startup (`AWS credentials source`, access key id masked), also when loading the key fails (an AccessDenied is easier to read next to the identity that got it); a WARN when IRSA / Pod Identity is configured but the credentials came from another source (static keys, a shared config profile, …); a WARN if a later refresh comes from a different source. Not refused: static keys and profiles are legitimate for local runs. Earlier revisions inferred the source from environment variables and files; each review found another SDK rule they missed (`SECRET_ACCESS_KEY`, `~` expansion, profile fall-through), which is why it is observed now. |
+| 3 | `AWS_REGION=""` with a bare key id gave an opaque SDK endpoint error. Underneath: the SDK's environment region provider returns `Some("")` for a blank `AWS_REGION` and ends the region chain there, so `AWS_DEFAULT_REGION`, the profile and IMDS were never consulted. | Blank region variables are unset for the whole chain, as the SDK treats blank credential variables: the environment step is done here (`AWS_REGION`, then `AWS_DEFAULT_REGION`, blanks skipped), the rest of the default chain (profile file, then IMDS) is left to the SDK, and a WARN names the blank variable. A bare key id with no region anywhere gets "AWS region is unknown"; an ARN still sets the KMS region, while STS keeps the pod's own region. |
+| 4 | GCP signer construction had no timeout: with the token endpoint or KMS unreachable, startup hung silently (the signer is built before the metrics server, so only the startup probe would notice). | Building any KMS signer is bounded by `REMOTE_SIGNER_INIT_TIMEOUT` (60s) with an error naming the backend. |
+| 5 | A send whose attempts all failed *before broadcast* (signing error, gas-estimation revert) was escalated at higher fees and finally reported as "still pending" although nothing had been broadcast. Pre-existing on `main`, for every signer kind. The same held when the node *refused* the broadcast (insufficient funds, nonce too low): the hash is recorded before `eth_sendRawTransaction`, so a refused transaction counted as sent. | A broadcast the node refused for **insufficient funds** forgets its hash (`forget_if_rejected`, an allowlist: `DEFINITIVE_BROADCAST_REJECTIONS`) — not in any pool, and a higher fee cannot help. Everything else keeps it — transport errors and timeouts (outcome unknown), "already known" (the transaction is in the pool), an RPC gateway's own JSON-RPC error after the transaction may already have reached a node, "nonce too low" (a gateway retrying a broadcast that has meanwhile been mined gets exactly that for our own transaction), and "underpriced" (a fee bump *is* the fix; `clear-stuck-txs` hits it when its fee does not clear a stuck transaction's, and must keep escalating as on `main`). Wrongly keeping a hash only makes the final message less precise; wrongly forgetting one could report a mined transaction as failed and make the proposer send it again. If no attempt has a transaction that may be in a mempool, the send stops at once: `L1 transaction not sent: … nothing was broadcast`, cause kept in the chain (the proposer's revert-data classification is unchanged and now sees an estimate revert immediately instead of after three fee bumps (four attempts)). Once something has been broadcast, a replacement that fails before broadcast keeps escalating as before: "still pending" is then true, and stopping would let the next send queue at a new nonce. |
+| 6 | GCP credentials (`HSM_CREDENTIALS`) that are not valid JSON were not checked before connecting to Google: with Google unreachable only a transport error surfaced, nothing pointed at the credentials. gcloud-sdk opens its channel *before* parsing them (`with_token_source`: `init_google_services_channel`, then `GoogleAuthTokenGenerator::new`). | `check_gcp_credentials` builds the same `GoogleAuthTokenGenerator` first — the SDK's own parsing, no network (tokens are fetched on first use) — for `HSM_CREDENTIALS` and for the key file named by `GOOGLE_APPLICATION_CREDENTIALS` on the keyring path (read raw, as the SDK does). A hand-written structural check was tried first and dropped in review: the SDK matches credentials by structure (`#[serde(untagged)]`), ignores `type`, and needs `private_key_id` / `token_uri` — a copy of its rules drifts. Errors name the variable and never echo the contents. Not covered: a private key that is a string but not a valid PEM — the SDK reads it only when it first signs a token request. |
+| 7 | After this release has run once, rolling back to `mantle-v1.6.1` failed: the older binary exits at startup with "migration 7 was previously applied but is missing", so the documented rollback ("stop the new version, start the old one") did not work. | `validity/migrations-rollback/07_chain_lock_owner.sql` — run once, proposers stopped, before starting the older release; see §3.10d "Rolling back". Tested end to end against the real migrators. The earlier claim here that the migration "may be deployed first … an old binary ignores both columns" was wrong and is removed. |
+
+**Deployment checklist (mantle-config, not this repo):**
+- The mantle-succinct IRSA role (`cicd/services/mantle-succinct/aws-<env>.yaml`) has only
+  Secrets Manager today. Add `kms:GetPublicKey` + `kms:Sign` on the key ARN; the IRSA role has no
+  implicit KMS permission. Missing `kms:Sign` is caught by the startup self-check, which is the
+  point of it: `GetPublicKey` alone lets the signer build.
+- Set `L1_SIGNER_AWS_KMS_KEY_ID` to the key **ARN** (then the region comes from it; `AWS_REGION` is only
+  needed for a bare key id or alias); remove `HSM_API_NAME` / `HSM_CREDENTIALS` and
+  `PRIVATE_KEY`. `CRYPTO_*` can stay if other secrets still need decrypting.
+- On chain: `addProposer(<new address>)` from the owner Safe, fund it, switch, then
+  `removeProposer(<old address>)`.
+- The proposer's lease warning now accounts for the send and read timeouts (1140s per send with
+  defaults). If `LOOP_INTERVAL` was tuned tight against the old 240s figure, the startup warning may
+  start firing; that is the check becoming accurate, not a regression.
+- New L2OO deployments only: `fetch_l2oo_config` derives the default proposer address from
+  `PRIVATE_KEY`. With a KMS signer, set `PROPOSER=<KMS address>` explicitly.
+
+**Verifying against a real key locally.** `aws_kms_live_signer_builds_and_self_checks` is
+`#[ignore]`d. The Rust SDK does **not** read the AWS CLI's MFA cache, so with an MFA-gated
+`assume_role` profile it re-runs AssumeRole without MFA and is denied. Export the CLI's cached
+credentials into the environment first:
+
+```bash
+eval "$(AWS_PROFILE=<profile> aws configure export-credentials --format env)"
+unset AWS_PROFILE
+L1_SIGNER_AWS_KMS_KEY_ID=<key arn> cargo test -p op-succinct-signer-utils aws_kms_live -- --ignored --nocapture
+```
+
+Verified 2026-10-15 against `ECC_SECG_P256K1` key `mrk-3227…5bc8` (ap-southeast-1, region taken
+from the ARN): address `0x59415743C6035a338D2661A9b5B325225237D91B`, self-check passed. A role
+with `kms:GetPublicKey` but not `kms:Sign` failed at the self-check, as intended.
 
 ### 3.6 Rollup configs maintained outside this repo
 
@@ -754,6 +842,90 @@ which covers only 256 blocks, so a checkpoint transaction stuck beyond ~51 minut
 to revert. Escalation makes long stalls unlikely rather than impossible; recognising and
 re-issuing an expired checkpoint is still unimplemented.
 
+### 3.10d Chain lock: owner-scoped lease, heartbeat, and progress watchdog
+
+**The defect (pre-existing on `main`).** The chain lock — the only thing stopping two proposers
+from sending from one account and fighting over nonces — did not hold while a proposer worked:
+
+- Its lease was `LOOP_INTERVAL`, renewed only at the *end* of an iteration, after which `run`
+  sleeps for exactly `LOOP_INTERVAL`. The lease therefore lapsed at the start of **every**
+  iteration and stayed lapsed until that iteration finished; any iteration that returned early
+  skipped the renewal altogether. Raising `LOOP_INTERVAL` cannot fix a sleep equal to the lease.
+- Acquisition was check-then-insert — two statements — so two proposers could both pass.
+- Renewal was an unconditional `UPDATE … WHERE chain id`, so either process could keep the other's
+  lease alive; nothing recorded who held it.
+
+The send path in §3.5a (bounded attempts, confirmation waits) lengthens iterations and so widened
+the window, which is how this was found.
+
+**What replaces it** (`validity/src/chain_lock.rs`, `validity/migrations/07_chain_lock_owner.sql`):
+
+| Piece | Behaviour |
+|---|---|
+| Schema | `chain_locks` gains `owner_id TEXT` and `lease_expires_at TIMESTAMPTZ` (additive, nullable). All expiry is judged by the database clock. |
+| Acquire | One `INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING` — takes the row only if it is new, its lease has lapsed, or (legacy row, `owner_id IS NULL`) its `locked_at` is older than one lease. Atomic: of two racing proposers exactly one wins (tested over 20 rounds). |
+| Startup | `main` acquires **before** constructing the proposer, retrying every 10s. A holder that keeps renewing keeps this process waiting indefinitely; one that has exited is replaced as soon as its lease lapses. (Previously a held lock made startup fail and the supervisor crash-loop.) |
+| Lease / renew | 120s lease, renewed every 30s by a background heartbeat independent of the loop, each statement bounded by 10s. Renew is `UPDATE … WHERE owner_id = me AND lease_expires_at > NOW()`: a lapsed lease is **not** revived. |
+| Lost lease | "Not the holder" on renew marks the lease lost **immediately**; so does reaching the local deadline without a renewal. Losing it ends the process: `main` selects on it, and returning drops every task. The supervisor restarts the process, which waits to re-acquire. |
+| Send guard | `ChainLease::ensure_held()` is passed to the signer as a `BroadcastGuard` (`SignerLock::send_transaction_request_guarded`) and runs **immediately before every broadcast** of a send — the first attempt and each fee-escalation replacement, after filling and (KMS) signing — plus once up front. A refusal stops the send at once with `BroadcastRefused`: no further broadcast, no escalation. Not just a flag kept by the heartbeat: it compares a conservative local deadline — the instant *before* the last successful renew statement + lease − 15s — on **both** the monotonic and the wall clock. A paused process that resumes before the heartbeat runs is refused; the wall clock covers a suspended VM, during which Linux's monotonic clock (what Rust's `Instant` uses) does not advance. |
+| Progress watchdog | The heartbeat keeps renewing as long as the process lives, so a wedged loop would hold the lock forever (the 2026-09-20 8-core-pod stall ran 7.5h with probes green). The watchdog fires when no iteration has completed for `PROGRESS_WATCHDOG_SECS` **and no L1 send is in flight**, then marks the lease lost — stopping renewal and exiting for a restart. "Start a send" (`LoopProgress::begin_send`) and "declare the loop stalled" take the **same mutex**, so they cannot interleave: either the send registers first and the watchdog stands down, or the watchdog decides first and the send is refused before anything is signed — and no send starts after that. It never cuts a send short (a broadcast may already have reached the node); sends are bounded on their own (§3.5a). Default threshold: `LOOP_INTERVAL + 2 × worst-case send + 600s` (2940s with defaults); `0` disables it. |
+| Metrics | `succinct_chain_lock_held`, `succinct_chain_lock_lease_remaining_secs`, `succinct_chain_lock_renew_failures`, `succinct_loop_last_progress_timestamp`. The old startup warning comparing `LOOP_INTERVAL` with the worst-case send is gone — the lease no longer depends on `LOOP_INTERVAL`. |
+
+**Operational rules — read before deploying or rolling back:**
+
+- **Old and new versions must never run as active proposers at the same time.** An older binary
+  neither checks `owner_id` nor maintains `lease_expires_at`; its renewal is still the
+  unconditional `UPDATE`. The legacy-row rule (a row with no owner is held for one lease after
+  `locked_at`) covers a *normal* startup next to an old holder, not a paused-and-resumed old
+  process or a rollback. When switching or rolling back the process: **stop the running
+  version, then start the other**, and let it acquire the lock.
+- **Rolling back to a release without migration 7 (e.g. `mantle-v1.6.x`) needs one SQL step.**
+  The older binary ignores the two new columns, but sqlx refuses to start on a database that
+  records a migration the binary does not ship ("migration 7 was previously applied but is
+  missing"), so the older release exits at startup (QA finding 7). With every proposer for the
+  database stopped, run `validity/migrations-rollback/07_chain_lock_owner.sql`
+  (`psql "$DATABASE_URL" -f …`) before starting the older release. It forgets migration 7 and
+  resets `owner_id` / `lease_expires_at` to NULL, so the row is a legacy row again; the columns
+  stay, and re-upgrading re-applies migration 7 (it is idempotent). Covered end to end by
+  `rollback_sql_lets_a_release_without_migration_7_start`. The same holds for any later
+  migration: a release that adds one needs its own rollback SQL.
+- Alert on `time() - succinct_loop_last_progress_timestamp` well below the watchdog threshold
+  (e.g. 15 min): a renewing heartbeat says nothing about the main loop. Also alert on
+  `succinct_chain_lock_held == 0` for a running proposer, and on `succinct_chain_lock_renew_failures`
+  rising.
+- `clear-stuck-txs` sends from the same account and takes no lock. Stop the proposer before
+  running it.
+
+**What the lock guarantees — and what it does not.** It guarantees that two proposers never keep
+running side by side contending for the account's nonces, and that a superseded holder broadcasts
+**at most one more transaction**: the one whose guard check had already passed. It does **not**
+give strict mutual exclusion at the instant of broadcast. No client-side check can: there is always
+an `.await` between "the check passed" and "the bytes left the process", and a process paused there
+resumes straight into the send. Closing that gap needs fencing at the receiver — e.g. an owner
+epoch the L2OO contract checks on every `proposeL2Output` / `checkpointBlockHash` — which is a
+contract upgrade and out of scope here (decided 2026-10-19; revisit only if broadcast-time
+exclusivity becomes a hard requirement).
+
+**Accepted behaviours — deliberate, not defects.** Every way a send can meet a lost lease or a
+stall was walked through; these three remain by design. Re-raise them only with a scenario that
+breaks the stated reason.
+
+| Behaviour | Why it is accepted |
+|---|---|
+| The guard passes, and then — before `eth_sendRawTransaction` reaches the node — the lease lapses and a successor takes over: the process is **paused after the check** (scheduling, GC, VM suspend) past the lease, or the request is delayed in transit past the 15s safety margin. The old process then broadcasts that one transaction. | Bounded to that single transaction: on resuming, the next guard check (any fee-escalation replacement) refuses, and the heartbeat finds the local deadline passed or the lease taken, marks it lost and ends the process. The transaction is at nonce N, which the successor either also uses (so at most one of the two is mined) or builds on (N+1 after N) — never a conflicting branch. Its content is a legitimate proposer action: a `checkpointBlockHash` is harmless, and a `proposeL2Output` carries a proof the contract verifies (a duplicate is rejected on chain). Cost: some gas, and the successor may see one "nonce consumed by a transaction other than ours" failure, which the existing retry path handles next iteration. |
+| A lease lost while a send is already broadcast and waiting for confirmations ends the process mid-wait. | Equivalent to a crash at that point. Continuing to hold work after losing the lock is exactly what the lock forbids; the broadcast transaction either lands or is replaced, and the next holder reads the chain and the database as after any crash. The watchdog, unlike lease loss, never ends a send (above). |
+| `clear-stuck-txs` uses the unguarded send path and takes no lock. | It is a manual recovery tool, run while the proposer is stopped (operational rule above). Making it take the lock would block it in exactly the situation it exists for — a proposer that is wedged but alive. |
+
+**Tests.** Embedded-Postgres tests cover exclusivity, the concurrent race, renew-by-holder-only,
+lapse-then-takeover (and the old holder failing to renew), the legacy row at 119s (held) and 121s
+(taken), and end to end: after a takeover the very next renewal marks the lease lost and sends are
+refused. Unit tests cover the dual-clock deadline, the safety margin, sticky loss, the watchdog
+never firing during a send, no send starting after a stall is declared, and a 2000-round
+real-thread race in which a starting send and the stall declaration never both succeed. Signer
+tests: a guard refusing up front sends nothing (no network), and against anvil a guard that
+passes up front but refuses at broadcast time leaves the account nonce unchanged — the
+transaction was signed but never broadcast.
+
 ### 3.11 Upstream sync v3.8.1 → v3.12.0
 
 22 upstream commits. What we took, what we held, and the three things that are easy to get wrong.
@@ -893,6 +1065,168 @@ cargo-git checkout path, which is derived from the dependency URL and commit.
    the same `tonic::Status` type the pinned sp1-sdk uses. If SP1 6.4.0 pulls a different tonic,
    re-verify that downcast — a silent mismatch sends transient transport faults back into range
    bisection (§3.9).
+
+### 3.11a SP1 6.4.0 → 6.10.0 on the v3.12.0 baseline (ahead of the kona v1.8.0 line)
+
+The kona v1.8.0 / revm line (PR #52, upstream v3.14.x) cannot ship before mantle-v2 and revm release
+in December, but the SP1 version has to move now. This bumps **only** the SP1 family on `main`;
+kona, revm, alloy and alloy-evm stay exactly as in §1.
+
+**Why now — prover-network lockstep, not the advisory itself.** The self-hosted prover network
+moved to SP1 6.10.0 (sp1-cluster `mantle-v2.9.0-rc.1`, upstream sp1-cluster v2.9.0); op-succinct
+has always moved with it (6.1.0 → 6.4.0 was the same pairing). The latest SP1 advisory,
+GHSA-p7v2-jjv3-8p8f ("Native Rust Verifier: Mismatched Tensor Lengths", fixed in 6.8.1), affects
+native Rust verifiers that accept Core/Compressed proofs from untrusted provers — the prover
+network's side. op-succinct's production path is unaffected per the advisory: range proofs are
+verified in-circuit by the aggregation program (`verify_sp1_proof`) and the result is a Plonk
+proof verified on chain. The only native verify call is the dev script `scripts/prove/bin/agg.rs`.
+
+| What | Change |
+|---|---|
+| `Cargo.toml` | 9 SP1 crates `=6.4.0` → `=6.10.0`; sp1-cluster `v2.7.2` → `v2.9.0` (3 crates). Lockfile: all 49 `sp1-*`/`slop-*` crates resolve to 6.10.0, no drift. |
+| `[patch.crates-io]` | sha2 `0.10.9`, sha3 `0.10.8`, substrate-bn, p256, k256, tiny-keccak → their `sp1-6.10.0` tags. **Not** taken from upstream v3.14.3: `sha2-v11` (sha2 0.11 is only in the host tree, via `aws-sigv4`; the guests use 0.10 because revm here is 38, not 42) and sha3 `0.11.0` (main's alloy-primitives 1.5.x uses sha3 0.10.8 — the 0.11 patch would be unused and keccak acceleration silently lost, see §3.11). Rule: the patch tag follows the *patched crate's* version in our tree; `[[patch.unused]]` must stay empty. |
+| `validity/Cargo.toml` + `validity/src/proposer.rs` | **tonic `0.12` → `0.14`.** SP1 6.10.0 moved sp1-sdk (and sp1-prover, sp1-cluster) to tonic 0.14; validity pinned 0.12 so that `downcast_ref::<tonic::Status>()` sees the SDK's type (§3.10a). With the pin left at 0.12 everything compiled and every test passed — they build `Status` from *our* tonic — but every production downcast returned None, and the string fallback missed too because tonic 0.13+ renders `code: '<description>'` instead of `status: <Code>`: UNAVAILABLE and FAILED_PRECONDITION (the latter is exactly what the vkey switch produces) would have bisected ranges. Fixed by moving the pin, teaching the fallback both renderings, and adding `tonic_matches_the_sdk`, which reads `Cargo.lock` and fails whenever validity's tonic differs from sp1-sdk's. Found in review; the comment above the pin had warned about exactly this. Related: tonic 0.13+ no longer renders `Status` metadata in `Display`, so the admission-shed marker (`x-sp1-admission-shed`, sent both as trailer and message prefix by the prove-network gateway/router) is now read from the downcast `Status`'s metadata **and** message, with the rendered-text match kept for errors that are not a downcastable `Status` (e.g. the cluster-direct path, which stringifies its eyre errors). |
+| `utils/proof/src/lib.rs` | sp1-cluster v2.9.0's `ClusterServiceClient::new` takes an access token: plumbed through `ClusterProofConfig` exactly as upstream v3.14.3 (#1038). The token is read by sp1-cluster from `CLI_CLUSTER_ACCESS_TOKEN`, else `CLUSTER_ACCESS_TOKEN` (empty = unset); auth is off by default. Only the cluster-direct mode uses it — Mantle proves through the prove-network router. |
+| `justfile`, `utils/build`, `validity/Dockerfile`, 4 CI workflows, `book/advanced/verify-binaries.md` | SP1 toolchain / docker tag `6.4.0` → `6.10.0`. |
+| `elf/` | Rebuilt with `just build-elfs` (docker `v6.10.0`). **Both vkeys change** — see below. |
+
+**Known gap, cluster-direct mode only.** sp1-cluster v2.9.0 adds bearer-token auth. A cluster that requires it, reached without `CLUSTER_ACCESS_TOKEN`, answers `UNAUTHENTICATED`, which the proposer treats as a range failure and bisects. Not reachable in Mantle's deployment (proofs go through the prove-network router with `SP1_PROVER=network`); set the token if cluster-direct mode is ever used against an authenticated cluster.
+
+**On-chain verifier: no change.** The Plonk circuit — and with it the verifier selector a proof
+carries — is set by `SP1_CIRCUIT_VERSION`, which is `v6.1.0` in both 6.4.0 and 6.10.0 (`sp1-prover`
+and `sp1-recursion-gnark-ffi` crates). The existing SP1VerifierGateway route keeps verifying (sp1-contracts
+ships `v6.0.0` and `v6.1.0` verifiers for the v6 line). Only the vkeys move.
+
+**vkeys (this build):**
+
+| | Before (`mantle-v1.6.x`, SP1 6.4.0) | SP1 6.10.0 (PR #62 only, superseded) | **Current (SP1 6.10.0 + §3.11b lockfile)** |
+|---|---|---|---|
+| range vkey commitment | `0x1e2b863405480e5509bcae955f9e23e1170419ba26af2f271cd0199f1e228fdb` | `0x477a0bf8430d434109eb0d054931ea240f4c87147079de9b43096cf674047cd1` | `0x57b7251f39bcced01bb272042859b1511b1cb42d49ac5ebe45117b32570ad872` |
+| aggregation vkey | `0x00fa36417110bce994f3054a68baef78ca51dee1a38659c70e108da7eb3d6bbf` | `0x0076cf345898ec11c4fd78f6839f2c4fe2cdffd53e967ea6d6d2ab5de0edafe8` | `0x007ed65c7e2e8c98e61b66811a86adc05a182e444cee082fda55242fe9b4a56e` |
+
+The middle column was only ever set on QA oracles. §3.11b's lockfile bump moved the guest ELFs again
+before any release, so the right-hand column is what ships; QA envs that were set to the middle
+column must be updated once more.
+
+**Deployment:**
+1. Ship together with the prover network's SP1 6.10.0 upgrade (same window); a 6.4.0 proposer and a
+   6.10.0 cluster are not a supported pairing.
+2. Before starting the new proposer, the L2OO owner calls `updateRangeVkeyCommitment` and
+   `updateAggregationVkey` on every network (mainnet: owner Safe). `rollupConfigHash` is unchanged
+   (no kona change). In-flight requests with the old commitments are cancelled by the proposer on
+   startup and re-proven.
+
+**Merging with the kona v1.8.0 line later (PR #52, `mantle/kona-v1.8.0`).** That branch was cut
+before this change and is on SP1 **6.8.1** / sp1-cluster **v2.8.4**. Whichever way the two meet —
+the branch syncing upstream v3.14.3 (which itself moves to SP1 6.10.0 / sp1-cluster v2.9.0), the
+branch merging `main`, or `main` finally merging the branch — handle these explicitly:
+
+1. **SP1 version lines** (`Cargo.toml` SP1 block, `justfile` docker tag, `utils/build`,
+   `validity/Dockerfile`, the 4 CI workflows, `book/advanced/verify-binaries.md`). The branch's
+   6.8.1 and this 6.10.0 conflict line-by-line; resolve to **6.10.0** (and sp1-cluster `v2.9.0`).
+   Never go back below the prover network's version. If the branch syncs v3.14.3 first, these
+   lines come out identical on both sides and merge cleanly.
+2. **`[patch.crates-io]` — do not resolve by picking a side.** The right tags follow the crate
+   versions in the *merged* tree, not either branch:
+   - sha3: the v1.8.0 tree (alloy-primitives 1.7.x) has only sha3 **0.11.0** → `patch-sha3-0.11.0-sp1-6.0.0`
+     (there is **no** `0.11.0-sp1-6.10.0` tag; upstream v3.14.3 uses the 6.0.0 one too). `main`'s
+     `patch-sha3-0.10.8-sp1-6.10.0` must go once sha3 0.10.8 has left the tree, or it becomes an
+     unused patch.
+   - sha2: keep `patch-sha2-0.10.9-sp1-6.10.0`. Add upstream's `sha2-v11` only if sha2 0.11 shows
+     up in a **guest** tree (`cargo tree -p range -i sha2@0.11.0`, same for `aggregation`); with
+     revm 41 it is host-only (via `aws-sigv4`), as it is here.
+   - substrate-bn / p256 / k256 / tiny-keccak: the `sp1-6.10.0` tags, as here.
+   - Check: `[[patch.unused]]` absent from `Cargo.lock`; every `sp1-*` / `slop-*` package at
+     6.10.0 (the 6.8.1 bump on that branch drifted transitively once — re-pin with
+     `cargo update -p <crate>@<wrong> --precise 6.10.0`).
+3. **`utils/proof/src/lib.rs` `cluster_access_token`.** Added here *and* by upstream v3.14.3 (#1038)
+   in the same shape. Keep exactly one copy — a duplicated field or argument means both sides were
+   kept. Prefer upstream's text so later syncs stay clean.
+4. **tonic pin (`validity/Cargo.toml`).** The branch still pins tonic `0.12` (its SP1 6.8.1 uses 0.12.3).
+   It must become `0.14` together with SP1 6.10.0 — keep this side. `tonic_matches_the_sdk`
+   fails if it does not; do not "fix" that test.
+5. **`Cargo.lock`.** Do not hand-merge: take one side, then `cargo update -p` the conflicting
+   crates (or regenerate) and re-run the checks in 2 and 4.
+6. **`elf/` binaries always conflict** (both sides rebuilt them). Do not pick either side's ELFs:
+   resolve the sources, then `just build-elfs` on the merged tree (docker `v6.10.0`; refill the
+   `sp1-cargo-git` volume first — §3.7) and commit the new ELFs in the merge.
+7. **vkeys move again** when the v1.8.0 line ships: the range program changes with kona/revm, the
+   aggregation vkey usually too. Read both from `cargo run --release --bin config` on the merged
+   tree; on-chain `updateRangeVkeyCommitment` / `updateAggregationVkey` for every network. Watch the
+   first proposer start for `Rollup config hash mismatch` — kona's `RollupConfig` serialisation
+   may differ, in which case `updateRollupConfigHash` with the logged `expected` value.
+8. **This file.** §1's SP1 row conflicts (take the merged truth); this section (§3.11a) and the
+   branch's §3.12 do not collide (main's dependency sweep, originally §3.12, is §3.11b here). Add the merge outcome to the merged branch's sync
+   section, and a Version-map row when the release is cut.
+9. **Merge, never squash** the sync PR (§4.4) — squashing loses the upstream merge-base.
+10. **`validity/Dockerfile`.** PR #60 landed first and replaced the runtime stage with distroless
+   (no shell, no SP1 toolchain). Merging `main` into this branch conflicted only there — this
+   branch had bumped the runtime stage's `sp1up` line — and was resolved by taking `main`'s
+   runtime stage: the only `sp1up` left is the builder's, at 6.10.0. The v1.8.0 branch carries
+   its own Docker speed-ups (`0aaed1ba` `.dockerignore`, `89472c79` drop the SP1 toolchain from
+   both stages, `dbfde143` slim runtime, `453d4119` nightly in the chef layer): when it merges
+   `main`, keep `main`'s distroless runtime stage (supersedes `dbfde143`), and take the builder
+   side of `89472c79` only after checking nothing in the build still calls `cargo prove`.
+
+**Local test note.** `postgresql_embedded` (bundled) resolves the newest PostgreSQL 18.x at build time;
+18.6.1's archive is missing the `UTC` / `Etc/UTC` zone links, so every DB test fails with
+`invalid value for parameter "TimeZone": "UTC"`. Unrelated to SP1 (pristine `main` fails the same).
+Workaround on a dev machine: `cp -Rn /usr/share/zoneinfo/ ~/.theseus/postgresql/18.6.1/share/timezone/`.
+
+### 3.11b Dependency security sweep (2026-11-03)
+
+Targeted lockfile bump for Dependabot alerts. **No `Cargo.toml` version pins changed** —
+SP1 `=6.10.0` (§3.11a), the kona `mantle-v1.6.3` tag family, the revm `v107-mantle-arsia.2` patch family,
+the alloy `2.0.4` hold, the gcloud-sdk `0.27` hold, and the sha3 patch tag are all untouched.
+
+Cargo.lock (in-range `cargo update -p … --precise`): rustls 0.23.40→0.23.46,
+aws-smithy family refresh (json 0.62.7, http-client 1.5.1, runtime-api 1.19.1, sdk-s3 1.132,
+schema added), cmov 0.5.4, openssl 0.10.80, quinn-proto 0.11.15, serde_with 3.21.0, tar 0.4.46.
+`[[patch.unused]]` count verified 0 after each step.
+
+tests/go.mod: `go` directive 1.23.8 → 1.25.0 (required by x/crypto ≥0.52 / grpc 1.83 / otel
+1.45); CI Go pins (`.github/actions/setup*`, `cargo-tests`/`integration-tests`/`lint` workflows)
+bumped to go1.25.14; x/crypto 0.54.0, x/net 0.57.0, grpc 1.83.1, otel family 1.45.0,
+gnark-crypto 0.18.1, klauspost/compress 1.18.7, ulikunitz/xz 0.5.15, docker/docker
+28.5.2+incompatible (path-frozen max).
+
+Deliberately NOT taken (would break the SP1/kona lockstep):
+
+- aws-config 1.13+ — drags the RustCrypto family (signature 1→3, ecdsa, elliptic-curve
+  0.12→0.14, p256 0.11→0.14) which entangles sp1's patched k256/p256 forks; it would also not
+  remove rustls 0.21 (still required via hyper-rustls 0.24 `acceptor`), so the webpki 0.101
+copy stays regardless.
+- quic-go/webtransport-go/libp2p — same libp2p 0.36.2 sandwich as mantle-v2 (kurtosis-pinned).
+- opentelemetry 0.23→0.32 family migration (would clear GHSA-w9wp) — needs a dedicated PR;
+  both `opentelemetry_sdk` copies (0.21.2 via `opentelemetry-stdout` 0.2, 0.23.0 direct) are
+  ours, not gcloud's.
+- jsonwebtoken 9 (gcloud-sdk 0.27 hold),
+  tracing-subscriber 0.2 (ark-relations 0.5.1 requires `0.2`), p3-* `-succinct` fork versions
+  (SP1 6.10.0 internals, still `0.4.3-succinct`), mholt/archiver ≥3.5 (module path moved to `/v3`; kurtosis imports the
+  old path), docker/docker unpatched advisories (path frozen at 28.5.2; 29.x lives on
+  moby/moby), go-yaml v2 + pion/* + rardecode (no fixed release on the required paths).
+
+Rebased onto `main` after §3.11a (SP1 6.10.0): the lockfile was regenerated from `main`'s and the
+same `--precise` updates re-applied, rather than merging the two lockfiles by hand. One extra
+alert clears as a side effect: `lru 0.12.5` is gone — SP1 6.10.0's `sp1-prover` no longer uses it
+and `aws-sdk-s3` 1.132 dropped it, so it is no longer listed under "NOT taken".
+
+One `--precise` step (`aws-smithy-runtime-api`) also re-picked, among versions already in the lock,
+`socket2` 0.5.10 for `hyper-util`/`quinn`/`quinn-udp` and other `windows-sys` copies for six
+Windows-only dependents; those nine entries were put back to `main`'s, and `cargo metadata --locked`
+accepts the result unchanged. Every other entry equals either this PR's original lock or `main`'s.
+
+**Guest ELFs and vkeys change.** The guest programs share this workspace lockfile, and
+`serde_with` reaches them through `alloy-eips` (`kona-protocol` → `kona-derive` → … → `range` /
+`aggregation`). Moving it to 3.21.0 (GHSA for `KeyValueMap`, alert #90 — no dependency here uses
+`KeyValueMap`, but the bump was taken because §3.11a changes the vkeys in the same release anyway)
+changes both ELFs; it is the only bumped crate in the guest graph — with `serde_with` held at 3.20.0
+the rebuilt ELFs were byte-identical to `main`'s. `just build-elfs` was run twice with identical
+output and the ELFs are committed; new vkeys are in the §3.11a table. Deploy with §3.11a's steps
+(the on-chain vkey update covers both).
+
+Anyone bumping `Cargo.lock` later: run `just build-elfs` and check `git status elf/` — `elf.yml`
+fails the PR if the committed ELFs no longer reproduce.
 
 ### 3.12 Upstream sync v3.12.0 → v3.14.0 (kona v1.5.1 → v1.7.0 line)
 
@@ -1094,6 +1428,26 @@ error that says nothing about certificates. All three are removed, along with `A
 files git never flagged — workflow YAML, `Dockerfile*`, `justfile`, `book/`, `.sqlx/` — separately
 and by hand. A clean auto-merge into a file this fork has never edited produces exactly zero
 signal, which is the same mechanism as the auto-merge table in §3.12, one layer further out.
+
+#### 3.12c Merged `main` (SP1 6.10.0 line), 2026-11-18
+
+`main` @ `12fd63dd` merged into this branch (no upstream change). Resolved per §3.11a's merge guide:
+
+| Area | Resolution |
+|---|---|
+| SP1 lines (`Cargo.toml`, `justfile`, 4 CI workflows) | `main`'s **6.10.0** / sp1-cluster `v2.9.0` |
+| kona / op-alloy / alloy-op-evm / op-revm source, alloy family, revm rev | this branch's (kona v1.8.0 line, alloy `=2.4.2`, revm `c6df4c5ef`); `main`'s mantle-v2 `v1.6.5` pins not taken. **Gap:** v1.6.5 carries the Hoodi BVM predeploy upgrade (mantle-v2 #397: `alloy-op-evm/src/block/hoodi_bvm_upgrade.rs`, Hoodi hardfork activation 1794380400), which the pinned `4a4f0ec8` does not have — so this merge alone mis-executes Hoodi blocks after that time. It comes back with the mantle-v2 v1.7.0 bump that follows (`dev/mantle-v1.7.0` has the same `hoodi_bvm_upgrade.rs` blob as v1.6.5). **Do not deploy this merge commit to Hoodi**, and its ELFs/vkeys are intermediate |
+| `[patch.crates-io]` | sha3 `patch-sha3-0.11.0-sp1-6.0.0` (the tree has sha3 0.11.0 only; no 6.10.0 tag exists for it); sha2 / substrate-bn / p256 / k256 / tiny-keccak → `sp1-6.10.0` tags. `[[patch.unused]]` = 0; sha2 0.11 stays out of both guests |
+| AWS KMS signer deps from `main` | kept; `alloy-signer-aws` moved to `=2.4.2` with the alloy family; gcloud-sdk stays at this branch's 0.29 |
+| tonic | `0.14` (`tonic_matches_the_sdk` passes) |
+| `validity/bin/validity.rs` | upstream v3.14's `validate_l1_selection()` + `Arc<Proposer>` + separate `initialize()`, with `main`'s chain lock lease, heartbeat, progress watchdog and `select!`; `initialize()` runs inside the spawned task so a lease lost during startup cleanup still ends the process |
+| `validity/Dockerfile`, `.dockerignore` | `main`'s (distroless runtime; builders were identical) |
+| `integration-tests.yml` | stays deleted (`058691d6`); `main` had only bumped its Go version |
+| `Cargo.lock` | this branch's lock re-resolved against the merged `Cargo.toml` (no hand merge). Besides the SP1 family: prost/tonic 0.14, axum 0.7/twirp-rs gone, tokio 1.54.1 — the same as `main`'s SP1 6.10.0 tree. mantle-v2 commit unchanged (`4a4f0ec8`) |
+| `elf/` | rebuilt on the merged tree (`just build-elfs`, docker `v6.10.0`); intermediate — rebuilt again with the mantle-v2 v1.7.0 bump |
+
+`main`'s dependency-sweep section is renumbered §3.11b here (it collided with this branch's §3.12).
+
 
 
 ## 4. Sync workflow
@@ -1298,11 +1652,11 @@ the on-chain ELFs (`programs/range/*`, `programs/aggregation/*`).
 
 ```bash
 curl -L https://sp1.succinct.xyz | bash
-sp1up --version v6.4.0      # matches the SP1 version pinned in Cargo.toml
+sp1up --version v6.10.0     # matches the SP1 version pinned in Cargo.toml
 cargo prove --version
 ```
 
-ELF rebuilds run inside Docker (`cargo prove build --docker --tag v6.4.0`), so the
+ELF rebuilds run inside Docker (`cargo prove build --docker --tag v6.10.0`), so the
 host's nightly doesn't need to match the toolchain inside the Docker image —
 the host just needs `cargo` and the SP1 CLI on PATH.
 

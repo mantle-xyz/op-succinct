@@ -56,15 +56,17 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 # fails. Same fix as mantle-xyz/sp1-cluster 7a825cd.
 ENV GOPROXY="https://proxy.golang.org,https://goproxy.cn,direct"
 
-# [MANTLE] No SP1 toolchain here. Upstream installs one (sp1up + cargo-prove) in
-# both stages, but nothing in this repo invokes it: `build_all()` in
-# utils/build has every `build_program` call commented out — upstream's copy is
-# empty too — so no guest program is compiled during the image build, and the
-# ELFs in elf/ are committed artefacts that utils/elfs `include_bytes!`s. A grep
-# for `cargo-prove`, `~/.sp1` or `SP1_HOME` across the workspace returns nothing.
+# [MANTLE] No SP1 toolchain here. Upstream installs one (sp1up + cargo-prove),
+# but nothing in this repo invokes it: `build_all()` in utils/build has every
+# `build_program` call commented out — upstream's copy is empty too — so no
+# guest program is compiled during the image build, and the ELFs in elf/ are
+# committed artefacts that utils/elfs `include_bytes!`s. A grep for
+# `cargo-prove`, `~/.sp1` or `SP1_HOME` across the workspace returns nothing.
 # sp1-sdk itself is an ordinary crate; the only external toolchain its build
 # needs is Go, installed above for sp1-recursion-gnark-ffi.
-# Installing it cost ~300MB of download and 4.8GB unpacked, per stage.
+# Installing it cost ~300MB of download and 4.8GB unpacked.
+# The SP1 version is pinned by Cargo.toml / Cargo.lock alone; lint.yml's
+# consistency gate finds no `sp1up -v` in this file and passes.
 
 # Pre-cook only clear-stuck-txs's dependency graph, keyed on the recipe
 # (Cargo.toml/Cargo.lock) rather than the full source tree.
@@ -93,56 +95,54 @@ RUN --mount=type=ssh \
     cp target/release/validity /build/validity-proposer && \
     cp target/release/clear-stuck-txs /build/clear-stuck-txs
 
-# Final stage
-#
-# [MANTLE] Runtime-only image. This was `rust:1.85-slim` carrying a build-time
-# package set, but nothing in this stage compiles: it copies two finished
-# binaries and execs one. Debian bookworm matches the builder (cargo-chef's
-# rust-1.85 image is bookworm-based), so the glibc and OpenSSL ABIs line up.
-FROM debian:bookworm-slim
+# [MANTLE] The runtime image has no shell, so its writable working directory is made here. A
+# separate stage on purpose: creating it in the builder would change the builder's last layer
+# and with it the build cache, for a change that only concerns the runtime image.
+FROM chef AS appdir
+RUN mkdir -p /out/app/configs
 
+# [MANTLE] Runtime: distroless `cc`, non-root. No shell, no package manager.
+#
+# Why `cc` and not `static` (what mantle-v2 uses for its Go services): these binaries are
+# dynamically linked against glibc. readelf NEEDED for both validity-proposer and
+# clear-stuck-txs:
+#   libssl.so.3 / libcrypto.so.3   openssl-sys, via native-tls <- hyper-tls <-
+#                                  alloy-transport-http. Not vendored (no openssl-src).
+#   libstdc++.so.6 / libgcc_s.so.1 librocksdb-sys — RocksDB is C++ — via kona-host.
+#   libc.so.6 / libm.so.6 / ld-linux-x86-64.so.2
+# distroless/cc-debian12 ships exactly these plus the CA root store; distroless/static has none
+# of the libraries. If a binary fails with "error while loading shared libraries", the missing
+# .so is a dependency that appeared since — check it is in this image.
+#
+# glibc: the builder (rust 1.85 / cargo-chef) and this image are both Debian 12 (glibc 2.36). If
+# the builder moves to a newer Debian, move this image with it or the binaries will refuse to
+# load (GLIBC_2.xx not found).
+#
+# Replaces rust:1.85-slim + clang, pkg-config, libssl-dev, git, libclang-dev, jq, curl and an
+# SP1 toolchain (sp1up). None of them is used at runtime: those are build tools, the ELFs are
+# committed and embedded with include_bytes!, and nothing shells out to cargo-prove.
+#
+# Pinned by digest — the multi-arch index digest, so the same pin resolves on amd64 (CI) and
+# arm64 (local). The tag is kept for readability only; the digest decides what is pulled.
+# distroless republishes `nonroot` for security fixes, so bump this deliberately:
+#   docker buildx imagetools inspect gcr.io/distroless/cc-debian12:nonroot   # top "Digest:"
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
+
+# The proposer caches the rollup / L1 configs under ./configs (fetcher.rs) and a failed write of
+# the rollup config is fatal. The image runs as nonroot (uid 65532), so that directory must be
+# owned by it.
+COPY --from=appdir --chown=65532:65532 /out/app /app
 WORKDIR /app
-
-# [MANTLE] Exactly what the two binaries link against at runtime, resolved with
-#   cargo tree -p op-succinct-validity --target x86_64-unknown-linux-gnu
-# Resolving on a developer's macOS is misleading here: native-tls selects
-# Security.framework there and openssl-sys never shows up, which would make
-# libssl3 look unnecessary.
-#
-#   ca-certificates  root store for outbound HTTPS (L1/L2 RPCs, prover network)
-#   libssl3          openssl-sys 0.9, reached via native-tls <- hyper-tls <-
-#                    alloy-transport-http. Not vendored (no openssl-src in the
-#                    lockfile), so it links the system libssl at runtime.
-#   libstdc++6       librocksdb-sys — RocksDB is C++ — reached via kona-host.
-#   curl             not linked by anything; kept purely for `kubectl exec`
-#                    debugging. Drop it if you want the image smaller still.
-#
-# Removed as build-time only: clang, libclang-dev (bindgen), pkg-config,
-# libssl-dev (headers; the runtime needs libssl3, not the -dev package), git
-# and jq — no code path shells out to any of them (`Command::new` appears only
-# in cost-estimator and gen_sp1_test_artifacts, neither of which ships here).
-#
-# If a binary ever fails to start with "error while loading shared libraries",
-# the missing .so names the package to add back.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    libssl3 \
-    libstdc++6 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# [MANTLE] No SP1 toolchain in the runtime image either — see the note in the
-# builder stage. The proposer requests proofs over the network (or from the
-# cluster) and submits them to L1; it never shells out to cargo-prove, and the
-# circuit artefacts sp1-sdk may need are fetched by the SDK at runtime, not
-# installed by sp1up (there is no circuits/ directory under ~/.sp1 after it runs).
 
 # Copy only the built binaries from builder
 COPY --from=builder /build/validity-proposer /usr/local/bin/validity-proposer
-# [MANTLE] Operational tool, shipped in the same image on purpose: it signs with the same GCP
-# Cloud HSM the proposer uses, so it must run where those credentials already are. It never acts
-# without --execute. See scripts/utils/bin/clear_stuck_txs.rs.
+# [MANTLE] Operational tool, shipped in the same image on purpose: it builds its signer with the
+# same Signer::from_env() as the proposer (whichever remote signer backend is configured), so it
+# must run where that signer's credentials / identity already are. It never acts
+# without --execute. Runs without a shell: `kubectl exec <pod> -- /usr/local/bin/clear-stuck-txs`.
+# See scripts/utils/bin/clear_stuck_txs.rs.
 COPY --from=builder /build/clear-stuck-txs /usr/local/bin/clear-stuck-txs
 
-# Run the server from its permanent location
+# Exec form: there is no /bin/sh in this image. Deployments must start the binary directly —
+# a `command: [/bin/sh, -c]` wrapper will not run here.
 CMD ["/usr/local/bin/validity-proposer"]

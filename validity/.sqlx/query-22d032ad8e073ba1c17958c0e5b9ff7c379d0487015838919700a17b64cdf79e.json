@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO chain_locks (l1_chain_id, l2_chain_id, locked_at, owner_id, lease_expires_at)\n            VALUES ($1, $2, NOW(), $3, NOW() + $4::interval)\n            ON CONFLICT (l1_chain_id, l2_chain_id) DO UPDATE\n                SET locked_at = NOW(),\n                    owner_id = EXCLUDED.owner_id,\n                    lease_expires_at = EXCLUDED.lease_expires_at\n                WHERE chain_locks.owner_id = EXCLUDED.owner_id\n                   OR (chain_locks.lease_expires_at IS NOT NULL\n                       AND chain_locks.lease_expires_at <= NOW())\n                   OR (chain_locks.lease_expires_at IS NULL\n                       AND (chain_locks.locked_at IS NULL\n                            OR chain_locks.locked_at <= NOW() - $4::interval))\n            RETURNING owner_id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "owner_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Text",
+        "Interval"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "22d032ad8e073ba1c17958c0e5b9ff7c379d0487015838919700a17b64cdf79e"
+}

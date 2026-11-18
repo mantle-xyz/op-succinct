@@ -27,10 +27,10 @@ runs:
     - name: Install just
       uses: extractions/setup-just@v3
 
-    - name: Setup Go 1.23.8
+    - name: Setup Go 1.25.14
       uses: actions/setup-go@v5
       with:
-        go-version: '1.23.8'
+        go-version: '1.25.14'
         cache-dependency-path: |
           tests/go.sum
           tests/optimism/go.sum
