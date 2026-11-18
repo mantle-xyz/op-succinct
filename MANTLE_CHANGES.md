@@ -13,9 +13,9 @@ synchronizing future upstream changes.
 | Upstream tracking point | succinctlabs/op-succinct tag `v3.14.0` @ `eaea64fd`, on the **v3 line** (upstream maintains v3 and v4 in parallel on different contracts — see the migration table below; never sync to a v4 tag). Merged, not squashed — the next sync's merge base depends on it. |
 | Mantle branch | `main` (this repo, `origin` = `mantle-xyz/op-succinct`). Sync branches are cut from `main` and merged back by PR; both the `mantle/op-succinct-v3.8.1` and `mantle/proposer-hardening` branches were deleted once merged (PR #43 / #46). |
 | Rust toolchain | nightly-2026-05-15 (rustc 1.97-nightly; see `rust-toolchain.toml`) |
-| Dependency source: kona / op-alloy / alloy-op-evm | ⚠️ **In development (§3.12): branch-pinned**, `mantle-xyz/mantle-v2` @ branch `dev/mantle-v1.6.3` (resolves `e8315fbf`), 27 entries — kona v1.7.0 line. Must become a tag before release. Last released state was tag `mantle-v1.6.3` (`05e2f58d`). Note mantle-v2 switched to the `mantle-v` tag prefix; a plain `sort` puts those *before* every `v*` tag, so "latest" is not the tail of a sorted list. |
-| Dependency source: revm family | ⚠️ **In development (§3.12): branch-pinned**, `mantle-xyz/revm` @ branch `dev/mantle-v1.6.3` (resolves `1903a86a`) via `[patch.crates-io]`, 14 entries → revm **41.0.0**. `op-revm` **20.0.0** now comes from mantle-v2 instead (it is a path member there since bluealloy deleted `crates/op-revm`). Moves in **lockstep** with the kona pin above. Last released state was tag `v107-mantle-arsia.2` (revm 38 / op-revm 19). |
-| Dependency source: alloy-evm | **upstream `alloy-rs/evm` v0.34.0 from crates.io — NOT patched.** The former `mantle-xyz/evm @ mantle-v0.34.0` fork only added a dead-code `token_ratio` trait method; mantle-v2/rust dropped it at `d2e4ebea` (commit `75d90fc71`), so the `[patch.crates-io]` redirect was removed here to stay in lockstep. |
+| Dependency source: kona / op-alloy / alloy-op-evm / op-revm | ⚠️ **In development (§3.12d): rev-pinned**, `mantle-xyz/mantle-v2` @ `rev = 8a159aa7` (head of `dev/mantle-v1.7.0`; no `mantle-v1.7.0` tag yet), 27 entries — kona v1.8.0 line. Must become a tag before release. Last released state was tag `mantle-v1.6.3` (`05e2f58d`). Note mantle-v2 switched to the `mantle-v` tag prefix; a plain `sort` puts those *before* every `v*` tag, so "latest" is not the tail of a sorted list. |
+| Dependency source: revm family | `mantle-xyz/revm` @ `rev = c6df4c5ef` via `[patch.crates-io]`, 14 entries → revm **41.0.0** (unchanged by §3.12d: mantle-v2 `8a159aa7` patches the same revm commit). `op-revm` **20.0.0** comes from mantle-v2 (a path member there since bluealloy deleted `crates/op-revm`). Moves in **lockstep** with the kona pin above. Last released state was tag `v107-mantle-arsia.2` (revm 38 / op-revm 19). |
+| Dependency source: alloy-evm | **upstream `alloy-rs/evm` from crates.io (`0.37.0`, resolves 0.37.1) — NOT patched.** The former `mantle-xyz/evm @ mantle-v0.34.0` fork only added a dead-code `token_ratio` trait method; mantle-v2/rust dropped it at `d2e4ebea` (commit `75d90fc71`), so the `[patch.crates-io]` redirect was removed here to stay in lockstep. |
 | Dependency source: alloy core/network | crates.io `=2.4.2` — deliberately **ahead** of upstream v3.14.0's `=2.1.1`, because kona v1.7.0's Mantle registry sets `ChainConfig.bogota_time`, which needs alloy-genesis 2.4.x. The direction reversed from the previous sync; see §3.12. |
 | Dependency source: alloy-primitives | crates.io `1.6.0` (resolves 1.7.3), moved with the kona v1.7.0 lockstep. The `sha3` patch tag moved with it: `patch-sha3-0.11.0-sp1-6.0.0`. Getting this pair out of step silently drops SP1 keccak acceleration; see §3.11's trap and the `patch.unused` check in §3.12. |
 | SP1 | `=6.10.0` + sp1-cluster tag `v2.9.0` — came in when this branch merged `main` (§3.11a, §3.12c); the §3.12a SP1 deferral no longer applies to the version itself |
@@ -90,8 +90,8 @@ Pick `--start` / `--end` ≥ 94355444 (mainnet) for any cost-estimator or proof 
 
 Every kona-genesis / kona-protocol / kona-derive / kona-executor / kona-host / op-alloy /
 alloy-op-evm dependency in `Cargo.toml` is sourced from `mantle-xyz/mantle-v2` at the
-pinned ref — currently `branch = "dev/mantle-v1.6.3"` (27 entries; resolves `e8315fbf`) while the
-kona v1.7.0 work is in development, see §3.12. The mantle-v2/rust side owns:
+pinned ref — currently `rev = "8a159aa7…"` (27 entries; head of `dev/mantle-v1.7.0`) while the
+kona v1.8.0 work is in development, see §3.12d. The mantle-v2/rust side owns:
 
 - Mantle hardforks (ARSIA / JOVIAN / SKADI / LIMB) and their bundles
 - BVM_ETH deposit-tx fields end-to-end
@@ -1436,7 +1436,7 @@ signal, which is the same mechanism as the auto-merge table in §3.12, one layer
 | Area | Resolution |
 |---|---|
 | SP1 lines (`Cargo.toml`, `justfile`, 4 CI workflows) | `main`'s **6.10.0** / sp1-cluster `v2.9.0` |
-| kona / op-alloy / alloy-op-evm / op-revm source, alloy family, revm rev | this branch's (kona v1.8.0 line, alloy `=2.4.2`, revm `c6df4c5ef`); `main`'s mantle-v2 `v1.6.5` pins not taken. **Gap:** v1.6.5 carries the Hoodi BVM predeploy upgrade (mantle-v2 #397: `alloy-op-evm/src/block/hoodi_bvm_upgrade.rs`, Hoodi hardfork activation 1794380400), which the pinned `4a4f0ec8` does not have — so this merge alone mis-executes Hoodi blocks after that time. It comes back with the mantle-v2 v1.7.0 bump that follows (`dev/mantle-v1.7.0` has the same `hoodi_bvm_upgrade.rs` blob as v1.6.5). **Do not deploy this merge commit to Hoodi**, and its ELFs/vkeys are intermediate |
+| kona / op-alloy / alloy-op-evm / op-revm source, alloy family, revm rev | this branch's (kona v1.8.0 line, alloy `=2.4.2`, revm `c6df4c5ef`); `main`'s mantle-v2 `v1.6.5` pins not taken. **Gap:** v1.6.5 carries the Hoodi BVM predeploy upgrade (mantle-v2 #397: `alloy-op-evm/src/block/hoodi_bvm_upgrade.rs`, Hoodi hardfork activation 1794380400), which the pinned `4a4f0ec8` does not have — so this merge alone mis-executes Hoodi blocks after that time. Restored by the mantle-v2 v1.7.0 bump in §3.12d (`dev/mantle-v1.7.0` has the same `hoodi_bvm_upgrade.rs` blob as v1.6.5). **Do not deploy this merge commit to Hoodi**, and its ELFs/vkeys are intermediate |
 | `[patch.crates-io]` | sha3 `patch-sha3-0.11.0-sp1-6.0.0` (the tree has sha3 0.11.0 only; no 6.10.0 tag exists for it); sha2 / substrate-bn / p256 / k256 / tiny-keccak → `sp1-6.10.0` tags. `[[patch.unused]]` = 0; sha2 0.11 stays out of both guests |
 | AWS KMS signer deps from `main` | kept; `alloy-signer-aws` moved to `=2.4.2` with the alloy family; gcloud-sdk stays at this branch's 0.29 |
 | tonic | `0.14` (`tonic_matches_the_sdk` passes) |
@@ -1447,6 +1447,24 @@ signal, which is the same mechanism as the auto-merge table in §3.12, one layer
 | `elf/` | rebuilt on the merged tree (`just build-elfs`, docker `v6.10.0`); intermediate — rebuilt again with the mantle-v2 v1.7.0 bump |
 
 `main`'s dependency-sweep section is renumbered §3.11b here (it collided with this branch's §3.12).
+
+#### 3.12d mantle-v2 → `dev/mantle-v1.7.0` @ `8a159aa7`, 2026-11-18
+
+The 27 mantle-v2 entries move from `branch = "dev/mantle-v1.6.3"` (resolved `4a4f0ec8`; the
+remote branch has since been deleted) to `rev = "8a159aa77fc25d67b1b3010b1307536d1c212c4f"`,
+the head of `dev/mantle-v1.7.0`. Pinned by `rev`, not `branch`, because no `mantle-v1.7.0` tag
+exists yet and a branch ref is mutable.
+
+| Area | Result |
+|---|---|
+| Hoodi BVM predeploy upgrade (mantle-v2 #397) | **restored** — `alloy-op-evm/src/block/hoodi_bvm_upgrade.rs` is present at `8a159aa7` and wired in `block/mod.rs` (`ensure_bvm_predeploys`). Closes the §3.12c gap |
+| Declared dependencies of the mantle-v2 crates | identical between `4a4f0ec8` and `8a159aa7`; revm stays `c6df4c5ef`, alloy stays `=2.4.2` |
+| `Cargo.lock` | only the mantle-v2 `source` lines change. Unrelated drift a fresh resolve pulled in (hyper-util, quinn, quinn-udp, winapi-util) was reverted; `cargo metadata --locked` passes, `[[patch.unused]]` = 0 |
+| `elf/` | rebuilt (`just build-elfs`, docker `v6.10.0`); two builds give identical sha256. vkeys: range `0x5256d73031e9969c5ad89f1e686fa25d0b735f2f49f6cc1824bb6e550deac5ce`, aggregation `0x008ea9ad19cbe3c09cfd39bad8d5593d1ebebbe8ad8ad505845158b6e3ff2568` |
+
+**Before release:** once mantle-v2 tags `mantle-v1.7.0`, swap the 27 `rev = ...` to
+`tag = "mantle-v1.7.0"` and confirm the tag resolves to `8a159aa7` in `Cargo.lock`. A different
+commit means the ELFs and vkeys above are not the ones that were tested — rebuild and recompute.
 
 
 
@@ -1667,7 +1685,7 @@ the host just needs `cargo` and the SP1 CLI on PATH.
 | Location | Why it churns | Post-sync checks |
 |---|---|---|
 | `Cargo.toml` `[patch.crates-io]` | Every upstream dep bump might add/remove a revm-family crate. | Diff against `mantle-v2/rust/Cargo.toml` `[patch.crates-io]` — keep them in lock-step. |
-| `Cargo.toml` mantle-v2 / revm pins | All entries share one ref; bump them together. A split leaves two `alloy_evm` / `op-revm` versions in the graph. | Currently **branch**-pinned during the kona v1.7.0 work (§3.12): `grep -c 'mantle-v2", branch = "dev/mantle-v1.6.3"'` = 27 and `grep -c 'revm", branch = "dev/mantle-v1.6.3"'` = 14. These must become `tag = ...` before release — see the warning box in §3.12. |
+| `Cargo.toml` mantle-v2 / revm pins | All entries share one ref; bump them together. A split leaves two `alloy_evm` / `op-revm` versions in the graph. | Currently **rev**-pinned during the kona v1.8.0 work (§3.12d): `grep -c 'mantle-v2", rev = "8a159aa77fc25d67b1b3010b1307536d1c212c4f"'` = 27 and `grep -c 'revm", rev = "c6df4c5ef5334e7757a2b538bd0f39d77cb8cf12"'` = 14. The mantle-v2 pin must become `tag = ...` before release — see §3.12d. |
 | `utils/signer/src/lib.rs::from_env` | New auth backends or env-var conventions arrive in alloy-signer-gcp. | Verify the `HSM_API_NAME` branch still compiles + the precedence ordering still puts Mantle compat first. |
 | `bindings/build.rs` `required_contracts` | New contract ABIs land upstream. | Diff vs upstream's list; if a new FP-related ABI appears, drop it (FP is gone). |
 | `validity/src/proposer.rs` | The proposer flow is the most-edited file in this repo. | Look for any spot where upstream replaced our checkpoint-validation logic — `historicBlockHashes` cross-check must stay. |
