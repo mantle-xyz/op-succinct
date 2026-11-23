@@ -50,7 +50,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Go 1.24 (required for sp1-recursion-gnark-ffi)
-RUN curl -LO https://go.dev/dl/go1.24.0.linux-amd64.tar.gz && \
+# [MANTLE] Verify the tarball against the sha256 published at
+# https://go.dev/dl/?mode=json&include=all — bump both lines together.
+RUN curl -fLO https://go.dev/dl/go1.24.0.linux-amd64.tar.gz && \
+    echo "dea9ca38a0b852a74e81c26134671af7c0fbe65d81b0dc1c5bfe22cf7d4c8858  go1.24.0.linux-amd64.tar.gz" | sha256sum -c - && \
     tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz && \
     rm go1.24.0.linux-amd64.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"

@@ -1,0 +1,13 @@
+# [MANTLE] Keeps the digest-pinned base images in validity/Dockerfile current
+# (devops-issue #12). Dependabot reads this file from the default branch only.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /validity
+    schedule:
+      interval: weekly
+    ignore:
+      # Major bumps (e.g. a new Debian release for distroless) are done by hand:
+      # the builder's Debian must stay in step with the runtime stage's glibc.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
