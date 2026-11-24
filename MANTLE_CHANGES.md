@@ -1468,6 +1468,63 @@ commit means the ELFs and vkeys above are not the ones that were tested — rebu
 
 
 
+#### 3.12e substrate-bn: native BN254 multiplication fast path (load test, 2026-11)
+
+Cherry-picked from `652eb908` (written for `main`, where it was reverted so `main` keeps the
+`mantle-v1.6.4` vkeys): it changes both vkeys, and this line changes them anyway (§3.12d), so the
+owner updates vkeys once for both.
+
+**Symptom.** In the 2026-11-10 load test, a range containing 150 blocks of bn254 pairing calls
+(~3.79M gas each) took 1234–1397s of witness generation, close to `WITNESSGEN_TIMEOUT`; the same
+range without them took 63s. Exported locally, the pairing window took 1223s against 25s for an
+ordinary window of the same size (49×), although its proving cost is low (complexity factor 4.9).
+
+**Cause.** Witness generation executes the blocks natively, and revm-precompile's `bn` feature
+(enabled through kona-host) routes bn254 to `substrate-bn`, which `[patch.crates-io]` replaces with
+SP1's `sp1-patches/bn`. That patch keeps field elements in normal form and, outside the zkVM,
+multiplies with schoolbook + `U512::divrem` (bitwise long division) instead of upstream's
+Montgomery multiplication: a 57-pair pairing took 1071 ms natively vs 18.7 ms with upstream
+substrate-bn 0.6.0 (57×). Upstream op-succinct uses the same patch.
+
+**Fix.** `substrate-bn` now comes from `mantle-xyz/bn` (fork of sp1-patches/bn), commit
+`6fd9e7c7` (tag `patch-0.6.0-sp1-6.10.0-substrate-bn-mantle.1`) = `patch-0.6.0-sp1-6.10.0-substrate-bn`
+(`ab4d008`) + one purely additive commit: under `cfg(not(target_os = "zkvm"))` only, when the
+modulus is exactly Fq or Fr and both operands are reduced, `U256::cpu_mul` computes
+`REDC(REDC(a, b), R²) = a·b mod p` with upstream's `mul_reduce` and constants. Everything else —
+the zkVM path (syscalls and unconstrained hints), other moduli, unreduced operands — is unchanged.
+A 57-pair pairing now takes 35 ms natively.
+
+Safety: the guest never consumes a host-computed bn254 result (`PreimageKeyType::Precompile` is
+`unimplemented!` in the guest; it recomputes through the SP1 syscall path), so a host-side error
+could only make witness generation or proving fail, not produce an accepted wrong proof. The
+fork's tests check bit-for-bit agreement with the `divrem` path (200k random pairs per modulus +
+edge values); revm-precompile's bn254 add/mul/pair tests pass against it.
+
+**Pinning.** By `rev` (tags are mutable; the tag is only noted in the `Cargo.toml` comment).
+`Cargo.lock` changed in exactly one line (substrate-bn's `source`): `cargo update -p substrate-bn`
+also re-picked `itertools` for unrelated crates, so the line was edited by hand and checked with
+`cargo metadata --locked`. `[[patch.unused]]` = 0. On this line the cherry-pick applied the same
+one-line lock change cleanly; the sha3 patch stays at this line's `patch-sha3-0.11.0-sp1-6.0.0`.
+
+**Guest ELFs and vkeys change** — the zkVM logic does not, but the dependency source path is
+embedded in the ELF. `just build-elfs` twice, identical:
+
+| | Before (this branch after §3.12d) | After |
+|---|---|---|
+| `rangeVkeyCommitment` | `0x5256d73031e9969c5ad89f1e686fa25d0b735f2f49f6cc1824bb6e550deac5ce` | `0x2b93f2563f682c1e77ccb6ba0f4a68a54b8e253b780573ec612f65632dea02e1` |
+| `aggregationVkey` | `0x008ea9ad19cbe3c09cfd39bad8d5593d1ebebbe8ad8ad505845158b6e3ff2568` | `0x0021217df6347a45fd7d238bd629868cc866f1ee8222e6c59a8c6dcbec7d5299` |
+
+**Rollout.** Have a second person rebuild the ELFs independently and reproduce these vkeys. Then
+per network: stop the proposer (or let in-flight aggregations land) → owner updates both vkeys in
+**one** transaction (Safe multisend), avoiding a window with one old and one new vkey → deploy the
+image built from these ELFs → confirm the startup config check passes. Keep the old image, ELFs
+and vkeys for rollback (rollback is the same Safe operation in reverse, paired with the old image).
+
+**On every SP1 bump** re-apply `6fd9e7c7` on top of the new `sp1-patches/bn` tag in `mantle-xyz/bn`
+and pin the new commit. Pointing back at `sp1-patches/bn` loses the fix silently: nothing fails,
+witness generation for bn254-heavy blocks just becomes slow again. Keep the fork's `sp1-lib`
+version in step with the SP1 bump.
+
 ## 4. Sync workflow
 
 When a new upstream Succinct Labs release lands on the **v3 line** (e.g. v3.15.0):
