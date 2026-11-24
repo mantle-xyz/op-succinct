@@ -4,7 +4,6 @@ use alloy_provider::{Provider, ProviderBuilder};
 use anyhow::Result;
 use op_succinct_host_utils::{
     fetcher::OPSuccinctDataFetcher,
-    host::enforce_l1_selection_supported,
     l1_selection::L1BlockSelectionConfig,
     metrics::{init_metrics, MetricsGauge},
     setup_logger,
@@ -111,13 +110,13 @@ async fn main() -> Result<()> {
 
     let host = initialize_host(fetcher.clone().into());
 
-    enforce_l1_selection_supported(host.as_ref(), &fetcher, l1_selection).await?;
+    fetcher.validate_l1_selection().await?;
 
     // Initialize the metrics exporter before taking the chain lock, so a proposer waiting for
     // another one's lease is observable (`succinct_chain_lock_held` = 0).
     info!("Initializing metrics on port {}", env_config.metrics_port);
-    ValidityGauge::register_all();
     init_metrics(&env_config.metrics_port);
+    ValidityGauge::register_all();
 
     // [MANTLE] Take the chain lock lease (waits while another live proposer holds it), keep it
     // renewed from a background heartbeat, and arm the main-loop progress watchdog. See
@@ -147,23 +146,31 @@ async fn main() -> Result<()> {
         None => tracing::warn!("PROGRESS_WATCHDOG_SECS=0: main-loop progress watchdog disabled"),
     }
 
-    let proposer = Proposer::new(
-        l1_provider,
-        db_client.clone(),
-        fetcher.into(),
-        proposer_config,
-        env_config.signer,
-        env_config.loop_interval,
-        host,
-        chain_lease.clone(),
-        progress,
-    )
-    .await?;
+    let proposer = Arc::new(
+        Proposer::new(
+            l1_provider,
+            db_client.clone(),
+            fetcher.into(),
+            proposer_config,
+            env_config.signer,
+            env_config.loop_interval,
+            host,
+            chain_lease.clone(),
+            progress,
+        )
+        .await?,
+    );
 
-    // Spawn a thread for the proposer.
+    // Spawn a thread for the proposer. [MANTLE] `initialize` (startup cleanup) runs inside the
+    // task, under the chain lock and the `select!` below, so a lease lost during it also ends
+    // the process — as when `run` did both.
     info!("Starting proposer.");
     let proposer_handle = tokio::spawn(async move {
-        if let Err(e) = proposer.run().await {
+        let result = match proposer.initialize().await {
+            Ok(()) => proposer.run().await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = result {
             tracing::error!("Proposer error: {}", e);
             return Err(e);
         }

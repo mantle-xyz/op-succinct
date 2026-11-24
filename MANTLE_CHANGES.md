@@ -10,15 +10,15 @@ synchronizing future upstream changes.
 
 | Item | Value |
 |---|---|
-| Upstream tracking point | succinctlabs/op-succinct tag `v3.12.0` @ `94ce6393` |
+| Upstream tracking point | succinctlabs/op-succinct tag `v3.14.0` @ `eaea64fd`, on the **v3 line** (upstream maintains v3 and v4 in parallel on different contracts — see the migration table below; never sync to a v4 tag). Merged, not squashed — the next sync's merge base depends on it. |
 | Mantle branch | `main` (this repo, `origin` = `mantle-xyz/op-succinct`). Sync branches are cut from `main` and merged back by PR; both the `mantle/op-succinct-v3.8.1` and `mantle/proposer-hardening` branches were deleted once merged (PR #43 / #46). |
 | Rust toolchain | nightly-2026-05-15 (rustc 1.97-nightly; see `rust-toolchain.toml`) |
-| Dependency source: kona / op-alloy / alloy-op-evm | `mantle-xyz/mantle-v2` rust subtree @ tag `mantle-v1.6.3` (commit `05e2f58d`). Pinned by **tag**, not rev — 25 entries in `Cargo.toml` use `tag = "mantle-v1.6.3"`; bump them together. Note mantle-v2 switched to the `mantle-v` tag prefix at this release; a plain `sort` puts those tags *before* every `v*` tag, so "latest" is not the tail of a sorted list. |
-| Dependency source: revm family | `mantle-xyz/revm` @ tag `v107-mantle-arsia.2` (commit `835cb4eb`) via `[patch.crates-io]`, 16 entries. Resolves to revm 38.0.0 / revm-handler 18.1.0 / **op-revm 19.0.0** (upstream op-succinct is on op-revm 20.0.0). Moves in **lockstep** with the kona tag above. |
-| Dependency source: alloy-evm | **upstream `alloy-rs/evm` v0.34.0 from crates.io — NOT patched.** The former `mantle-xyz/evm @ mantle-v0.34.0` fork only added a dead-code `token_ratio` trait method; mantle-v2/rust dropped it at `d2e4ebea` (commit `75d90fc71`), so the `[patch.crates-io]` redirect was removed here to stay in lockstep. |
-| Dependency source: alloy core/network | crates.io `2.0.4` — deliberately **behind** upstream v3.12.0's `2.0.5`. See §3.11. |
-| Dependency source: alloy-primitives | crates.io `1.5.x` (resolves 1.5.7) — deliberately behind upstream's 1.6.0, which belongs to the kona version lockstep. This is what fixes the `sha3` patch tag; see §3.11. |
-| SP1 | `=6.10.0` + sp1-cluster tag `v2.9.0` — bumped ahead of the kona v1.8.0 line, see §3.11a |
+| Dependency source: kona / op-alloy / alloy-op-evm / op-revm | ⚠️ **In development (§3.12d): rev-pinned**, `mantle-xyz/mantle-v2` @ `rev = 8a159aa7` (head of `dev/mantle-v1.7.0`; no `mantle-v1.7.0` tag yet), 27 entries — kona v1.8.0 line. Must become a tag before release. Last released state was tag `mantle-v1.6.3` (`05e2f58d`). Note mantle-v2 switched to the `mantle-v` tag prefix; a plain `sort` puts those *before* every `v*` tag, so "latest" is not the tail of a sorted list. |
+| Dependency source: revm family | `mantle-xyz/revm` @ `rev = c6df4c5ef` via `[patch.crates-io]`, 14 entries → revm **41.0.0** (unchanged by §3.12d: mantle-v2 `8a159aa7` patches the same revm commit). `op-revm` **20.0.0** comes from mantle-v2 (a path member there since bluealloy deleted `crates/op-revm`). Moves in **lockstep** with the kona pin above. Last released state was tag `v107-mantle-arsia.2` (revm 38 / op-revm 19). |
+| Dependency source: alloy-evm | **upstream `alloy-rs/evm` from crates.io (`0.37.0`, resolves 0.37.1) — NOT patched.** The former `mantle-xyz/evm @ mantle-v0.34.0` fork only added a dead-code `token_ratio` trait method; mantle-v2/rust dropped it at `d2e4ebea` (commit `75d90fc71`), so the `[patch.crates-io]` redirect was removed here to stay in lockstep. |
+| Dependency source: alloy core/network | crates.io `=2.4.2` — deliberately **ahead** of upstream v3.14.0's `=2.1.1`, because kona v1.7.0's Mantle registry sets `ChainConfig.bogota_time`, which needs alloy-genesis 2.4.x. The direction reversed from the previous sync; see §3.12. |
+| Dependency source: alloy-primitives | crates.io `1.6.0` (resolves 1.7.3), moved with the kona v1.7.0 lockstep. The `sha3` patch tag moved with it: `patch-sha3-0.11.0-sp1-6.0.0`. Getting this pair out of step silently drops SP1 keccak acceleration; see §3.11's trap and the `patch.unused` check in §3.12. |
+| SP1 | `=6.10.0` + sp1-cluster tag `v2.9.0` — came in when this branch merged `main` (§3.11a, §3.12c); the §3.12a SP1 deferral no longer applies to the version itself |
 | Contracts baseline | `mantle-xyz/op-succinct` tag `v1.1.7-2` (a.k.a. "v117"); ported into `contracts/` |
 
 ### 1.0 Release versioning
@@ -64,7 +64,8 @@ deliberately different jobs:
 | Phase 5 follow-up | Rust ABI realignment to v117 contracts (`utils/host/src/contract.rs` + proposer) — caught when re-auditing for the PR-to-main merge | ✅ |
 | Phase 5 follow-up | op-node pre-Interop compat — relax `rpc_types::SyncStatus` post-Interop fields to `Option<>` so the host can deserialize prod op-node responses (equivalent of `5efd6ead`) | ✅ |
 | Upstream sync v3.8.1 → v3.12.0 | 22 upstream commits: takes #923 (checkpoint anchored to `safe`, upstreamed — see §3.10), #951/#952 (`invalidated_at` + range canonicality reconciliation), #924 (KZG `Ok(false)` fix), SP1 6.1.0 → 6.4.0. Drops the new `altda` DA backend. See §3.11. | ✅ |
-| Upstream sync to v4.x | upstream is at v4.3.1; v3.12.0 → v4.x is its own phase | ⏸️ |
+| Upstream sync v3.12.0 → v3.14.0 | 8 upstream commits. Takes the kona v1.5.1 → v1.7.0 adaptation (#988), the Celestia removal (#983) and the CI hardening. Skips mTLS (#976) and the AggLayer gRPC server (#980/#987) — see §3.12 / §3.12a. | ✅ |
+| Upstream sync to v4.x | **Not on the roadmap, and not a "catch up" — v3 and v4 are two lines maintained in parallel, on different contracts.** Do not read v4's higher version number as v3 being superseded. Tag dates prove the parallelism: v3.12.0 and v4.7.0 both shipped 2026-08-17, v3.14.0 and v4.9.0 both 2026-09-12; v4.3.1 predates v3.12.0 by three months. Upstream marks the line in its commit subjects (`ci(v3):`, `feat(v3):`, `remove Celestia support from v3`). We are a v3 fork on the v117 contracts (§2.3); moving to v4 is a contract migration, not a dependency sync, and nothing in §4's workflow applies to it. **Keep syncing along v3.** | ⏸️ |
 
 ### 1.1 Supported L2 block range — Arsia and later only
 
@@ -89,8 +90,8 @@ Pick `--start` / `--end` ≥ 94355444 (mainnet) for any cost-estimator or proof 
 
 Every kona-genesis / kona-protocol / kona-derive / kona-executor / kona-host / op-alloy /
 alloy-op-evm dependency in `Cargo.toml` is sourced from `mantle-xyz/mantle-v2` at the
-pinned `tag = "mantle-v1.6.3"` (25 entries; commit `05e2f58d`). The mantle-v2/rust
-side owns:
+pinned ref — currently `rev = "8a159aa7…"` (27 entries; head of `dev/mantle-v1.7.0`) while the
+kona v1.8.0 work is in development, see §3.12d. The mantle-v2/rust side owns:
 
 - Mantle hardforks (ARSIA / JOVIAN / SKADI / LIMB) and their bundles
 - BVM_ETH deposit-tx fields end-to-end
@@ -182,7 +183,7 @@ grep -rn "\[MANTLE\]" . --include="*.rs" --include="*.toml" --include="*.sol" \
 | File | Change |
 |---|---|
 | `Cargo.toml` | All `kona-*`, `op-alloy*`, `alloy-op-evm*` deps switched from crates.io / the official kona repo to `mantle-xyz/mantle-v2` git at the pinned tag (currently `mantle-v1.6.3`; see §1). |
-| `Cargo.toml` `[patch.crates-io]` | All 13 revm-family crates redirected to `mantle-xyz/revm` at the pinned tag (currently `v107-mantle-arsia.2`; see §1). |
+| `Cargo.toml` `[patch.crates-io]` | 12 revm-family crates redirected to `mantle-xyz/revm` at the pinned ref, plus `op-revm` redirected to `mantle-xyz/mantle-v2` (see §1 / §3.12). The 12 must match mantle-v2's own patch list exactly; `op-revm` is deliberately absent from *its* list because it is a path member there. |
 | `Cargo.toml` `[patch.crates-io]` | ~~`alloy-evm` redirected to `mantle-xyz/evm @ mantle-v0.34.0`.~~ **Dropped at the `d2e4ebea` bump** — `alloy-evm` now resolves from crates.io (upstream `alloy-rs/evm` v0.34.0). See §3.1a. |
 | `Cargo.toml` | EigenDA and Celestia DA-backend crates dropped (`utils/eigenda/*`, `programs/range/*/celestia`, `programs/range/*/eigenda`, etc.). Validity-Oracle-only path. |
 
@@ -1098,12 +1099,12 @@ ships `v6.0.0` and `v6.1.0` verifiers for the v6 line). Only the vkeys move.
 
 **vkeys (this build):**
 
-| | Before (`mantle-v1.6.x`, SP1 6.4.0) | SP1 6.10.0 (PR #62 only, superseded) | **Current (SP1 6.10.0 + §3.12 lockfile)** |
+| | Before (`mantle-v1.6.x`, SP1 6.4.0) | SP1 6.10.0 (PR #62 only, superseded) | **Current (SP1 6.10.0 + §3.11b lockfile)** |
 |---|---|---|---|
 | range vkey commitment | `0x1e2b863405480e5509bcae955f9e23e1170419ba26af2f271cd0199f1e228fdb` | `0x477a0bf8430d434109eb0d054931ea240f4c87147079de9b43096cf674047cd1` | `0x57b7251f39bcced01bb272042859b1511b1cb42d49ac5ebe45117b32570ad872` |
 | aggregation vkey | `0x00fa36417110bce994f3054a68baef78ca51dee1a38659c70e108da7eb3d6bbf` | `0x0076cf345898ec11c4fd78f6839f2c4fe2cdffd53e967ea6d6d2ab5de0edafe8` | `0x007ed65c7e2e8c98e61b66811a86adc05a182e444cee082fda55242fe9b4a56e` |
 
-The middle column was only ever set on QA oracles. §3.12's lockfile bump moved the guest ELFs again
+The middle column was only ever set on QA oracles. §3.11b's lockfile bump moved the guest ELFs again
 before any release, so the right-hand column is what ships; QA envs that were set to the middle
 column must be updated once more.
 
@@ -1155,7 +1156,7 @@ branch merging `main`, or `main` finally merging the branch — handle these exp
    first proposer start for `Rollup config hash mismatch` — kona's `RollupConfig` serialisation
    may differ, in which case `updateRollupConfigHash` with the logged `expected` value.
 8. **This file.** §1's SP1 row conflicts (take the merged truth); this section (§3.11a) and the
-   branch's §3.12 / §3.13 do not collide. Add the merge outcome to the merged branch's sync
+   branch's §3.12 do not collide (main's dependency sweep, originally §3.12, is §3.11b here). Add the merge outcome to the merged branch's sync
    section, and a Version-map row when the release is cut.
 9. **Merge, never squash** the sync PR (§4.4) — squashing loses the upstream merge-base.
 10. **`validity/Dockerfile`.** PR #60 landed first and replaced the runtime stage with distroless
@@ -1172,7 +1173,7 @@ branch merging `main`, or `main` finally merging the branch — handle these exp
 `invalid value for parameter "TimeZone": "UTC"`. Unrelated to SP1 (pristine `main` fails the same).
 Workaround on a dev machine: `cp -Rn /usr/share/zoneinfo/ ~/.theseus/postgresql/18.6.1/share/timezone/`.
 
-### 3.12 Dependency security sweep (2026-11-03)
+### 3.11b Dependency security sweep (2026-11-03)
 
 Targeted lockfile bump for Dependabot alerts. **No `Cargo.toml` version pins changed** —
 SP1 `=6.10.0` (§3.11a), the kona `mantle-v1.6.3` tag family, the revm `v107-mantle-arsia.2` patch family,
@@ -1227,10 +1228,311 @@ output and the ELFs are committed; new vkeys are in the §3.11a table. Deploy wi
 Anyone bumping `Cargo.lock` later: run `just build-elfs` and check `git status elf/` — `elf.yml`
 fails the PR if the committed ELFs no longer reproduce.
 
+### 3.12 Upstream sync v3.12.0 → v3.14.0 (kona v1.5.1 → v1.7.0 line)
+
+8 upstream commits. Two of them are deliberately **not** taken; both have a recorded unblock
+condition below rather than a "we don't want this" verdict, because one of them is blocked by a
+fact that can change without anyone noticing.
+
+> **⚠️ In-development state: the kona and revm dependencies are pinned to a BRANCH, not a tag.**
+> `Cargo.toml` carries `branch = "dev/mantle-v1.6.3"` for 27 mantle-v2 entries and 14
+> mantle-xyz/revm entries. `Cargo.lock` resolves that to a fixed commit, so builds are
+> reproducible, but the ref is mutable and **this state must not reach production**. Before
+> release: mantle-v2 cuts a tag on `dev/mantle-v1.6.3`, we swap every `branch = ...` to
+> `tag = ...`, re-run `cargo update -w`, and confirm the resolved SHAs in `Cargo.lock` are
+> **unchanged**. A changed SHA means the branch moved after the tag was cut — the artifact
+> would no longer be the one that was tested. Only then rebuild the ELFs.
+>
+> Currently resolved: mantle-v2 `e8315fbf`, revm `1903a86a`.
+
+**Held deliberately:**
+
+| Item | Upstream v3.14.0 | Ours | Why |
+|---|---|---|---|
+| SP1 family | `=6.8.0` | **`=6.4.0`** | Not a preference — a hard resolver conflict. `sp1-cluster v2.7.2` pins `sp1-sdk = "=6.4.0"` (exact, not caret), so any other exact version fails at `cargo metadata`, before compilation. See the deferred entry below. |
+| alloy core/network family | `=2.1.1` | **`=2.4.2`** | **The direction reversed from §3.11.** We used to hold alloy *back* because mantle-v2's `kona-registry` did not initialise `ChainConfig.bogota_time`. kona v1.7.0's registry now *sets* that field, which only exists in `alloy-genesis >= 2.4.x`, so `=2.1.1` fails to compile with four `E0560: no field named bogota_time`. Upstream escapes this because its kona comes from optimism, which has no Mantle L1 config. **Do not copy upstream's `=2.1.1` here.** `2.4.2` matches what mantle-v2 itself resolves. |
+| `kona-*` / `op-alloy-*` / `alloy-op-evm` | optimism tag `kona-client/v1.7.0` | `mantle-xyz/mantle-v2` branch `dev/mantle-v1.6.3` | Same kona version, different source; the Mantle protocol layer only exists in mantle-v2. Mechanical "keep ours" every sync. |
+| `op-revm` | crates.io / optimism tree | **`mantle-xyz/mantle-v2`** | Changed source this round. bluealloy deleted `crates/op-revm` after v107, so it is now a workspace path member (`rust/op-revm/`) of mantle-v2 rather than a crate in `mantle-xyz/revm`. Note crates.io's published `op-revm 20.0.0` is *older than its version string implies* — never resolve it from the registry. |
+| revm family (12 crates) | crates.io `41.0.0` | `mantle-xyz/revm` branch `dev/mantle-v1.6.3` | Same 12-crate list as mantle-v2's own `[patch.crates-io]`; `op-revm` is deliberately **not** in that list on either side. |
+| mTLS for network proving (#976) | added | **skipped** | Needs `sp1-sdk >= 6.5.0`, which moves only together with the sp1-cluster tag. Deferred, not rejected — §3.12a has the ordering. |
+| validity gRPC server (#980/#987) | added | **skipped** | AggLayer-driven external aggregation. Deferred entry below. |
+| Celestia removal (#983) | removed | already absent | Dropped in Phase 2; take upstream's deletions to clear residue. |
+
+**Taken from upstream — the kona v1.7.0 code adaptation.** Upstream did this same adaptation in
+`0c9e2be0`, so all four files were aligned to v3.14.0 verbatim rather than hand-rolled:
+
+| File | Change |
+|---|---|
+| `utils/client/src/client.rs` | Hand-built `OpBlock` replaced by `L2BlockInfo::from_header_and_first_tx`. The old path decoded **every** transaction in the block only to hand the result to `from_block_and_genesis`, which reads just the first one (the L1-info deposit). Pure wasted cycles in a zkVM guest. This is also why `DriverError::Rlp` disappeared upstream — the decode moved inside, behind `FromBlockError::TxEnvelopeDecodeError`. |
+| `utils/client/src/precompiles/mod.rs` | `run()` now ends in revm 41's `precompile_output_to_interpreter_result` instead of our hand-rolled gas accounting (state gas / refund / `spend_all` on halt), which could silently drift from canonical revm. `warm_addresses` returns `&AddressSet`. `OpSpecId::INTEROP` was renamed `LAGOON` upstream and `KARST` added, so the completeness guard now lists 13 variants (upstream's 11 + Mantle's `OSAKA`/`ARSIA`). |
+| `utils/client/src/precompiles/factory.rs` | `PostExecEvmFactoryHooks` gained `Snapshot` + `refund_snapshot` + `seed_refund_snapshot`; `type Error<DBError>` narrowed to `DBErrorMarker`. |
+| `utils/client/src/witness/executor.rs` | `KonaExecutor::new` takes a caller-supplied `receipt_builder` (was hardcoded inside `StatelessL2Builder`). OP Stack chains pass `OpAlloyReceiptBuilder`, preserving previous behaviour. |
+
+**A real defect this alignment caught.** Our precompile `run()` passed a hardcoded `0` as the
+EIP-8037 reservoir argument; upstream passes `inputs.reservoir`. That argument feeds gas
+accounting, so the hardcoded zero was a live correctness bug, not a stub. It had been sitting
+under a `[MANTLE]` comment reading "pass 0 in the zkVM (not applicable)" since the revm 38 bump.
+
+**Three upstream changes arrived through clean auto-merges — git flagged none of them.** Each
+landed in a file this fork had never edited, which is exactly the shape that defeats a
+conflict-driven review. Check for these by name on the next sync:
+
+| What came in silently | Why it matters | Resolution |
+|---|---|---|
+| `sp1-sdk` `6.4.0 → 6.8.0` and `sp1-cluster` `v2.7.2 → v2.8.3` | The SP1 pin is a deliberate hold (§3.12a); nine version strings moved at once | Reverted. Cross-check `justfile`'s `cargo-prove --tag` still matches — a mismatch there builds ELFs on a different toolchain than the host expects. |
+| The entire mTLS implementation in `utils/host/src/network.rs` (+131) | Fails to compile against sp1-sdk 6.4.0 (`client_identity` is a 6.5.0 API), and `validity/src/proposer.rs` had auto-merged to call its `build_network_prover` wrapper | Restored our file wholesale — upstream's only change to it in this range was mTLS, and we had never touched it. `proposer.rs` reverted to the inline `ProverClient::builder()` form, which also needed `ProverClient` added back to the `sp1_sdk` import list. |
+| eigenda / agglayer Docker build steps in `.github/workflows/docker-build.yml` | Reference Dockerfiles this fork does not ship; the job fails outright | Removed — along with a leftover *celestia* step of our own whose Dockerfile was deleted back in Phase 2 but whose CI step was never cleaned up. Gate: every `file:` in that workflow must exist on disk. |
+
+**AggLayer code reaches well past its feature gate.** Declining the feature (§3.12a) meant
+removing it from `validity/src/{proposer,env,proof_requester,lib}.rs`, `db/client.rs`,
+`bin/validity.rs`, `build.rs`, plus `proto/`, `grpc.rs` and `tests/external_aggregation.rs`.
+Three `cfg!(feature = "agglayer")` *macro* call sites also had to be folded by hand — those are
+expressions, not attributes, so they survive with the feature undefined and silently evaluate to
+`false` rather than failing the build. **That sweep was incomplete, and `unexpected_cfgs` does not
+catch the remainder** — the lint sees `cfg`, not the places that name the feature as a plain
+string. What survived it, and was removed afterwards (§3.12b): the `--features agglayer` branch in
+`tests/justfile` together with the `external_aggregation` target and the `agglayer` Go build tag,
+`tests/e2e/validity/agglayer/aggregation_test.go`, the unreachable
+`get_mock_aggregation_proof_by_request_id` in `db/client.rs`, and the workspace `tonic-build` /
+`prost` entries that no member ever inherited.
+
+**Two resolutions that needed a judgement call rather than a side:**
+
+| File | What upstream did | What we did |
+|---|---|---|
+| `utils/host/src/host.rs` | Moved `get_max_provable_l2_block_number` and `calculate_safe_l1_head` off the `OPSuccinctHost` trait onto the fetcher. That trait existed to abstract Celestia's Blobstream from ETH DA; with Celestia gone (#983) it was dead weight. | Took **theirs**, against the usual "keep ours" reflex for this file. Every call site had already auto-merged to the `fetcher.…()` form, so keeping our trait methods would have left the ethereum host not implementing its own trait. |
+| `utils/host/src/fetcher.rs` | A new test mock constructs `kona_protocol::SyncStatus`. | Pointed it at our `rpc_types::SyncStatus`, where `cross_unsafe_l2` / `local_safe_l2` are `Option` because pre-Interop op-node — including Mantle production — omits them (§3.4c). |
+
+**A test-environment trap worth knowing before debugging one.** The four `fetcher::tests` added by
+this sync stand up a loopback HTTP server on `127.0.0.1`. With `http_proxy` / `https_proxy` set in
+the shell and no `no_proxy`, reqwest routes even loopback requests through the proxy and the tests
+fail with `HTTP error 502 with empty body` — which reads like a code fault and is not one:
+
+```bash
+no_proxy=127.0.0.1,localhost NO_PROXY=127.0.0.1,localhost cargo test --workspace
+```
+
+**Verify after any dependency move in this family:**
+
+```bash
+grep -c '^\[\[patch.unused\]\]' Cargo.lock   # want 0 — a used-looking but unused patch silently
+                                             #   drops SP1 keccak acceleration (see §3.11 trap)
+grep -c '^name = "revm"$'    Cargo.lock      # want 1
+grep -c '^name = "op-revm"$' Cargo.lock      # want 1 — two op-revm versions means the guest and
+                                             #   host can run different BVM_ETH semantics, and
+                                             #   that does not fail to compile
+```
+
+#### 3.12a Deferred upstream features, with unblock conditions
+
+These are not rejections. Each records what it would take to revisit, so the next sync does not
+re-litigate the decision from scratch — and, for the first one, so nobody concludes "we chose not
+to" when the real answer is "we could not".
+
+**mTLS for network proving — deferred on ordering, not blocked.**
+
+`5d0ff8d6` (#976) adds optional mutual-TLS client credentials for the Succinct Prover Network:
+two env vars (`NETWORK_MTLS_CERT_PATH` / `NETWORK_MTLS_KEY_PATH`, both-or-neither), a
+`client_identity` on the prover builder, and a 20s `get_balance()` preflight so a bad certificate
+fails at startup rather than at the first proof request. Unset both and behaviour is identical to
+today.
+
+This has real value here: **mainnet proves on the official network**; only the self-hosted
+cluster path is ours. It was left out of the v3.14.0 sync because it needs `sp1-sdk >= 6.5.0`,
+and bumping SP1 alone does not resolve:
+
+```
+error: failed to select a version for `sp1-prover-types`.
+    ... required by package `sp1-cluster-artifact v2.7.2`
+versions that meet the requirements `=6.4.0` are: 6.4.0
+all possible versions conflict with previously selected packages
+  previously selected package `sp1-prover-types v6.5.0`
+```
+
+`sp1-cluster` pins the whole SP1 family with `=` rather than a caret, so the cluster tag and the
+SP1 version move together or not at all.
+
+⚠️ **The pairing that unblocks this already exists.** Upstream v3.14.0 runs `sp1-cluster v2.8.3`
+with `sp1-sdk =6.8.0`; we stayed on `v2.7.2` / `=6.4.0`. So this is an ordering problem, not a
+dead end — an earlier revision of this section called it "blocked by a dependency fact", which
+was wrong, and was written after checking only the tag we happen to pin. Verify the current
+pairing rather than trusting either statement:
+
+```bash
+gh api "repos/succinctlabs/sp1-cluster/contents/Cargo.toml?ref=v2.8.3" --jq '.content' \
+  | base64 -d | grep -E '^sp1-sdk'          # =6.8.0 as of this sync
+```
+
+*The actual open question is operational, not a build constraint:* the SP1 version here is the
+**client** half. Whether a `v2.8.3` client can drive the self-hosted cluster **service** we run in
+QA/testnet depends on what version that service is deployed at, which this repo cannot answer.
+Settle that before bumping, because the client bump is workspace-wide — the cluster path and the
+official-network path share one `sp1-sdk`.
+
+*When taken, in this order:* confirm the deployed cluster service version → bump the
+`sp1-cluster` tag and the nine `=6.x.y` SP1 entries together → cherry-pick `5d0ff8d6`'s
+`utils/host/src/network.rs` hunk (the rest of that commit is version-string churn across CI,
+Dockerfiles and `book/`) → move `cargo-prove`'s image tag in `justfile` to match the SDK (§3.7);
+the CI SP1-consistency gate will catch any string left behind → rebuild ELFs, because **both
+vkeys change** → confirm with Succinct that they actually issue client certificates for our
+mainnet requester, since without one the feature is inert.
+
+**validity gRPC server — declined on architecture, revisit only if the product needs AggLayer.**
+
+`c169267a` (#980/#987) lets an external system drive aggregation instead of the proposer deciding
+for itself: `validity/src/grpc.rs`, `proto/proofs.proto`, a `build.rs` protobuf step, a
+`Dockerfile.agglayer`, and two new `.sqlx` entries. Cost of taking it: **+388/-96 in
+`validity/src/proposer.rs`** — the most heavily customised file in this repo (§3.9, §3.10a–c, and
+the run-loop ordering that is load-bearing) — plus +411 in `db/client.rs`.
+
+We are Validity-Oracle-only with a self-driving proposer (§2.3), the same line that removed
+fault-proof, Celestia, EigenDA and AltDA. Adding an AggLayer control plane contradicts it, and the
+blast radius lands exactly on the code that carries our production incident fixes.
+
+*Unblock condition:* a product decision to integrate AggLayer. There is no technical gate — the
+feature is `Option`-gated upstream and would work if taken.
+
+*If it is ever taken:* land it as its own PR, not inside a sync. Regenerating the two `.sqlx`
+entries needs a live database, which sync branches do not have.
+
+#### 3.12b Residue the merge carried past the first review
+
+The §3.12 review followed git's conflict list, so it covered Rust and little else. Four classes of
+damage reached the branch untouched; three of them broke CI outright, and none of them would have
+been noticed by reading a conflict.
+
+| Where | What | Why it survived, and what it costs |
+|---|---|---|
+| `.github/workflows/e2e-sysgo-tests.yml` | An `if [ … ]; then` with an **empty body** followed by `fi`, left behind when the agglayer branch inside it was deleted | Bash fails at *parse* time, so the entire `run:` block never executes — every matrix target fails, not just the one named in the condition |
+| `.github/workflows/docker-build.yml` | Duplicate `tags:` and duplicate `cache-from:`/`cache-to:` keys, left behind when the celestia/eigenda steps were deleted | Duplicate YAML keys break workflow parsing. Note the gate in §3.12 ("every `file:` must exist on disk") cannot run on a file that does not parse — a gate is only as good as the parse that precedes it |
+| `validity/Dockerfile` (×2), `lint.yml`, `cycle-count-diff.yml`, `elf.yml`, `cargo-tests.yml` | `sp1up -v 6.8.0` against `Cargo.toml`'s `=6.4.0` — 6 occurrences across 5 files | §3.12 reverted the SP1 bump **in `Cargo.toml` only**. The repo's own gates (`lint.yml:45`, `docker-build.yml:38`) compare the two and fail every run. `justfile`'s `cargo-prove --tag v6.4.0` was already correct, so the committed ELFs were never affected |
+| `validity/.sqlx/` | **15** orphaned offline query entries against 14 real `sqlx::query!` macros | `cargo sqlx prepare --check` regenerates and compares; extra entries fail it |
+
+**On counting the sqlx orphans.** Reading the diff finds one. Fifteen is what a mechanical check
+finds: normalise whitespace on every cached `query` and on every macro's string literal, then
+compare as sets. Two traps — a `grep -c` for the macro name counts the one that appears inside a
+comment (`db/client.rs`, the note explaining why one query uses the runtime API), and substring
+matching reports a short query as live when it is only a prefix of a longer one. Match exactly.
+
+**The book announced three features this fork does not have.** A whole new page
+(`book/advanced/prover-network.md`) documented the mTLS variables declined in §3.12a;
+`book/validity/proposer.md` documented `GRPC_ADDRESS` plus an entire "Externally driven
+aggregation" section; `book/validity/experimental/experimental.md` told the reader to build with
+the `altda` feature, which is not in this workspace (§3.1). The mTLS page is the one that would
+have cost an operator real time: set both variables against a private endpoint and the process
+starts normally, presents no client certificate, and then fails at the first proof request with an
+error that says nothing about certificates. All three are removed, along with `AGG_PROOF_MODE`'s
+`compressed` value, which `parse_agg_proof_mode(…, false)` rejects.
+
+**Gate for the next sync: the conflict list is not the review scope.** After the merge, check the
+files git never flagged — workflow YAML, `Dockerfile*`, `justfile`, `book/`, `.sqlx/` — separately
+and by hand. A clean auto-merge into a file this fork has never edited produces exactly zero
+signal, which is the same mechanism as the auto-merge table in §3.12, one layer further out.
+
+#### 3.12c Merged `main` (SP1 6.10.0 line), 2026-11-18
+
+`main` @ `12fd63dd` merged into this branch (no upstream change). Resolved per §3.11a's merge guide:
+
+| Area | Resolution |
+|---|---|
+| SP1 lines (`Cargo.toml`, `justfile`, 4 CI workflows) | `main`'s **6.10.0** / sp1-cluster `v2.9.0` |
+| kona / op-alloy / alloy-op-evm / op-revm source, alloy family, revm rev | this branch's (kona v1.8.0 line, alloy `=2.4.2`, revm `c6df4c5ef`); `main`'s mantle-v2 `v1.6.5` pins not taken. **Gap:** v1.6.5 carries the Hoodi BVM predeploy upgrade (mantle-v2 #397: `alloy-op-evm/src/block/hoodi_bvm_upgrade.rs`, Hoodi hardfork activation 1794380400), which the pinned `4a4f0ec8` does not have — so this merge alone mis-executes Hoodi blocks after that time. Restored by the mantle-v2 v1.7.0 bump in §3.12d (`dev/mantle-v1.7.0` has the same `hoodi_bvm_upgrade.rs` blob as v1.6.5). **Do not deploy this merge commit to Hoodi**, and its ELFs/vkeys are intermediate |
+| `[patch.crates-io]` | sha3 `patch-sha3-0.11.0-sp1-6.0.0` (the tree has sha3 0.11.0 only; no 6.10.0 tag exists for it); sha2 / substrate-bn / p256 / k256 / tiny-keccak → `sp1-6.10.0` tags. `[[patch.unused]]` = 0; sha2 0.11 stays out of both guests |
+| AWS KMS signer deps from `main` | kept; `alloy-signer-aws` moved to `=2.4.2` with the alloy family; gcloud-sdk stays at this branch's 0.29 |
+| tonic | `0.14` (`tonic_matches_the_sdk` passes) |
+| `validity/bin/validity.rs` | upstream v3.14's `validate_l1_selection()` + `Arc<Proposer>` + separate `initialize()`, with `main`'s chain lock lease, heartbeat, progress watchdog and `select!`; `initialize()` runs inside the spawned task so a lease lost during startup cleanup still ends the process |
+| `validity/Dockerfile`, `.dockerignore` | `main`'s (distroless runtime; builders were identical) |
+| `integration-tests.yml` | stays deleted (`058691d6`); `main` had only bumped its Go version |
+| `Cargo.lock` | this branch's lock re-resolved against the merged `Cargo.toml` (no hand merge). Besides the SP1 family: prost/tonic 0.14, axum 0.7/twirp-rs gone, tokio 1.54.1 — the same as `main`'s SP1 6.10.0 tree. mantle-v2 commit unchanged (`4a4f0ec8`) |
+| `elf/` | rebuilt on the merged tree (`just build-elfs`, docker `v6.10.0`); intermediate — rebuilt again with the mantle-v2 v1.7.0 bump |
+
+`main`'s dependency-sweep section is renumbered §3.11b here (it collided with this branch's §3.12).
+
+#### 3.12d mantle-v2 → `dev/mantle-v1.7.0` @ `8a159aa7`, 2026-11-18
+
+The 27 mantle-v2 entries move from `branch = "dev/mantle-v1.6.3"` (resolved `4a4f0ec8`; the
+remote branch has since been deleted) to `rev = "8a159aa77fc25d67b1b3010b1307536d1c212c4f"`,
+the head of `dev/mantle-v1.7.0`. Pinned by `rev`, not `branch`, because no `mantle-v1.7.0` tag
+exists yet and a branch ref is mutable.
+
+| Area | Result |
+|---|---|
+| Hoodi BVM predeploy upgrade (mantle-v2 #397) | **restored** — `alloy-op-evm/src/block/hoodi_bvm_upgrade.rs` is present at `8a159aa7` and wired in `block/mod.rs` (`ensure_bvm_predeploys`). Closes the §3.12c gap |
+| Declared dependencies of the mantle-v2 crates | identical between `4a4f0ec8` and `8a159aa7`; revm stays `c6df4c5ef`, alloy stays `=2.4.2` |
+| `Cargo.lock` | only the mantle-v2 `source` lines change. Unrelated drift a fresh resolve pulled in (hyper-util, quinn, quinn-udp, winapi-util) was reverted; `cargo metadata --locked` passes, `[[patch.unused]]` = 0 |
+| `elf/` | rebuilt (`just build-elfs`, docker `v6.10.0`); two builds give identical sha256. vkeys: range `0x5256d73031e9969c5ad89f1e686fa25d0b735f2f49f6cc1824bb6e550deac5ce`, aggregation `0x008ea9ad19cbe3c09cfd39bad8d5593d1ebebbe8ad8ad505845158b6e3ff2568` |
+
+**Before release:** once mantle-v2 tags `mantle-v1.7.0`, swap the 27 `rev = ...` to
+`tag = "mantle-v1.7.0"` and confirm the tag resolves to `8a159aa7` in `Cargo.lock`. A different
+commit means the ELFs and vkeys above are not the ones that were tested — rebuild and recompute.
+
+
+
+#### 3.12e substrate-bn: native BN254 multiplication fast path (load test, 2026-11)
+
+Cherry-picked from `652eb908` (written for `main`, where it was reverted so `main` keeps the
+`mantle-v1.6.4` vkeys): it changes both vkeys, and this line changes them anyway (§3.12d), so the
+owner updates vkeys once for both.
+
+**Symptom.** In the 2026-11-10 load test, a range containing 150 blocks of bn254 pairing calls
+(~3.79M gas each) took 1234–1397s of witness generation, close to `WITNESSGEN_TIMEOUT`; the same
+range without them took 63s. Exported locally, the pairing window took 1223s against 25s for an
+ordinary window of the same size (49×), although its proving cost is low (complexity factor 4.9).
+
+**Cause.** Witness generation executes the blocks natively, and revm-precompile's `bn` feature
+(enabled through kona-host) routes bn254 to `substrate-bn`, which `[patch.crates-io]` replaces with
+SP1's `sp1-patches/bn`. That patch keeps field elements in normal form and, outside the zkVM,
+multiplies with schoolbook + `U512::divrem` (bitwise long division) instead of upstream's
+Montgomery multiplication: a 57-pair pairing took 1071 ms natively vs 18.7 ms with upstream
+substrate-bn 0.6.0 (57×). Upstream op-succinct uses the same patch.
+
+**Fix.** `substrate-bn` now comes from `mantle-xyz/bn` (fork of sp1-patches/bn), commit
+`6fd9e7c7` (tag `patch-0.6.0-sp1-6.10.0-substrate-bn-mantle.1`) = `patch-0.6.0-sp1-6.10.0-substrate-bn`
+(`ab4d008`) + one purely additive commit: under `cfg(not(target_os = "zkvm"))` only, when the
+modulus is exactly Fq or Fr and both operands are reduced, `U256::cpu_mul` computes
+`REDC(REDC(a, b), R²) = a·b mod p` with upstream's `mul_reduce` and constants. Everything else —
+the zkVM path (syscalls and unconstrained hints), other moduli, unreduced operands — is unchanged.
+A 57-pair pairing now takes 35 ms natively.
+
+Safety: the guest never consumes a host-computed bn254 result (`PreimageKeyType::Precompile` is
+`unimplemented!` in the guest; it recomputes through the SP1 syscall path), so a host-side error
+could only make witness generation or proving fail, not produce an accepted wrong proof. The
+fork's tests check bit-for-bit agreement with the `divrem` path (200k random pairs per modulus +
+edge values); revm-precompile's bn254 add/mul/pair tests pass against it.
+
+**Pinning.** By `rev` (tags are mutable; the tag is only noted in the `Cargo.toml` comment).
+`Cargo.lock` changed in exactly one line (substrate-bn's `source`): `cargo update -p substrate-bn`
+also re-picked `itertools` for unrelated crates, so the line was edited by hand and checked with
+`cargo metadata --locked`. `[[patch.unused]]` = 0. On this line the cherry-pick applied the same
+one-line lock change cleanly; the sha3 patch stays at this line's `patch-sha3-0.11.0-sp1-6.0.0`.
+
+**Guest ELFs and vkeys change** — the zkVM logic does not, but the dependency source path is
+embedded in the ELF. `just build-elfs` twice, identical:
+
+| | Before (this branch after §3.12d) | After |
+|---|---|---|
+| `rangeVkeyCommitment` | `0x5256d73031e9969c5ad89f1e686fa25d0b735f2f49f6cc1824bb6e550deac5ce` | `0x2b93f2563f682c1e77ccb6ba0f4a68a54b8e253b780573ec612f65632dea02e1` |
+| `aggregationVkey` | `0x008ea9ad19cbe3c09cfd39bad8d5593d1ebebbe8ad8ad505845158b6e3ff2568` | `0x0021217df6347a45fd7d238bd629868cc866f1ee8222e6c59a8c6dcbec7d5299` |
+
+**Rollout.** Have a second person rebuild the ELFs independently and reproduce these vkeys. Then
+per network: stop the proposer (or let in-flight aggregations land) → owner updates both vkeys in
+**one** transaction (Safe multisend), avoiding a window with one old and one new vkey → deploy the
+image built from these ELFs → confirm the startup config check passes. Keep the old image, ELFs
+and vkeys for rollback (rollback is the same Safe operation in reverse, paired with the old image).
+
+**On every SP1 bump** re-apply `6fd9e7c7` on top of the new `sp1-patches/bn` tag in `mantle-xyz/bn`
+and pin the new commit. Pointing back at `sp1-patches/bn` loses the fix silently: nothing fails,
+witness generation for bn254-heavy blocks just becomes slow again. Keep the fork's `sp1-lib`
+version in step with the SP1 bump.
 
 ## 4. Sync workflow
 
-When a new upstream Succinct Labs release lands (e.g. v3.9.0, v4.0.0):
+When a new upstream Succinct Labs release lands on the **v3 line** (e.g. v3.15.0):
+
+⚠️ **Sync targets come from the v3 line only.** Upstream maintains v3 and v4 in parallel on
+different contracts — v4's higher version number does not make it the successor. Picking the
+newest tag by `sort -V` would land on v4 and silently turn a dependency sync into a contract
+migration. See the migration-status table in §1.
 
 ### 4.1 Pre-sync dry-run
 
@@ -1254,7 +1556,35 @@ git merge v<X.Y.Z>
 # per-site verdict first — not every marked test is ours to drop (see §3.10).
 ```
 
-Two things git will NOT flag for you:
+**Before resolving anything, re-check the deferred list in §3.12a.** Features we skipped in an
+earlier sync reappear as "new" upstream code in every later one. Each entry there carries an
+unblock condition; run those checks first so the decision is made once with current facts, rather
+than re-argued at every merge. If a condition now holds, take the feature in its own PR *after*
+the sync lands, not inside it.
+
+**A clean auto-merge is not the same as "no change".** Conflicts only appear where *both* sides
+edited. Anything upstream changed in a file this fork never touched merges silently — and those
+are precisely the files carrying our deliberate holds, because "we never edited it" and "we
+deliberately kept it as-is" look identical to git. The v3.14.0 sync took in an SP1 bump, a whole
+feature implementation and three broken CI steps this way (§3.12). After every merge, before
+trusting a green build, re-assert the holds directly rather than reading the conflict list:
+
+```bash
+# Every value below is a deliberate deviation from upstream. Any drift here came in silently.
+grep -c '"=6.4.0"' Cargo.toml                    # 9  — SP1 family (§3.12a)
+grep -c 'sp1-cluster.git", tag = "v2.7.2"' Cargo.toml   # 3
+grep -oE 'cargo-prove prove build.*--tag v[0-9.]+' justfile | grep -oE 'v[0-9.]+$' | sort -u
+                                                 # must equal the SP1 version above
+grep -oE 'patch-sha3-[0-9.]+-sp1-[0-9.]+' Cargo.toml    # tracks alloy-primitives, NOT the SDK
+grep -c '^\[\[patch.unused\]\]' Cargo.lock       # 0
+grep -c '^name = "revm"$' Cargo.lock             # 1
+grep -c '^name = "op-revm"$' Cargo.lock          # 1
+grep -rn 'agglayer\|hokulea\|eigenda\|altda\|celestia' Cargo.toml   # empty — DA backends we dropped
+for f in $(grep -oE 'file: [a-zA-Z0-9/.]+' .github/workflows/docker-build.yml | sed 's/file: //'); \
+  do [ -f "$f" ] || echo "MISSING $f"; done      # CI referencing Dockerfiles we do not ship
+```
+
+Two more things git will NOT flag for you:
 
 - **`validity/migrations/`** — a new upstream migration can reuse a version number we already
   took. Different filenames, so the merge is clean, but sqlx indexes by number and deployed
@@ -1273,6 +1603,37 @@ Resolve order:
    upstream kona/alloy/revm major versions.
 4. `contracts/`: only resolve if upstream changed a file that v117 also changed; v117
    wins. Otherwise prefer upstream.
+
+### 4.2a Paths this fork has deleted — re-delete them, do not restore
+
+Upstream keeps maintaining features this fork dropped, so every sync produces `delete/modify`
+conflicts on the paths below. **That conflict is the expected outcome, not a mistake.** Resolve
+each one with `git rm -r <path>` without reading what upstream changed — the feature is gone from
+this fork, so the content is irrelevant by construction.
+
+```bash
+# Re-delete in one go after a sync merge reports delete/modify on any of these:
+git rm -r --ignore-unmatch \
+  book/fault_proofs book/validity/experimental book/advanced/prover-network.md \
+  .github/workflows/docker-build-lite.yml .github/workflows/integration-tests.yml \
+  tests/e2e/faultproof tests/presets/faultproof.go \
+  tests/monitoring/grafana/dashboards/faultproof.json \
+  docker-compose-eigenda.yml
+```
+
+| Path | Dropped because | Recorded in |
+|---|---|---|
+| `book/fault_proofs/**`, `tests/e2e/faultproof/**`, `tests/presets/faultproof.go`, `tests/monitoring/grafana/dashboards/faultproof.json`, `.github/workflows/docker-build-lite.yml` | Fault Proof removed wholesale in Phase 3 — the Rust crate and contracts went then, these did not | §2.3, §3.3 |
+| `book/validity/experimental/**`, `docker-compose-eigenda.yml`, `.github/workflows/integration-tests.yml` | EigenDA/Celestia dropped in Phase 2; the workflow's only two jobs are Fault Proof and an EigenDA-only DA matrix | §3.1 |
+| `book/advanced/prover-network.md` | Documents the mTLS feature declined in §3.12a | §3.12a |
+
+**Why delete rather than keep them in sync.** Measured on the v3.12.0 → v3.14.0 range: had these
+paths already been deleted, that sync would have raised **10** extra `delete/modify` conflicts —
+including two `celestia.md` pages, for a backend dropped two phases earlier. Ten mechanical `git rm`
+calls is the entire cost. The alternative is what §3.12b documents: upstream edits land by clean
+auto-merge, git says nothing, and the fork accumulates CI that references missing Dockerfiles and
+documentation that instructs operators to configure features that do not exist. A noisy conflict
+you must answer beats a silent merge you never see.
 
 ### 4.3 Verification
 
@@ -1381,11 +1742,12 @@ the host just needs `cargo` and the SP1 CLI on PATH.
 | Location | Why it churns | Post-sync checks |
 |---|---|---|
 | `Cargo.toml` `[patch.crates-io]` | Every upstream dep bump might add/remove a revm-family crate. | Diff against `mantle-v2/rust/Cargo.toml` `[patch.crates-io]` — keep them in lock-step. |
-| `Cargo.toml` mantle-v2 pins | 25 entries pin the same tag; bump them together. | `grep -c 'tag = "mantle-v1.6.3"' Cargo.toml` should equal 25, and `grep -c 'tag = "v107-mantle-arsia.2"'` should equal 16 for the revm family. Both move in lockstep. |
+| `Cargo.toml` mantle-v2 / revm pins | All entries share one ref; bump them together. A split leaves two `alloy_evm` / `op-revm` versions in the graph. | Currently **rev**-pinned during the kona v1.8.0 work (§3.12d): `grep -c 'mantle-v2", rev = "8a159aa77fc25d67b1b3010b1307536d1c212c4f"'` = 27 and `grep -c 'revm", rev = "c6df4c5ef5334e7757a2b538bd0f39d77cb8cf12"'` = 14. The mantle-v2 pin must become `tag = ...` before release — see §3.12d. |
 | `utils/signer/src/lib.rs::from_env` | New auth backends or env-var conventions arrive in alloy-signer-gcp. | Verify the `HSM_API_NAME` branch still compiles + the precedence ordering still puts Mantle compat first. |
 | `bindings/build.rs` `required_contracts` | New contract ABIs land upstream. | Diff vs upstream's list; if a new FP-related ABI appears, drop it (FP is gone). |
 | `validity/src/proposer.rs` | The proposer flow is the most-edited file in this repo. | Look for any spot where upstream replaced our checkpoint-validation logic — `historicBlockHashes` cross-check must stay. |
 | `contracts/foundry.toml` remappings | Upstream may rename or split source dirs. | Re-run `forge build`; missing-import errors point at the broken remap. |
+| `justfile` forge-script paths | **Upstream's `contracts/script/` is split into `fp/` and `validity/` (upstream `94fe30b9`, #446); ours is flat.** Phase 3 ported Mantle's own contracts (`e85261c9`) and kept the flat layout, so every upstream `script/validity/X.s.sol` path is wrong here. Upstream edits to these recipes will keep reintroducing the prefix. | `grep -c 'script/validity/' justfile` must be **0**. Then verify each path resolves: `grep -oE 'script/[a-zA-Z0-9/_.]+\.s\.sol' justfile \| sort -u \| while read f; do [ -e "contracts/$f" ] \|\| echo "MISS $f"; done` |
 
 ### 6.2 Time bombs
 
@@ -1393,6 +1755,7 @@ the host just needs `cargo` and the SP1 CLI on PATH.
 |---|---|---|
 | **alloy-evm major bump** | Upstream raises alloy-evm to v0.35+ | `alloy-evm` is unpatched (crates.io), but `alloy-op-evm` comes from mantle-v2 and the two must agree — a mismatch surfaces as duplicate `alloy_evm` types. Wait for mantle-v2 to move, then bump its tag here (kona + revm tags in lockstep). |
 | **op-revm v19 → v20+ drift** | mantle-elysium does not track upstream op-revm. New OpSpecId variants surface. | `cargo build` will flag non-exhaustive matches. The KARST treatment in mantle-v2/rust kona genesis sync is the reference pattern (comment out the unsupported arm with `[MANTLE]` rationale). |
+| **SP1 pin held below upstream** | Already actionable — the blocker is operational, not technical | We run `sp1-cluster v2.7.2` / `sp1-sdk =6.4.0`; upstream v3.14.0 runs `v2.8.3` / `=6.8.0`. The pairing that would let us move **already exists**, so nothing needs to "land" first. What is unresolved is whether a v2.8.3 *client* can drive the self-hosted cluster *service* at its deployed version — and that bump is workspace-wide, hitting the official-network path too. mTLS (#976) rides on this. Ordered steps in §3.12a. |
 | **mantle-xyz/op-succinct origin/main divergence** | Someone lands new Mantle features directly on `origin/main` instead of this v3.8.1 branch. | Treat this branch as the source of truth going forward; pull-and-port new origin/main commits the way Phase 5 did. Add an entry to §3 for each port. |
 | **Contracts protocol change** | Mantle network upgrade lands new on-chain contracts. | New v117-style port from the canonical Mantle contracts release into `contracts/`. The contracts side is decoupled from the Rust workspace; bump independently. |
 | **GCP HSM auth model shift** | Mantle adopts Workload Identity Federation; ops stops setting `HSM_CREDENTIALS`. | The upstream 4-env branch and metadata-service fallback are already in place — no code change needed; just stop setting `HSM_API_NAME` and configure the cluster identity instead. |

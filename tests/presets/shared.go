@@ -157,7 +157,6 @@ func withSuccinctPresetCore(dest *sysgo.DefaultSingleChainInteropSystemIDs, chai
 }
 
 // NewSystem creates a new test system with the given stack option.
-// This is a unified function for creating both validity and fault proof test systems.
 func NewSystem(t devtest.T, opt stack.CommonOption) *presets.MinimalWithProposer {
 	sys, _, _ := newSystemWithProposer(t, opt, nil)
 	return sys

@@ -2,7 +2,7 @@
 
 OP Succinct is the production-grade proving engine for the OP Stack, powered by SP1.
 
-With support for both validity proofs, with OP Succinct, and ZK fault proofs, with OP Succinct Lite, OP Succinct enables seamless upgrades for OP Stack rollups to a type-1 zkEVM rollup.
+With validity proofs, OP Succinct enables seamless upgrades for OP Stack rollups to a type-1 zkEVM rollup.
 
 **[Docs](https://succinctlabs.github.io/op-succinct)**
 
@@ -18,7 +18,6 @@ The repository is organized into the following directories:
 - `contracts`: The solidity contracts for posting state roots to L1.
 - `programs`: The programs for proving the execution and derivation of the L2 state transitions and proof aggregation.
 - `validity`: The implementation of the `op-succinct/op-succinct` service.
-- `fault-proof`: The implementation of the `op-succinct/fault-proof` service.
 - `scripts`: Scripts for testing and deploying OP Succinct.
 - `utils`: Shared utilities for the host, client, and proposer.
 

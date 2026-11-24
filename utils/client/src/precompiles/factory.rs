@@ -3,12 +3,15 @@
 use super::OpZkvmPrecompiles;
 use alloy_evm::{Database, EvmEnv, EvmFactory};
 use alloy_op_evm::{
-    post_exec::{PostExecEvmFactoryHooks, PostExecExecutedTx, PostExecTxContext},
+    post_exec::{
+        NullRefundPolicy, PostExecEvmFactoryHooks, PostExecExecutedTx, PostExecRefundInspector,
+        PostExecTxContext,
+    },
     OpEvm, OpEvmContext, OpTx, OpTxError,
 };
 use op_revm::{L1BlockInfo, OpBuilder, OpHaltReason, OpSpecId, OpTransaction};
 use revm::{
-    context::{result::EVMError, BlockEnv, CfgEnv},
+    context::{result::EVMError, BlockEnv, CfgEnv, DBErrorMarker},
     inspector::NoOpInspector,
     Context, Inspector, MainContext,
 };
@@ -38,7 +41,7 @@ impl EvmFactory for ZkvmOpEvmFactory {
     // op_revm::OpContext<DB> uses raw OpTransaction<TxEnv> and does NOT satisfy those bounds.
     type Context<DB: Database> = OpEvmContext<DB>;
     type Tx = OpTx;
-    type Error<DBError: core::error::Error + Send + Sync + 'static> = EVMError<DBError, OpTxError>;
+    type Error<DBError: DBErrorMarker> = EVMError<DBError, OpTxError>;
     type HaltReason = OpHaltReason;
     type Spec = OpSpecId;
     type BlockEnv = BlockEnv;
@@ -88,11 +91,14 @@ impl EvmFactory for ZkvmOpEvmFactory {
     }
 }
 
-// [MANTLE] Required so PostExecEvmFactoryAdapter<ZkvmOpEvmFactory> satisfies BlockExecutorFactory
-// inside kona-proof's KonaExecutor. Mirrors alloy_op_evm::OpEvmFactory's impl — the post-exec hooks
-// are methods on OpEvm itself (added by the Mantle Skadi DA Footprint Gas changes), so this just
-// delegates to them.
+// Post-exec hooks for `ZkvmOpEvmFactory`, mirroring the canonical `OpEvmFactory`
+// impl in alloy-op-evm. `KonaExecutor`/`OpBlockExecutorFactory` require the EVM
+// factory to be wrapped in `PostExecEvmFactoryAdapter<F>`, which in turn requires
+// `F: PostExecEvmFactoryHooks`. The hooks delegate to the inherent post-exec
+// methods on the produced [`OpEvm`].
 impl PostExecEvmFactoryHooks for ZkvmOpEvmFactory {
+    type Snapshot = <NullRefundPolicy as PostExecRefundInspector>::Snapshot;
+
     fn begin_post_exec_tx<DB, I>(evm: &mut Self::Evm<DB, I>, ctx: PostExecTxContext)
     where
         DB: Database,
@@ -107,5 +113,21 @@ impl PostExecEvmFactoryHooks for ZkvmOpEvmFactory {
         I: Inspector<Self::Context<DB>>,
     {
         evm.take_last_post_exec_tx_result()
+    }
+
+    fn refund_snapshot<DB, I>(evm: &Self::Evm<DB, I>) -> Self::Snapshot
+    where
+        DB: Database,
+        I: Inspector<Self::Context<DB>>,
+    {
+        evm.refund_snapshot()
+    }
+
+    fn seed_refund_snapshot<DB, I>(evm: &mut Self::Evm<DB, I>, state: Self::Snapshot)
+    where
+        DB: Database,
+        I: Inspector<Self::Context<DB>>,
+    {
+        evm.seed_refund_snapshot(state);
     }
 }
