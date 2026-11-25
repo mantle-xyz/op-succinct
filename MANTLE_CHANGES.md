@@ -1384,7 +1384,10 @@ embedded in the ELF. `just build-elfs` twice, identical:
 | `aggregationVkey` | `0x0077b1f58fc3c3c5890214676f11e344826e6b23e7d93394e74f3e7988469d83` | `0x00ad69c41ea30e42363b0b3660ab7193e17d7ecc506a1f633cce64c91bea83d8` |
 
 **Rollout.** Have a second person rebuild the ELFs independently and reproduce these vkeys. Then
-per network: stop the proposer (or let in-flight aggregations land) → owner updates both vkeys in
+read each oracle's current `rangeVkeyCommitment` / `aggregationVkey` — the "Before" column is
+`main`, not necessarily what a network runs: on 2026-11-25 the mainnet-v133 and sepolia-v133
+oracles still held the `mantle-v1.6.3` keys (`0x57b7251f…d872` / `0x007ed65c…a56e`). Then per
+network: stop the proposer (or let in-flight aggregations land) → owner updates both vkeys in
 **one** transaction (Safe multisend), avoiding a window with one old and one new vkey → deploy the
 image built from these ELFs → confirm the startup config check passes. Keep the old image, ELFs
 and vkeys for rollback (rollback is the same Safe operation in reverse, paired with the old image).
@@ -1461,15 +1464,23 @@ was not done. A W cut just before a checkpoint can leave a small last range in t
 extra fixed proving overhead), never one that crosses into the next. Tests: `checkpoint_*` in
 `validity/src/utils.rs`; `aggregation_end_*` in `validity/src/proposer.rs`.
 
-**Choosing k and W (from the load test).** Regression over 11 all-transfer and mixed ranges:
-`prove_seconds ≈ 461 + 68.5 × (gas / 1e9) + 496 × (userTxs / 1e5)` (R² 0.991). So one user
-transaction ≈ 72k gas (k ≈ 72,000), and a 2280s target gives W ≈ 26.5B. Values are set per
-environment in mantle-config once the load test confirms them (DEX-heavy traffic measured ~45%
-heavier per gas historically; pending new data).
+`add_new_ranges` reads `submissionInterval()` only when there are gaps to fill. If the read fails,
+it logs a warning, counts it in `succinct_total_error_count`, and adds no ranges this pass; the rest
+of the iteration (aggregation submission, `request_queued_proofs`) still runs.
+Propagating the error would abort the whole iteration.
 
-**Not covered.** Precompile-heavy traffic (blake2f, BLS12-381: up to ~46× the proving cost per
-gas) is not captured by gas or transaction count; that is what `RANGE_CYCLE_LIMIT` /
-`RANGE_GAS_LIMIT` are for, which needs the prover to enforce them (self-hosted cluster: pending).
+**Choosing k and W (from the load test).** A first fit over all-transfer and mixed ranges only gave
+k ≈ 72,000 and W ≈ 26.5B — **do not use it**: all-DEX ranges would reach ~78k shards (~4100s, past
+the router's 2400s hang limit) before being cut, and ranges at W would exceed `RANGE_CYCLE_LIMIT`.
+The configuration in use on the self-hosted cluster (8×RTX 5090, sp1-cluster v2.9.0) is
+`RANGE_PROOF_TX_GAS_WEIGHT=16500`, `RANGE_PROOF_EVM_GAS_LIMIT=6200000000` and
+`RANGE_CYCLE_LIMIT=105000000000`; set all three together. W and the cycle limit are tied to the
+cluster hardware; re-derive them after a cluster change (source: mantle-performance-test
+`20261111_followup_op-succinct.md` §8).
+
+**Not covered.** Precompile-heavy traffic (blake2f, BLS12-381, bn254 pairing, ecrecover) is not
+captured by gas or transaction count. The self-hosted cluster enforces `RANGE_CYCLE_LIMIT` (a range
+over it comes back `Unexecutable` and is bisected at once); it does not enforce `RANGE_GAS_LIMIT`.
 
 ## 4. Sync workflow
 

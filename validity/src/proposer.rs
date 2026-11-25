@@ -931,7 +931,34 @@ where
             &requests,
         );
 
-        let ranges_to_prove = if self.requester_config.evm_gas_limit > 0 {
+        let ranges_to_prove = if self.requester_config.evm_gas_limit > 0 &&
+            disjoint_ranges.is_empty()
+        {
+            // No gaps to fill: skip the contract read and block fetches below.
+            Vec::new()
+        } else if self.requester_config.evm_gas_limit > 0 {
+            // [MANTLE] Gas-based ranges never cross a submission checkpoint (latest proposed +
+            // k × the effective submission interval — the same value `create_aggregation_proofs`
+            // uses), so aggregations land on the same grid as with block-based splitting.
+            // Weighted by user transactions when RANGE_PROOF_TX_GAS_WEIGHT > 0. MANTLE_CHANGES.md
+            // §3.15.
+            //
+            // A failed read only defers new ranges to the next pass. Propagating it would abort
+            // the whole iteration, skipping aggregation submission and `request_queued_proofs`.
+            let contract_submission_interval: u64 =
+                match self.contract_config.l2oo_contract.submissionInterval().call().await {
+                    Ok(interval) => interval.to::<u64>(),
+                    Err(e) => {
+                        ValidityGauge::TotalErrorCount.increment(1.0);
+                        warn!(
+                            error = ?e,
+                            "Could not read submissionInterval from the contract; no new range \
+                             requests this pass, the rest of the iteration continues."
+                        );
+                        return Ok(());
+                    }
+                };
+
             // Use gas-based splitting
             let mut all_block_infos = std::collections::HashMap::new();
             for &Range { start, end } in &disjoint_ranges {
@@ -948,13 +975,6 @@ where
                 }
             }
 
-            // [MANTLE] Gas-based ranges never cross a submission checkpoint (latest proposed +
-            // k × the effective submission interval — the same value `create_aggregation_proofs`
-            // uses), so aggregations land on the same grid as with block-based splitting.
-            // Weighted by user transactions when RANGE_PROOF_TX_GAS_WEIGHT > 0. MANTLE_CHANGES.md
-            // §3.15.
-            let contract_submission_interval: u64 =
-                self.contract_config.l2oo_contract.submissionInterval().call().await?.to::<u64>();
             let checkpoints = SubmissionCheckpoints {
                 base: latest_proposed_block_number as i64,
                 interval: contract_submission_interval
