@@ -20,6 +20,8 @@ pub struct EnvironmentConfig {
     pub l2oo_address: Address,
     pub dgf_address: Address,
     pub evm_gas_limit: u64,
+    /// [MANTLE] Gas-equivalent added per user transaction when splitting ranges by gas; 0 = off.
+    pub tx_gas_weight: u64,
     pub range_proof_interval: u64,
     pub max_concurrent_witness_gen: u64,
     pub max_concurrent_proof_requests: u64,
@@ -127,6 +129,7 @@ pub async fn read_proposer_env() -> Result<EnvironmentConfig> {
         l2oo_address: get_env_var("L2OO_ADDRESS", Some(Address::ZERO))?,
         dgf_address: get_env_var("DGF_ADDRESS", Some(Address::ZERO))?,
         evm_gas_limit: get_env_var("RANGE_PROOF_EVM_GAS_LIMIT", Some(0))?,
+        tx_gas_weight: get_env_var("RANGE_PROOF_TX_GAS_WEIGHT", Some(0))?,
         range_proof_interval: get_env_var("RANGE_PROOF_INTERVAL", Some(1800))?,
         max_concurrent_witness_gen: get_env_var("MAX_CONCURRENT_WITNESS_GEN", Some(1))?,
         max_concurrent_proof_requests: get_env_var("MAX_CONCURRENT_PROOF_REQUESTS", Some(1))?,

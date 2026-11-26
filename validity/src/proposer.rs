@@ -45,13 +45,14 @@ use tracing::{debug, error, info, warn};
 use crate::{
     db::{DriverDBClient, OPSuccinctRequest, RequestMode, RequestStatus, RequestType},
     find_gaps, get_latest_proposed_block_number, get_ranges_to_prove_by_blocks,
-    get_ranges_to_prove_by_gas,
+    get_ranges_to_prove_by_weighted_gas,
     relay_rejection::{
         classify_revert_data, revert_data_of_anyhow, revert_data_of_rpc_error, NoVerdictReason,
         RelayRejection,
     },
     ChainLease, CommitmentConfig, ContractConfig, LoopProgress, OPSuccinctProofRequester,
-    ProgramConfig, RequestExecutionStatistics, RequesterConfig, ValidityGauge,
+    ProgramConfig, RequestExecutionStatistics, RequesterConfig, SubmissionCheckpoints,
+    ValidityGauge,
 };
 
 /// Number of consecutive poll failures before a cluster proof is marked as permanently failed.
@@ -483,6 +484,124 @@ fn no_bisect_reason(e: &anyhow::Error) -> Option<&'static str> {
     }
 }
 
+/// [MANTLE] Outcome of the guarded reset in `Proposer::try_reset_unaccepted` (§3.13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnacceptedReset {
+    /// The row was `Unrequested`/`WitnessGeneration` and not invalidated; it is `Unrequested` now.
+    Reset,
+    /// The row had moved on: accepted by the prover, mock `Execution`, reaped, or invalidated.
+    MovedOn,
+    /// The reset itself failed; the row is left for the orphan reaper.
+    DbError,
+}
+
+/// [MANTLE] Whether a failed task (error or panic) first tries the guarded reset instead of going
+/// straight to `handle_failed_request` (which bisects a range after >2 failures).
+///
+/// - **Range: always** (§3.13). Whether the prover accepted the request is read from the row, not
+///   the error: a range is `Unrequested`, then `WitnessGeneration` until `update_request_to_prove*`
+///   records an accepted request (mock mode moves it to `Execution` first). A failure while it is
+///   still there happened in witness generation or submission, where nothing can say a range is too
+///   big — that surfaces after the prover ran it, as `Unexecutable`, which still bisects. The one
+///   exception is a lost `update_request_to_prove*` write after a successful submission: the range
+///   is then submitted again, as it was before this change.
+/// - **Aggregation: only for a `no_bisect_reason` error** (§3.10a), as before; aggregations are
+///   never bisected, and failing one is what rebuilds it with a fresh checkpoint.
+fn reset_first(req_type: RequestType, no_bisect: bool) -> bool {
+    match req_type {
+        RequestType::Range => true,
+        RequestType::Aggregation => no_bisect,
+    }
+}
+
+/// [MANTLE] After the guarded reset, whether the failure still goes to `handle_failed_request`.
+/// Only a range whose row had moved on does: nothing then says it was unaccepted, so the
+/// pre-existing path applies (it also finishes an invalidated row). A `DbError` never falls through
+/// into bisection. An aggregation never falls through: a `no_bisect_reason` failure must not fail
+/// it, and a row that moved on is the reaper's.
+fn fail_after_reset(req_type: RequestType, outcome: UnacceptedReset) -> bool {
+    req_type == RequestType::Range && outcome == UnacceptedReset::MovedOn
+}
+
+#[cfg(test)]
+mod failed_task_routing_tests {
+    use super::*;
+    use UnacceptedReset::*;
+
+    /// Where a failed task ends up: reset and retried whole, or `handle_failed_request`.
+    fn ends_in_handle_failed(
+        req_type: RequestType,
+        no_bisect: bool,
+        outcome: UnacceptedReset,
+    ) -> bool {
+        !reset_first(req_type, no_bisect) || fail_after_reset(req_type, outcome)
+    }
+
+    /// QA's case: a range that failed before the prover accepted it (beacon down, endpoint
+    /// unreachable, panic, whatever the error looks like) is retried whole — never
+    /// `handle_failed_request`, so nothing counts towards bisection.
+    #[test]
+    fn unaccepted_range_failures_never_reach_bisection() {
+        for no_bisect in [false, true] {
+            assert!(reset_first(RequestType::Range, no_bisect));
+            assert!(!ends_in_handle_failed(RequestType::Range, no_bisect, Reset));
+            assert!(!ends_in_handle_failed(RequestType::Range, no_bisect, DbError));
+        }
+    }
+
+    /// A range whose row already moved on (accepted, mock `Execution`, reaped, invalidated)
+    /// takes the pre-existing path, so e.g. a mock execution failure still bisects.
+    #[test]
+    fn range_that_moved_on_keeps_the_existing_path() {
+        for no_bisect in [false, true] {
+            assert!(ends_in_handle_failed(RequestType::Range, no_bisect, MovedOn));
+        }
+    }
+
+    /// Aggregations are unchanged: failed (and rebuilt) unless the error is no-bisect, in which
+    /// case the row is reset or left alone, never failed.
+    #[test]
+    fn aggregation_routing_is_unchanged() {
+        assert!(!reset_first(RequestType::Aggregation, false));
+        assert!(ends_in_handle_failed(RequestType::Aggregation, false, Reset));
+        assert!(reset_first(RequestType::Aggregation, true));
+        for outcome in [Reset, MovedOn, DbError] {
+            assert!(!ends_in_handle_failed(RequestType::Aggregation, true, outcome));
+        }
+    }
+}
+
+/// [MANTLE] Where an aggregation over the contiguous chain should end so the L1 output lands on
+/// the submission grid `latest_proposed + k × submission_interval` (MANTLE_CHANGES.md §3.15).
+///
+/// Returns the last range end in the chain that is on the grid; if no range in the chain ends on
+/// it (block-based ranges whose interval does not divide the submission interval, or ranges cut
+/// before checkpoint alignment), `contiguous_end` — i.e. the previous behaviour. Ranges past the
+/// returned end stay completed and are aggregated next time, from the new latest proposed block.
+/// Assumes `completed` is sorted and already validated by [`highest_contiguous_end`].
+fn aggregation_end_on_grid(
+    latest_proposed: i64,
+    completed: &[(i64, i64)],
+    contiguous_end: i64,
+    submission_interval: i64,
+) -> i64 {
+    if submission_interval <= 0 {
+        return contiguous_end;
+    }
+    let mut on_grid = None;
+    let mut current = latest_proposed;
+    for &(start, end) in completed {
+        if start != current || end > contiguous_end {
+            break;
+        }
+        current = end;
+        if (end - latest_proposed) % submission_interval == 0 {
+            on_grid = Some(end);
+        }
+    }
+    on_grid.unwrap_or(contiguous_end)
+}
+
 /// Return the end of the completed range chain beginning at `expected_start`.
 fn highest_contiguous_end(
     expected_start: i64,
@@ -812,7 +931,34 @@ where
             &requests,
         );
 
-        let ranges_to_prove = if self.requester_config.evm_gas_limit > 0 {
+        let ranges_to_prove = if self.requester_config.evm_gas_limit > 0 &&
+            disjoint_ranges.is_empty()
+        {
+            // No gaps to fill: skip the contract read and block fetches below.
+            Vec::new()
+        } else if self.requester_config.evm_gas_limit > 0 {
+            // [MANTLE] Gas-based ranges never cross a submission checkpoint (latest proposed +
+            // k × the effective submission interval — the same value `create_aggregation_proofs`
+            // uses), so aggregations land on the same grid as with block-based splitting.
+            // Weighted by user transactions when RANGE_PROOF_TX_GAS_WEIGHT > 0. MANTLE_CHANGES.md
+            // §3.15.
+            //
+            // A failed read only defers new ranges to the next pass. Propagating it would abort
+            // the whole iteration, skipping aggregation submission and `request_queued_proofs`.
+            let contract_submission_interval: u64 =
+                match self.contract_config.l2oo_contract.submissionInterval().call().await {
+                    Ok(interval) => interval.to::<u64>(),
+                    Err(e) => {
+                        ValidityGauge::TotalErrorCount.increment(1.0);
+                        warn!(
+                            error = ?e,
+                            "Could not read submissionInterval from the contract; no new range \
+                             requests this pass, the rest of the iteration continues."
+                        );
+                        return Ok(());
+                    }
+                };
+
             // Use gas-based splitting
             let mut all_block_infos = std::collections::HashMap::new();
             for &Range { start, end } in &disjoint_ranges {
@@ -829,10 +975,19 @@ where
                 }
             }
 
-            get_ranges_to_prove_by_gas(
+            let checkpoints = SubmissionCheckpoints {
+                base: latest_proposed_block_number as i64,
+                interval: contract_submission_interval
+                    .max(self.requester_config.submission_interval)
+                    as i64,
+                tip: finalized_block_number as i64,
+            };
+            get_ranges_to_prove_by_weighted_gas(
                 &disjoint_ranges,
                 self.requester_config.evm_gas_limit,
+                self.requester_config.tx_gas_weight,
                 self.requester_config.range_proof_interval as i64,
+                Some(checkpoints),
                 &all_block_infos,
             )?
         } else {
@@ -1780,6 +1935,17 @@ where
 
         debug!("Submission interval for aggregation proof: {}.", submission_interval);
 
+        // [MANTLE] End the aggregation on the submission grid. A range of the next period can
+        // complete before the last one of this period (a retry, or concurrent proving); taking the
+        // whole contiguous chain would then put the output off the grid and re-base it. Ranges
+        // past the grid point are aggregated next time.
+        let highest_proven_contiguous_block_number = aggregation_end_on_grid(
+            latest_proposed_block_number,
+            &completed_range_proofs,
+            highest_proven_contiguous_block_number,
+            submission_interval,
+        );
+
         // If the highest proven contiguous block number is greater than the latest proposed block
         // number plus the submission interval, create an aggregation proof.
         if (highest_proven_contiguous_block_number - latest_proposed_block_number) >=
@@ -2623,7 +2789,89 @@ where
         Ok(())
     }
 
+    /// [MANTLE] Guarded reset of a failed request to `Unrequested` (§3.13), counted and logged
+    /// once here for every caller.
+    async fn try_reset_unaccepted(&self, request: &OPSuccinctRequest) -> UnacceptedReset {
+        match self
+            .driver_config
+            .driver_db_client
+            .reset_unaccepted_request_to_unrequested(request.id)
+            .await
+        {
+            Ok(true) => {
+                ValidityGauge::ProofRequestRetryCount.increment(1.0);
+                UnacceptedReset::Reset
+            }
+            Ok(false) => UnacceptedReset::MovedOn,
+            Err(e) => {
+                // The row stays where it is; the orphan reaper marks it `Failed` next pass and
+                // `add_new_ranges` rebuilds the same range — not split then, but that `Failed`
+                // row counts towards the >2 split threshold.
+                warn!(
+                    request_id = request.id,
+                    request_type = ?request.req_type,
+                    error = ?e,
+                    "Failed to reset request to Unrequested; orphan reaper will fail it and it will be rebuilt"
+                );
+                ValidityGauge::RetryErrorCount.increment(1.0);
+                UnacceptedReset::DbError
+            }
+        }
+    }
+
+    /// Handle a task that ended in an error (`no_bisect` = `no_bisect_reason` of it) or a panic
+    /// (`no_bisect` = `None`). See `reset_first` / `fail_after_reset` for the routing.
+    async fn handle_failed_task(
+        &self,
+        request: OPSuccinctRequest,
+        no_bisect: Option<&'static str>,
+    ) {
+        if reset_first(request.req_type, no_bisect.is_some()) {
+            if let Some(reason) = no_bisect {
+                warn!(
+                    request_id = request.id,
+                    request_type = ?request.req_type,
+                    reason,
+                    "resetting to Unrequested for retry (no bisection)"
+                );
+            }
+            let outcome = self.try_reset_unaccepted(&request).await;
+            match outcome {
+                UnacceptedReset::Reset if request.req_type == RequestType::Range => warn!(
+                    request_id = request.id,
+                    start_block = request.start_block,
+                    end_block = request.end_block,
+                    "Range failed before the prover accepted it; reset to Unrequested for retry (no bisection)"
+                ),
+                UnacceptedReset::MovedOn if !fail_after_reset(request.req_type, outcome) => info!(
+                    request_id = request.id,
+                    "Request already moved on (invalidated or reaped); left for the reaper"
+                ),
+                _ => {}
+            }
+            if !fail_after_reset(request.req_type, outcome) {
+                return;
+            }
+        }
+        match self
+            .proof_requester
+            .handle_failed_request(request, ExecutionStatus::UnspecifiedExecutionStatus as i32)
+            .await
+        {
+            Ok(_) => ValidityGauge::ProofRequestRetryCount.increment(1.0),
+            Err(retry_err) => {
+                warn!(error = ?retry_err, "Failed to retry request");
+                ValidityGauge::RetryErrorCount.increment(1.0);
+            }
+        }
+    }
+
     /// Handle the ongoing witness generation and execution tasks.
+    ///
+    /// The `tasks` lock is held across the DB calls below on purpose: removing a task from the
+    /// map and resetting/failing its row must be atomic with respect to
+    /// `set_orphaned_tasks_to_failed`, which treats "row in WitnessGeneration, task not in the
+    /// map" as orphaned.
     async fn handle_ongoing_tasks(&self) -> Result<()> {
         let mut tasks = self.tasks.lock().await;
         let mut completed = Vec::new();
@@ -2640,80 +2888,26 @@ where
             if let Some((handle, request)) = tasks.remove(&id) {
                 // First await the handle to properly clean up the task.
                 match handle.await {
-                    Ok(result) => {
-                        if let Err(e) = result {
-                            warn!(
-                                request_id = request.id,
-                                request_type = ?request.req_type,
-                                error = ?e,
-                                "Task failed with error"
-                            );
-                            // [MANTLE] Some failures must NOT bisect the range —
-                            // see `no_bisect_reason` for the policy. Reset to
-                            // Unrequested and retry the SAME range next loop.
-                            if let Some(reason) = no_bisect_reason(&e) {
-                                warn!(
-                                    request_id = request.id,
-                                    request_type = ?request.req_type,
-                                    reason,
-                                    "resetting to Unrequested for retry (no bisection)"
-                                );
-                                if let Err(reset_err) = self
-                                    .driver_config
-                                    .driver_db_client
-                                    .update_request_status(request.id, RequestStatus::Unrequested)
-                                    .await
-                                {
-                                    warn!(
-                                        error = ?reset_err,
-                                        "Failed to reset request to Unrequested"
-                                    );
-                                }
-                                continue;
-                            }
-                            // Now safe to retry as original task is cleaned up
-                            match self
-                                .proof_requester
-                                .handle_failed_request(
-                                    request,
-                                    ExecutionStatus::UnspecifiedExecutionStatus as i32,
-                                )
-                                .await
-                            {
-                                Ok(_) => {
-                                    ValidityGauge::ProofRequestRetryCount.increment(1.0);
-                                }
-                                Err(retry_err) => {
-                                    warn!(error = ?retry_err, "Failed to retry request");
-                                    ValidityGauge::RetryErrorCount.increment(1.0);
-                                }
-                            }
-                        }
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        warn!(
+                            request_id = request.id,
+                            request_type = ?request.req_type,
+                            error = ?e,
+                            "Task failed with error"
+                        );
+                        // [MANTLE] §3.10a / §3.13 routing.
+                        self.handle_failed_task(request, no_bisect_reason(&e)).await;
                     }
                     Err(e) => {
                         warn!(
                             request_id = request.id,
                             request_type = ?request.req_type,
+                            cancelled = e.is_cancelled(),
                             error = ?e,
                             "Task panicked"
                         );
-                        // Now safe to retry as original task is cleaned up
-                        match self
-                            .proof_requester
-                            .handle_failed_request(
-                                request,
-                                ExecutionStatus::UnspecifiedExecutionStatus as i32,
-                            )
-                            .await
-                        {
-                            Ok(_) => {
-                                ValidityGauge::ProofRequestRetryCount.increment(1.0);
-                            }
-                            Err(retry_err) => {
-                                warn!(error = ?retry_err, "Failed to retry request after panic");
-                                ValidityGauge::RetryErrorCount.increment(1.0);
-                            }
-                        }
+                        self.handle_failed_task(request, None).await;
                     }
                 }
             }
@@ -3544,8 +3738,9 @@ mod tests {
     };
 
     use super::{
-        handle_terminal_proof_failure_before_request_details, highest_contiguous_end,
-        select_checkpoint_block_number, OPSuccinctRequest, RequestStatus, RequestType,
+        aggregation_end_on_grid, handle_terminal_proof_failure_before_request_details,
+        highest_contiguous_end, select_checkpoint_block_number, OPSuccinctRequest, RequestStatus,
+        RequestType,
     };
 
     #[test]
@@ -3571,6 +3766,27 @@ mod tests {
             highest_contiguous_end(100, &[(100, 200), (200, 300), (400, 500)]).unwrap(),
             Some(300)
         );
+    }
+
+    /// [MANTLE] §3.15: the next period's range completed before this period's last one; the
+    /// aggregation stops at the checkpoint (1800) instead of 2500.
+    #[test]
+    fn aggregation_ends_on_the_grid() {
+        let completed = [(0, 700), (700, 1400), (1400, 1800), (1800, 2500)];
+        assert_eq!(aggregation_end_on_grid(0, &completed, 2500, 1800), 1800);
+        // Several full periods: still on the grid, all of them in one aggregation.
+        let periods = [(0, 1800), (1800, 3600), (3600, 4000)];
+        assert_eq!(aggregation_end_on_grid(0, &periods, 4000, 1800), 3600);
+        // Grid counted from the latest proposed block.
+        assert_eq!(aggregation_end_on_grid(1234, &[(1234, 3034), (3034, 3500)], 3500, 1800), 3034);
+    }
+
+    /// No range ends on the grid (unaligned ranges): previous behaviour, the whole chain.
+    #[test]
+    fn aggregation_end_falls_back_to_the_contiguous_end() {
+        let unaligned = [(0, 1000), (1000, 2000)];
+        assert_eq!(aggregation_end_on_grid(0, &unaligned, 2000, 1800), 2000);
+        assert_eq!(aggregation_end_on_grid(0, &unaligned, 2000, 0), 2000);
     }
 
     #[test]

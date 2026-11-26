@@ -25,8 +25,9 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::{
-    db::DriverDBClient, OPSuccinctRequest, ProgramConfig, RequestExecutionStatistics,
-    RequestStatus, RequestType, ValidityGauge,
+    db::DriverDBClient, record_proof_submit_duration, record_witnessgen_duration,
+    OPSuccinctRequest, ProgramConfig, ProofBackend, RequestExecutionStatistics, RequestStatus,
+    RequestType, StageOutcome, ValidityGauge,
 };
 
 pub struct OPSuccinctProofRequester<H: OPSuccinctHost> {
@@ -589,7 +590,7 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
             "Starting witness generation"
         );
 
-        let witnessgen_duration = Instant::now();
+        let witnessgen_started = Instant::now();
         // Generate the stdin needed for the proof, bounded by a wall-clock timeout. Host prefetch
         // can hang indefinitely when an L1/L2 node stops responding; without a timeout the spawned
         // task never finishes, so `handle_ongoing_tasks` never reaps it (it only processes
@@ -604,6 +605,13 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
             Ok(Ok(stdin)) => stdin,
             Ok(Err(e)) => {
                 ValidityGauge::WitnessgenErrorCount.increment(1.0);
+                record_witnessgen_duration(
+                    request.req_type,
+                    StageOutcome::Error,
+                    witnessgen_started.elapsed(),
+                );
+                // A range that fails here is still in WitnessGeneration, so `handle_ongoing_tasks`
+                // retries it whole rather than bisecting it (MANTLE_CHANGES.md §3.13).
                 return Err(e);
             }
             Err(_) => {
@@ -613,6 +621,11 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
                 // mark it Failed — that counts toward bisection and would fragment a range that is
                 // fine. Returning Ok frees the concurrency slot without entering the failure path.
                 ValidityGauge::WitnessgenTimeoutCount.increment(1.0);
+                record_witnessgen_duration(
+                    request.req_type,
+                    StageOutcome::Timeout,
+                    witnessgen_started.elapsed(),
+                );
                 warn!(
                     request_id = request.id,
                     request_type = ?request.req_type,
@@ -623,23 +636,30 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
                 );
                 // Do NOT use `?` here: if the reset write fails we must still return Ok so the task
                 // completes cleanly. The request then stays in WitnessGeneration and the orphan
-                // reaper (set_orphaned_tasks_to_failed) marks it Failed WITHOUT bisecting, and
-                // add_new_ranges rebuilds the same range — so a DB blip never triggers bisection.
-                if let Err(reset_err) = self
-                    .db_client
-                    .update_request_status(request.id, RequestStatus::Unrequested)
-                    .await
-                {
-                    warn!(
+                // reaper (set_orphaned_tasks_to_failed) marks it Failed — not split now, though
+                // that Failed row counts towards the >2 split threshold — and add_new_ranges
+                // rebuilds the same range.
+                // [MANTLE] Guarded (§3.13): only a row still Unrequested/WitnessGeneration and not
+                // invalidated is reset. An invalidated row is left for the reaper to finish, and a
+                // row another proposer already reaped and rebuilt is not revived as a second
+                // request for the range.
+                match self.db_client.reset_unaccepted_request_to_unrequested(request.id).await {
+                    Ok(true) => {}
+                    Ok(false) => info!(
+                        request_id = request.id,
+                        "Timed-out request already moved on (invalidated or reaped); left for the reaper"
+                    ),
+                    Err(reset_err) => warn!(
                         request_id = request.id,
                         error = ?reset_err,
                         "Failed to reset timed-out request to Unrequested; orphan reaper will mark it Failed and it will be rebuilt"
-                    );
+                    ),
                 }
                 return Ok(());
             }
         };
-        let duration = witnessgen_duration.elapsed();
+        let duration = witnessgen_started.elapsed();
+        record_witnessgen_duration(request.req_type, StageOutcome::Ok, duration);
 
         self.db_client.update_witnessgen_duration(request.id, duration.as_secs() as i64).await?;
 
@@ -673,9 +693,16 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
                         .cluster_config
                         .as_ref()
                         .context("cluster_config required for cluster range proof")?;
+                    let submit_started = Instant::now();
                     let result =
                         cluster_submit_range_proof(cluster_config, self.proving_timeout, stdin)
                             .await;
+                    record_proof_submit_duration(
+                        RequestType::Range,
+                        ProofBackend::Cluster,
+                        StageOutcome::of(&result),
+                        submit_started.elapsed(),
+                    );
                     // Box::pin erases the concrete Future type to break async type
                     // recursion that otherwise exceeds the default recursion_limit.
                     Box::pin(self.submit_cluster_proof(
@@ -686,7 +713,15 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
                     ))
                     .await?;
                 } else {
-                    let proof_id = self.request_range_proof(stdin).await?;
+                    let submit_started = Instant::now();
+                    let result = self.request_range_proof(stdin).await;
+                    record_proof_submit_duration(
+                        RequestType::Range,
+                        ProofBackend::Network,
+                        StageOutcome::of(&result),
+                        submit_started.elapsed(),
+                    );
+                    let proof_id = result?;
                     self.db_client.update_request_to_prove(request.id, proof_id).await?;
 
                     info!(
@@ -712,6 +747,7 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
                         .cluster_config
                         .as_ref()
                         .context("cluster_config required for cluster agg proof")?;
+                    let submit_started = Instant::now();
                     let result = cluster_submit_agg_proof(
                         cluster_config,
                         self.proving_timeout,
@@ -719,6 +755,12 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
                         stdin,
                     )
                     .await;
+                    record_proof_submit_duration(
+                        RequestType::Aggregation,
+                        ProofBackend::Cluster,
+                        StageOutcome::of(&result),
+                        submit_started.elapsed(),
+                    );
                     // Box::pin: see comment in Range branch above.
                     Box::pin(self.submit_cluster_proof(
                         &request,
@@ -728,7 +770,15 @@ impl<H: OPSuccinctHost> OPSuccinctProofRequester<H> {
                     ))
                     .await?;
                 } else {
-                    let proof_id = self.request_agg_proof(stdin).await?;
+                    let submit_started = Instant::now();
+                    let result = self.request_agg_proof(stdin).await;
+                    record_proof_submit_duration(
+                        RequestType::Aggregation,
+                        ProofBackend::Network,
+                        StageOutcome::of(&result),
+                        submit_started.elapsed(),
+                    );
+                    let proof_id = result?;
                     self.db_client.update_request_to_prove(request.id, proof_id).await?;
 
                     info!(
