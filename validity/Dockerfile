@@ -12,7 +12,7 @@
 # unchanged. The rust version here only bootstraps rustup/cargo-chef — code is
 # compiled with the nightly in rust-toolchain.toml. Bump all three together and
 # keep the Debian release in step with the runtime stage.
-FROM lukemathwalker/cargo-chef:0.1.71-rust-1.85@sha256:3f87d357043168134b4885734ae666b5acb582b8f1214494417e5d4ab701c293 AS chef
+FROM lukemathwalker/cargo-chef:0.1.78-rust-1.100@sha256:edbf6876f6a78e921b94e65001cc494214bfb790f374c8bd7bc05de62f69258b AS chef
 WORKDIR /build
 
 # [MANTLE] Install the pinned toolchain once, in the stage both planner and
